@@ -1,0 +1,78 @@
+# configs/experiments/ablation.yaml
+# Configuration for annotation ablation experiment
+#
+# This experiment trains models at all 5 annotation levels to test whether
+# deep learning can discover variants without relying on functional annotations.
+
+# Inherit from default config
+defaults:
+  - ../default
+
+# Override for ablation experiment
+experiment:
+  name: "annotation_ablation"
+  description: "Compare variant discovery across annotation levels L0-L4"
+  
+# Run all annotation levels
+annotation_levels:
+  - name: "L0"
+    description: "Genotype dosage only"
+    features:
+      - genotype
+    
+  - name: "L1"
+    description: "Genotype + position"
+    features:
+      - genotype
+      - position
+    
+  - name: "L2"
+    description: "Genotype + position + consequence"
+    features:
+      - genotype
+      - position
+      - consequence
+    
+  - name: "L3"
+    description: "L2 + SIFT + PolyPhen"
+    features:
+      - genotype
+      - position
+      - consequence
+      - sift
+      - polyphen
+    
+  - name: "L4"
+    description: "Full annotations"
+    features:
+      - genotype
+      - position
+      - consequence
+      - sift
+      - polyphen
+      - lof
+      - cadd  # If available
+
+# Analysis settings
+analysis:
+  # Number of top variants to compare between levels
+  top_k_variants: [50, 100, 200, 500]
+  
+  # Jaccard similarity threshold for "different" rankings
+  similarity_threshold: 0.3
+  
+  # Identify level-specific variants (high at L_i, low at L_j)
+  level_specific:
+    high_rank_threshold: 100  # Must be in top 100 at one level
+    low_rank_threshold: 500   # Must be outside top 500 at other level
+
+# Output settings
+output:
+  # Save variant rankings for each level
+  save_rankings: true
+  
+  # Generate comparison figures
+  generate_figures: true
+  
+  # Figure formats
+  figure_formats: ["png", "pdf"]
