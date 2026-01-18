@@ -66,6 +66,7 @@ htmlcov/
 
 # Results and logs
 results/
+outputs/
 logs/
 *.log
 wandb/
