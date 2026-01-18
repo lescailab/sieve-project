@@ -8,8 +8,6 @@ latent dimension for processing by the attention layers.
 Author: Lescai Lab
 """
 
-from typing import Optional
-
 import torch
 import torch.nn as nn
 from torch import Tensor
@@ -27,6 +25,7 @@ class VariantEncoder(nn.Module):
         Linear(input_dim → hidden_dim)
         → ReLU
         → LayerNorm
+        → Dropout
         → Linear(hidden_dim → latent_dim)
 
     Parameters
