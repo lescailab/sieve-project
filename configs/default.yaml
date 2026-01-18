@@ -1,0 +1,152 @@
+# configs/default.yaml
+# Default configuration for SIEVE training
+
+# =============================================================================
+# Data Configuration
+# =============================================================================
+data:
+  # Annotation level: L0 (genotype only) through L4 (full annotations)
+  annotation_level: "L2"
+  
+  # Maximum variants per sample (for memory management)
+  max_variants_per_sample: 50000
+  
+  # Minimum variants per gene to include gene in model
+  min_variants_per_gene: 1
+  
+  # Chromosomes to include (null = all autosomes + X)
+  chromosomes: null
+  
+  # Quality control thresholds
+  qc:
+    min_variant_quality: 30
+    max_missing_rate: 0.05
+    # Hardy-Weinberg equilibrium p-value threshold (controls only)
+    hwe_pvalue: 1.0e-6
+
+# =============================================================================
+# Model Architecture
+# =============================================================================
+model:
+  # Variant encoder
+  variant_hidden_dim: 128
+  latent_dim: 64
+  
+  # Position-aware sparse attention
+  num_attention_layers: 2
+  num_heads: 4
+  max_relative_distance: 100000  # bp for position bucketing
+  attention_dropout: 0.1
+  
+  # Gene aggregation
+  aggregation: "max"  # Options: max, mean, attention
+  
+  # Classifier head
+  classifier_hidden_dim: 256
+  classifier_dropout: 0.3
+
+# =============================================================================
+# Training Configuration
+# =============================================================================
+training:
+  # Basic training params
+  batch_size: 32
+  num_epochs: 100
+  learning_rate: 0.001
+  weight_decay: 0.01
+  
+  # Learning rate schedule
+  lr_scheduler: "cosine"  # Options: cosine, step, plateau
+  warmup_epochs: 5
+  min_lr: 1.0e-6
+  
+  # Early stopping
+  early_stopping:
+    patience: 15
+    min_delta: 0.001
+    metric: "val_auc"
+    mode: "max"
+  
+  # Attribution regularization
+  # This is the key innovation - set to 0 to disable
+  lambda_attr: 0.1
+  
+  # Gradient clipping
+  max_grad_norm: 1.0
+
+# =============================================================================
+# Cross-Validation
+# =============================================================================
+cv:
+  # Outer CV for final evaluation
+  outer_folds: 5
+  
+  # Inner CV for hyperparameter tuning
+  inner_folds: 3
+  
+  # Stratify by phenotype
+  stratify: true
+  
+  # Random seed for reproducibility
+  seed: 42
+
+# =============================================================================
+# Explainability Configuration
+# =============================================================================
+explain:
+  # Integrated gradients
+  ig_steps: 50
+  ig_internal_batch_size: 32
+  
+  # Attention analysis
+  attention_threshold: 0.1
+  
+  # Epistasis detection
+  epistasis_top_k: 100
+  epistasis_permutations: 1000
+  epistasis_fdr: 0.05
+  
+  # Counterfactual validation
+  counterfactual_samples: 100
+
+# =============================================================================
+# Logging and Checkpointing
+# =============================================================================
+logging:
+  # Logging level
+  level: "INFO"
+  
+  # Log every N batches
+  log_interval: 50
+  
+  # Validation every N epochs
+  val_interval: 1
+  
+  # TensorBoard logging
+  tensorboard: true
+
+checkpointing:
+  # Save checkpoint every N epochs
+  save_interval: 5
+  
+  # Keep only best K checkpoints
+  keep_best: 3
+  
+  # Metric for determining "best"
+  metric: "val_auc"
+
+# =============================================================================
+# Hardware Configuration
+# =============================================================================
+hardware:
+  # Number of data loader workers
+  num_workers: 4
+  
+  # Pin memory for GPU transfer
+  pin_memory: true
+  
+  # Use mixed precision training
+  mixed_precision: true
+  
+  # Gradient checkpointing (for memory efficiency)
+  gradient_checkpointing: false
