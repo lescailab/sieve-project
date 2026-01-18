@@ -10,7 +10,7 @@ This module implements the complete SIEVE model that combines:
 Author: Lescai Lab
 """
 
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -205,13 +205,13 @@ class SIEVE(nn.Module):
 
         return logits, intermediates
 
-    def get_model_summary(self) -> Dict[str, any]:
+    def get_model_summary(self) -> Dict[str, Any]:
         """
         Get summary of model architecture.
 
         Returns
         -------
-        Dict[str, any]
+        Dict[str, Any]
             Model configuration and parameter counts
         """
         total_params = sum(p.numel() for p in self.parameters())
