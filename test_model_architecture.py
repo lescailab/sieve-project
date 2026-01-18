@@ -23,11 +23,9 @@ from src.encoding import AnnotationLevel, VariantDataset, collate_samples
 from src.models import (
     VariantEncoder,
     PositionAwareSparseAttention,
-    MultiLayerAttention,
     EfficientGeneAggregator,
     PhenotypeClassifier,
     SIEVE,
-    create_sieve_model,
 )
 
 

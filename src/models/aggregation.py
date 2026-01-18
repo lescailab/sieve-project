@@ -316,4 +316,7 @@ class EfficientGeneAggregator(nn.Module):
             # Compute mean
             gene_embeddings = gene_embeddings / gene_counts
 
+        else:
+            raise ValueError(f"Unknown aggregation method: {self.aggregation}")
+
         return gene_embeddings
