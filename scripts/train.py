@@ -19,7 +19,6 @@ from typing import Dict
 
 import numpy as np
 import torch
-import torch.nn as nn
 from torch.optim import Adam
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 import yaml
@@ -150,7 +149,6 @@ def train_single_fold(
         mode='max',  # Maximize AUC
         factor=0.5,
         patience=5,
-        verbose=True,
     )
 
     # Create loss function
@@ -170,7 +168,7 @@ def train_single_fold(
 
     # Train
     print("\nTraining...")
-    history = trainer.train(
+    trainer.train(
         train_loader=train_loader,
         val_loader=val_loader,
         num_epochs=args.epochs,
@@ -206,7 +204,7 @@ def main():
     print(f"\nLoading data from {args.vcf}...")
     all_samples = build_sample_variants(
         vcf_path=args.vcf,
-        phenotype_path=args.phenotypes,
+        phenotype_file=args.phenotypes,
     )
     print(f"Loaded {len(all_samples)} samples")
 
@@ -314,13 +312,15 @@ def main():
         # Single train/val split
         print(f"\nUsing single train/val split ({1-args.val_split:.0%}/{args.val_split:.0%})")
 
-        # Create split
-        n_samples = len(labels)
-        indices = np.arange(n_samples)
-        np.random.shuffle(indices)
-        split_idx = int(n_samples * (1 - args.val_split))
-        train_idx = indices[:split_idx]
-        val_idx = indices[split_idx:]
+        # Create stratified split
+        from sklearn.model_selection import train_test_split
+        indices = np.arange(len(labels))
+        train_idx, val_idx = train_test_split(
+            indices,
+            test_size=args.val_split,
+            stratify=labels,
+            random_state=args.seed,
+        )
 
         # Print split statistics
         train_labels = labels[train_idx]
