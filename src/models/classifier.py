@@ -153,8 +153,6 @@ class AttentionPoolingClassifier(nn.Module):
         Tensor
             Logits, shape (batch, 1)
         """
-        batch_size = gene_embeddings.shape[0]
-
         # Compute attention weights
         # Shape: (batch, num_genes, 1)
         attn_scores = self.attention_weights(gene_embeddings)
