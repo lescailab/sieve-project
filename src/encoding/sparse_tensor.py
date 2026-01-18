@@ -15,7 +15,7 @@ Key functions:
 Author: Lescai Lab
 """
 
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -167,7 +167,7 @@ def build_variant_tensor(
     }
 
 
-def collate_samples(batch: List[Dict[str, any]]) -> Dict[str, Tensor]:
+def collate_samples(batch: List[Dict[str, Any]]) -> Dict[str, Tensor]:
     """
     Collate multiple samples into a padded batch.
 
@@ -176,7 +176,7 @@ def collate_samples(batch: List[Dict[str, any]]) -> Dict[str, Tensor]:
 
     Parameters
     ----------
-    batch : List[Dict[str, any]]
+    batch : List[Dict[str, Any]]
         List of sample tensors from build_variant_tensor
 
     Returns
@@ -225,7 +225,24 @@ def collate_samples(batch: List[Dict[str, any]]) -> Dict[str, Tensor]:
     # Get max number of variants in this batch
     max_variants = max(sample['features'].shape[0] for sample in batch)
 
-    # Get feature dimension from first sample
+    # Handle edge case where all samples have zero variants
+    if max_variants == 0:
+        # Find feature dimension from any sample with known dimension
+        # If all samples have 0 variants, use the expected feature dimension from first sample
+        # Even with shape [0, feature_dim], we can get feature_dim
+        feature_dim = batch[0]['features'].shape[1] if len(batch[0]['features'].shape) > 1 else 0
+
+        # Return empty batch with proper structure
+        return {
+            'features': torch.zeros((batch_size, 0, feature_dim), dtype=torch.float32),
+            'positions': torch.zeros((batch_size, 0), dtype=torch.long),
+            'gene_ids': torch.zeros((batch_size, 0), dtype=torch.long),
+            'mask': torch.zeros((batch_size, 0), dtype=torch.bool),
+            'labels': torch.tensor([sample['label'] for sample in batch], dtype=torch.long),
+            'sample_ids': [sample['sample_id'] for sample in batch],
+        }
+
+    # Get feature dimension from first sample (safe now since max_variants > 0)
     feature_dim = batch[0]['features'].shape[1]
 
     # Initialize padded tensors
@@ -341,7 +358,7 @@ class VariantDataset(Dataset):
     def __len__(self) -> int:
         return len(self.samples)
 
-    def __getitem__(self, idx: int) -> Dict[str, any]:
+    def __getitem__(self, idx: int) -> Dict[str, Any]:
         """Get a single sample as tensors."""
         sample = self.samples[idx]
         return build_variant_tensor(
@@ -352,13 +369,13 @@ class VariantDataset(Dataset):
             self.impute_value
         )
 
-    def get_sample_statistics(self) -> Dict[str, any]:
+    def get_sample_statistics(self) -> Dict[str, Any]:
         """
         Compute statistics about the dataset.
 
         Returns
         -------
-        Dict[str, any]
+        Dict[str, Any]
             Statistics including:
             - 'n_samples': Number of samples
             - 'n_genes': Number of unique genes
