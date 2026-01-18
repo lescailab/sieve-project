@@ -1,0 +1,376 @@
+"""
+Position-aware sparse attention for SIEVE.
+
+This module implements the core innovation: position-aware sparse attention
+that processes only variant-present positions (not all genomic positions)
+while preserving spatial relationships through relative position bias.
+
+Key features:
+- Multi-head attention over sparse variant positions
+- Relative position bias with logarithmic bucketing
+- Proper masking for variable-length sequences
+- Numerically stable implementation
+
+Author: Lescai Lab
+"""
+
+from typing import Optional, Tuple
+
+import torch
+import torch.nn as nn
+from torch import Tensor
+
+from src.encoding import relative_position_bucket
+
+
+class PositionAwareSparseAttention(nn.Module):
+    """
+    Position-aware sparse attention over variant positions.
+
+    This is the core innovation of SIEVE. Unlike DeepRVAT (which uses
+    permutation-invariant deep sets), this attention mechanism preserves
+    genomic position information through learnable relative position bias.
+
+    The attention computation includes:
+    1. Standard multi-head attention (Q, K, V)
+    2. Relative position bias based on genomic distance
+    3. Proper masking for padding and invalid positions
+
+    Attention formula:
+        attention = softmax((Q @ K.T) / sqrt(d_k) + position_bias) @ V
+
+    Parameters
+    ----------
+    latent_dim : int
+        Dimension of input embeddings
+    num_heads : int
+        Number of attention heads (default: 4)
+    dropout : float
+        Dropout probability (default: 0.1)
+    num_position_buckets : int
+        Number of relative position buckets (default: 32)
+    max_distance : int
+        Maximum genomic distance to consider (default: 100,000 bp)
+
+    Attributes
+    ----------
+    query : nn.Linear
+        Query projection
+    key : nn.Linear
+        Key projection
+    value : nn.Linear
+        Value projection
+    position_bias : nn.Embedding
+        Learnable position bias for each bucket and head
+    output_proj : nn.Linear
+        Output projection
+
+    Examples
+    --------
+    >>> attention = PositionAwareSparseAttention(latent_dim=64, num_heads=4)
+    >>> x = torch.randn(2, 10, 64)  # [batch, variants, latent_dim]
+    >>> positions = torch.tensor([[100, 200, 300, ...], [...]])  # [batch, variants]
+    >>> mask = torch.ones(2, 10, dtype=torch.bool)  # [batch, variants]
+    >>> output, attn_weights = attention(x, positions, mask)
+    >>> output.shape
+    torch.Size([2, 10, 64])
+    >>> attn_weights.shape
+    torch.Size([2, 4, 10, 10])  # [batch, heads, queries, keys]
+    """
+
+    def __init__(
+        self,
+        latent_dim: int,
+        num_heads: int = 4,
+        dropout: float = 0.1,
+        num_position_buckets: int = 32,
+        max_distance: int = 100000,
+    ):
+        super().__init__()
+
+        assert latent_dim % num_heads == 0, "latent_dim must be divisible by num_heads"
+
+        self.latent_dim = latent_dim
+        self.num_heads = num_heads
+        self.head_dim = latent_dim // num_heads
+        self.num_position_buckets = num_position_buckets
+        self.max_distance = max_distance
+
+        # Attention projections
+        self.query = nn.Linear(latent_dim, latent_dim)
+        self.key = nn.Linear(latent_dim, latent_dim)
+        self.value = nn.Linear(latent_dim, latent_dim)
+
+        # Learnable position bias
+        # Shape: (num_position_buckets, num_heads)
+        self.position_bias = nn.Embedding(num_position_buckets, num_heads)
+
+        # Output projection
+        self.output_proj = nn.Linear(latent_dim, latent_dim)
+
+        self.dropout = nn.Dropout(dropout)
+
+        # Initialize position bias to zero (no bias initially)
+        nn.init.zeros_(self.position_bias.weight)
+
+    def _compute_position_bias(
+        self,
+        query_positions: Tensor,
+        key_positions: Tensor
+    ) -> Tensor:
+        """
+        Compute relative position bias.
+
+        Parameters
+        ----------
+        query_positions : Tensor
+            Query positions, shape (batch, num_queries)
+        key_positions : Tensor
+            Key positions, shape (batch, num_keys)
+
+        Returns
+        -------
+        Tensor
+            Position bias, shape (batch, num_heads, num_queries, num_keys)
+        """
+        batch_size = query_positions.shape[0]
+        num_queries = query_positions.shape[1]
+        num_keys = key_positions.shape[1]
+
+        # Compute relative position buckets for each batch element
+        # We need to process each sample in the batch separately
+        position_buckets_list = []
+        for b in range(batch_size):
+            # Get positions for this batch element
+            query_pos_b = query_positions[b]  # (num_queries,)
+            key_pos_b = key_positions[b]      # (num_keys,)
+
+            # Compute buckets for this sample
+            buckets_b = relative_position_bucket(
+                query_pos_b,
+                key_pos_b,
+                num_buckets=self.num_position_buckets,
+                max_distance=self.max_distance
+            )  # (num_queries, num_keys)
+
+            position_buckets_list.append(buckets_b)
+
+        # Stack to get (batch, num_queries, num_keys)
+        position_buckets = torch.stack(position_buckets_list, dim=0)
+
+        # Get learnable bias for each bucket
+        # position_bias.weight: (num_position_buckets, num_heads)
+        # position_buckets: (batch, num_queries, num_keys)
+        # Result: (batch, num_queries, num_keys, num_heads)
+        bias = self.position_bias(position_buckets)
+
+        # Permute to (batch, num_heads, num_queries, num_keys)
+        bias = bias.permute(0, 3, 1, 2)
+
+        return bias
+
+    def forward(
+        self,
+        x: Tensor,
+        positions: Tensor,
+        mask: Optional[Tensor] = None,
+        return_attention: bool = False
+    ) -> Tuple[Tensor, Optional[Tensor]]:
+        """
+        Apply position-aware sparse attention.
+
+        Parameters
+        ----------
+        x : Tensor
+            Input embeddings, shape (batch, num_variants, latent_dim)
+        positions : Tensor
+            Genomic positions, shape (batch, num_variants)
+        mask : Optional[Tensor]
+            Attention mask, shape (batch, num_variants)
+            True = valid position, False = padding
+        return_attention : bool
+            Whether to return attention weights (for explainability)
+
+        Returns
+        -------
+        output : Tensor
+            Attended features, shape (batch, num_variants, latent_dim)
+        attention_weights : Optional[Tensor]
+            Attention weights if return_attention=True,
+            shape (batch, num_heads, num_variants, num_variants)
+        """
+        batch_size, num_variants, _ = x.shape
+
+        # Project to Q, K, V
+        # Shape: (batch, num_variants, latent_dim)
+        Q = self.query(x)
+        K = self.key(x)
+        V = self.value(x)
+
+        # Reshape for multi-head attention
+        # Shape: (batch, num_variants, num_heads, head_dim)
+        Q = Q.view(batch_size, num_variants, self.num_heads, self.head_dim)
+        K = K.view(batch_size, num_variants, self.num_heads, self.head_dim)
+        V = V.view(batch_size, num_variants, self.num_heads, self.head_dim)
+
+        # Transpose to (batch, num_heads, num_variants, head_dim)
+        Q = Q.transpose(1, 2)
+        K = K.transpose(1, 2)
+        V = V.transpose(1, 2)
+
+        # Compute attention scores
+        # (batch, num_heads, num_variants, head_dim) @ (batch, num_heads, head_dim, num_variants)
+        # -> (batch, num_heads, num_variants, num_variants)
+        attn_scores = torch.matmul(Q, K.transpose(-2, -1)) / (self.head_dim ** 0.5)
+
+        # Add relative position bias
+        # Shape: (batch, num_heads, num_variants, num_variants)
+        position_bias = self._compute_position_bias(positions, positions)
+        attn_scores = attn_scores + position_bias
+
+        # Apply mask if provided
+        if mask is not None:
+            # Create attention mask: (batch, 1, 1, num_variants)
+            # Broadcasting will expand to (batch, num_heads, num_variants, num_variants)
+            attn_mask = mask.unsqueeze(1).unsqueeze(2)  # (batch, 1, 1, num_variants)
+
+            # Set masked positions to large negative value
+            attn_scores = attn_scores.masked_fill(~attn_mask, float('-inf'))
+
+        # Softmax over key dimension
+        # Shape: (batch, num_heads, num_variants, num_variants)
+        attn_weights = torch.softmax(attn_scores, dim=-1)
+
+        # Handle all-masked rows (will have NaN after softmax)
+        attn_weights = torch.nan_to_num(attn_weights, nan=0.0)
+
+        # Apply dropout
+        attn_weights_dropout = self.dropout(attn_weights)
+
+        # Apply attention to values
+        # (batch, num_heads, num_variants, num_variants) @ (batch, num_heads, num_variants, head_dim)
+        # -> (batch, num_heads, num_variants, head_dim)
+        attended = torch.matmul(attn_weights_dropout, V)
+
+        # Transpose back to (batch, num_variants, num_heads, head_dim)
+        attended = attended.transpose(1, 2)
+
+        # Concatenate heads
+        # Shape: (batch, num_variants, latent_dim)
+        attended = attended.contiguous().view(batch_size, num_variants, self.latent_dim)
+
+        # Output projection
+        output = self.output_proj(attended)
+
+        if return_attention:
+            return output, attn_weights
+        else:
+            return output, None
+
+
+class MultiLayerAttention(nn.Module):
+    """
+    Multiple layers of position-aware attention with residual connections.
+
+    Parameters
+    ----------
+    latent_dim : int
+        Dimension of embeddings
+    num_heads : int
+        Number of attention heads
+    num_layers : int
+        Number of attention layers (default: 2)
+    dropout : float
+        Dropout probability
+    num_position_buckets : int
+        Number of position buckets
+    max_distance : int
+        Maximum genomic distance
+
+    Examples
+    --------
+    >>> multi_attn = MultiLayerAttention(latent_dim=64, num_heads=4, num_layers=2)
+    >>> x = torch.randn(2, 10, 64)
+    >>> positions = torch.randint(100, 1000, (2, 10))
+    >>> mask = torch.ones(2, 10, dtype=torch.bool)
+    >>> output, attn_list = multi_attn(x, positions, mask, return_attention=True)
+    >>> len(attn_list)
+    2
+    """
+
+    def __init__(
+        self,
+        latent_dim: int,
+        num_heads: int = 4,
+        num_layers: int = 2,
+        dropout: float = 0.1,
+        num_position_buckets: int = 32,
+        max_distance: int = 100000,
+    ):
+        super().__init__()
+
+        self.num_layers = num_layers
+
+        self.attention_layers = nn.ModuleList([
+            PositionAwareSparseAttention(
+                latent_dim=latent_dim,
+                num_heads=num_heads,
+                dropout=dropout,
+                num_position_buckets=num_position_buckets,
+                max_distance=max_distance,
+            )
+            for _ in range(num_layers)
+        ])
+
+        # Layer norm for each layer
+        self.layer_norms = nn.ModuleList([
+            nn.LayerNorm(latent_dim)
+            for _ in range(num_layers)
+        ])
+
+    def forward(
+        self,
+        x: Tensor,
+        positions: Tensor,
+        mask: Optional[Tensor] = None,
+        return_attention: bool = False
+    ) -> Tuple[Tensor, Optional[list]]:
+        """
+        Apply multiple attention layers with residual connections.
+
+        Parameters
+        ----------
+        x : Tensor
+            Input embeddings, shape (batch, num_variants, latent_dim)
+        positions : Tensor
+            Genomic positions, shape (batch, num_variants)
+        mask : Optional[Tensor]
+            Attention mask, shape (batch, num_variants)
+        return_attention : bool
+            Whether to return attention weights from all layers
+
+        Returns
+        -------
+        output : Tensor
+            Final output, shape (batch, num_variants, latent_dim)
+        attention_list : Optional[list]
+            List of attention weights from each layer if return_attention=True
+        """
+        attention_list = [] if return_attention else None
+
+        for i, (attn_layer, layer_norm) in enumerate(zip(self.attention_layers, self.layer_norms)):
+            # Attention with residual connection
+            attn_out, attn_weights = attn_layer(
+                x,
+                positions,
+                mask,
+                return_attention=return_attention
+            )
+
+            # Residual connection + layer norm
+            x = layer_norm(x + attn_out)
+
+            if return_attention:
+                attention_list.append(attn_weights)
+
+        return x, attention_list
