@@ -113,7 +113,7 @@ def attribution_sparsity_loss(
     Compute attribution sparsity loss.
 
     This loss encourages the model to rely on a sparse set of variants
-    by penalizing the L1 norm of embedding magnitudes.
+    by penalizing the sum of L2-norm magnitudes of variant embeddings.
 
     NOTE: This is a simplified version for Phase 1. Full gradient-based
     attribution regularization will be implemented in Phase 2.
