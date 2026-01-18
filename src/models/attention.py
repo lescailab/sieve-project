@@ -134,8 +134,6 @@ class PositionAwareSparseAttention(nn.Module):
             Position bias, shape (batch, num_heads, num_queries, num_keys)
         """
         batch_size = query_positions.shape[0]
-        num_queries = query_positions.shape[1]
-        num_keys = key_positions.shape[1]
 
         # Compute relative position buckets for each batch element
         # We need to process each sample in the batch separately
