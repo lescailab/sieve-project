@@ -185,13 +185,17 @@ def train_single_fold(
     )
     train_time = time.time() - train_start
 
+    # Capture actual epochs trained before loading checkpoint
+    actual_epochs_trained = trainer.current_epoch + 1
+
     # Load best model
     best_metrics = trainer.load_checkpoint('best_model.pt')
 
-    # Add timing information
+    # Add timing information (use actual epochs, not best checkpoint epoch)
     best_metrics['training_time_seconds'] = train_time
-    best_metrics['epochs_trained'] = trainer.current_epoch + 1
-    best_metrics['time_per_epoch_seconds'] = train_time / (trainer.current_epoch + 1)
+    best_metrics['epochs_trained'] = actual_epochs_trained
+    best_metrics['time_per_epoch_seconds'] = train_time / actual_epochs_trained
+    best_metrics['best_epoch'] = trainer.current_epoch + 1  # When best model was found
 
     return best_metrics
 
