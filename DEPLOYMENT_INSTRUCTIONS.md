@@ -145,9 +145,9 @@ python scripts/preprocess.py \
 This creates a `.pt` file (~1-5 MB per 1000 samples) containing all parsed variant data.
 
 **Benefits:**
-- VCF parsing: **~5-30 minutes** (one time)
+- VCF parsing: **~30 minutes to 5+ hours** depending on dataset size (one time)
 - Loading preprocessed: **~5-10 seconds** (every training run)
-- **10-100x speedup** for repeated experiments
+- **100-3000x speedup** for repeated experiments (5 hours → 5 seconds = 3600x!)
 
 **Example workflow:**
 ```bash
