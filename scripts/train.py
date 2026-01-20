@@ -46,10 +46,12 @@ def parse_args():
     )
 
     # Data arguments
-    parser.add_argument('--vcf', type=str, required=True,
-                        help='Path to VCF file')
-    parser.add_argument('--phenotypes', type=str, required=True,
-                        help='Path to phenotypes file (TSV with sample_id, phenotype)')
+    parser.add_argument('--vcf', type=str, default=None,
+                        help='Path to VCF file (required if not using --preprocessed-data)')
+    parser.add_argument('--phenotypes', type=str, default=None,
+                        help='Path to phenotypes file (required if not using --preprocessed-data)')
+    parser.add_argument('--preprocessed-data', type=str, default=None,
+                        help='Path to preprocessed data file (.pt from preprocess.py)')
     parser.add_argument('--level', type=str, required=True,
                         choices=['L0', 'L1', 'L2', 'L3', 'L4'],
                         help='Annotation level to use')
@@ -191,6 +193,10 @@ def main():
     args = parse_args()
     set_seed(args.seed)
 
+    # Validate arguments
+    if args.preprocessed_data is None and (args.vcf is None or args.phenotypes is None):
+        raise ValueError("Must provide either --preprocessed-data OR both --vcf and --phenotypes")
+
     # Create experiment name
     if args.experiment_name is None:
         args.experiment_name = f"{args.level}_run"
@@ -206,12 +212,30 @@ def main():
     print(f"Config saved to {config_path}")
 
     # Load data
-    print(f"\nLoading data from {args.vcf}...")
-    all_samples = build_sample_variants(
-        vcf_path=args.vcf,
-        phenotype_file=args.phenotypes,
-    )
-    print(f"Loaded {len(all_samples)} samples")
+    if args.preprocessed_data is not None:
+        # Load from preprocessed file
+        print(f"\nLoading preprocessed data from {args.preprocessed_data}...")
+        import time
+        start_time = time.time()
+
+        preprocessed = torch.load(args.preprocessed_data, weights_only=False)
+        all_samples = preprocessed['samples']
+        metadata = preprocessed.get('metadata', {})
+
+        load_time = time.time() - start_time
+        print(f"Loaded {len(all_samples)} samples in {load_time:.1f} seconds")
+        if metadata:
+            print(f"  Original VCF: {metadata.get('vcf_path', 'unknown')}")
+            print(f"  Cases: {metadata.get('num_cases', 'unknown')}")
+            print(f"  Controls: {metadata.get('num_controls', 'unknown')}")
+    else:
+        # Load from VCF
+        print(f"\nLoading data from {args.vcf}...")
+        all_samples = build_sample_variants(
+            vcf_path=args.vcf,
+            phenotype_file=args.phenotypes,
+        )
+        print(f"Loaded {len(all_samples)} samples")
 
     # Create dataset
     annotation_level = AnnotationLevel[args.level]
