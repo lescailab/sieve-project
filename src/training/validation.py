@@ -69,6 +69,7 @@ def get_train_val_loaders(
     val_indices: np.ndarray,
     batch_size: int = 32,
     num_workers: int = 0,
+    max_variants_per_batch: int = 3000,
 ) -> Tuple[DataLoader, DataLoader]:
     """
     Create train and validation DataLoaders from fold indices.
@@ -99,12 +100,16 @@ def get_train_val_loaders(
     train_dataset = Subset(dataset, train_indices)
     val_dataset = Subset(dataset, val_indices)
 
+    # Create custom collate function with max_variants limit
+    def collate_fn(batch):
+        return collate_samples(batch, max_variants_per_batch=max_variants_per_batch)
+
     # Create DataLoaders
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
         shuffle=True,  # Shuffle training data
-        collate_fn=collate_samples,
+        collate_fn=collate_fn,
         num_workers=num_workers,
         pin_memory=True if num_workers > 0 else False,
     )
@@ -113,7 +118,7 @@ def get_train_val_loaders(
         val_dataset,
         batch_size=batch_size,
         shuffle=False,  # Don't shuffle validation data
-        collate_fn=collate_samples,
+        collate_fn=collate_fn,
         num_workers=num_workers,
         pin_memory=True if num_workers > 0 else False,
     )
