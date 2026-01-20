@@ -70,6 +70,14 @@ def main():
     load_time = time.time() - start_time
     print(f"Loaded {len(all_samples)} samples in {load_time:.1f} seconds")
 
+    # Check for empty samples
+    if len(all_samples) == 0:
+        print("ERROR: No samples loaded. Check that:")
+        print("  1. VCF file exists and is readable")
+        print("  2. Phenotype file exists and sample IDs match VCF")
+        print("  3. VCF contains valid variants")
+        sys.exit(1)
+
     # Print statistics
     n_cases = sum(1 for s in all_samples if s.label == 1)
     n_controls = len(all_samples) - n_cases
@@ -77,8 +85,11 @@ def main():
     print(f"  Controls: {n_controls}")
 
     variant_counts = [len(s.variants) for s in all_samples]
-    print(f"  Variants per sample: mean={sum(variant_counts)/len(variant_counts):.1f}, "
-          f"min={min(variant_counts)}, max={max(variant_counts)}")
+    if len(variant_counts) > 0:
+        print(f"  Variants per sample: mean={sum(variant_counts)/len(variant_counts):.1f}, "
+              f"min={min(variant_counts)}, max={max(variant_counts)}")
+    else:
+        print(f"  Variants per sample: 0 (no variants found)")
 
     # Save preprocessed data
     print(f"\nSaving preprocessed data...")

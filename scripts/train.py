@@ -14,6 +14,7 @@ Author: Lescai Lab
 
 import argparse
 import sys
+import time
 from pathlib import Path
 from typing import Dict
 
@@ -175,15 +176,22 @@ def train_single_fold(
 
     # Train
     print("\nTraining...")
+    train_start = time.time()
     trainer.train(
         train_loader=train_loader,
         val_loader=val_loader,
         num_epochs=args.epochs,
         verbose=True,
     )
+    train_time = time.time() - train_start
 
     # Load best model
     best_metrics = trainer.load_checkpoint('best_model.pt')
+
+    # Add timing information
+    best_metrics['training_time_seconds'] = train_time
+    best_metrics['epochs_trained'] = trainer.current_epoch + 1
+    best_metrics['time_per_epoch_seconds'] = train_time / (trainer.current_epoch + 1)
 
     return best_metrics
 
@@ -215,7 +223,6 @@ def main():
     if args.preprocessed_data is not None:
         # Load from preprocessed file
         print(f"\nLoading preprocessed data from {args.preprocessed_data}...")
-        import time
         start_time = time.time()
 
         preprocessed = torch.load(args.preprocessed_data, weights_only=False)
@@ -231,11 +238,13 @@ def main():
     else:
         # Load from VCF
         print(f"\nLoading data from {args.vcf}...")
+        start_time = time.time()
         all_samples = build_sample_variants(
             vcf_path=args.vcf,
             phenotype_file=args.phenotypes,
         )
-        print(f"Loaded {len(all_samples)} samples")
+        load_time = time.time() - start_time
+        print(f"Loaded {len(all_samples)} samples in {load_time:.1f} seconds")
 
     # Create dataset
     annotation_level = AnnotationLevel[args.level]
@@ -331,6 +340,7 @@ def main():
                 'std_auc': float(std_auc),
                 'mean_accuracy': float(mean_acc),
                 'std_accuracy': float(std_acc),
+                'data_loading_time_seconds': float(load_time),
                 'fold_results': [
                     {k: float(v) for k, v in r.items()}
                     for r in cv_results
@@ -392,8 +402,10 @@ def main():
 
         # Save results
         results_path = output_dir / 'results.yaml'
+        results_with_timing = {k: float(v) for k, v in metrics.items()}
+        results_with_timing['data_loading_time_seconds'] = float(load_time)
         with open(results_path, 'w') as f:
-            yaml.dump({k: float(v) for k, v in metrics.items()}, f)
+            yaml.dump(results_with_timing, f)
         print(f"\nResults saved to {results_path}")
 
     print(f"\nTraining complete! Outputs saved to {output_dir}")
