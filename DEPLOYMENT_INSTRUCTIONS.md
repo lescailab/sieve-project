@@ -130,7 +130,42 @@ SIEVE supports 5 annotation levels (L0-L4) for ablation experiments:
 
 **Recommendation**: Start with L3 for standard analysis, then compare with L0-L2 to assess annotation dependence.
 
-### 3. Single Training Run
+### 3. Preprocessing Data (Recommended for Large Datasets)
+
+**For datasets with >500 samples**, preprocessing significantly speeds up experimentation by caching parsed VCF data:
+
+```bash
+# Step 1: Preprocess once
+python scripts/preprocess.py \
+    --vcf /path/to/your/data.vcf.gz \
+    --phenotypes /path/to/phenotypes.tsv \
+    --output /path/to/preprocessed_data.pt
+```
+
+This creates a `.pt` file (~1-5 MB per 1000 samples) containing all parsed variant data.
+
+**Benefits:**
+- VCF parsing: **~5-30 minutes** (one time)
+- Loading preprocessed: **~5-10 seconds** (every training run)
+- **10-100x speedup** for repeated experiments
+
+**Example workflow:**
+```bash
+# Preprocess once
+python scripts/preprocess.py \
+    --vcf discovery_filtered_vepped.vcf.gz \
+    --phenotypes phenotypes.tsv \
+    --output preprocessed_data.pt
+
+# Train multiple times (fast!)
+python scripts/train.py --preprocessed-data preprocessed_data.pt --level L3 ...
+python scripts/train.py --preprocessed-data preprocessed_data.pt --level L3 --cv 5 ...
+python scripts/train.py --preprocessed-data preprocessed_data.pt --level L2 ...
+```
+
+Each training run loads in seconds instead of minutes!
+
+### 4. Single Training Run
 
 For a single train/validation split (80/20):
 
@@ -148,18 +183,36 @@ python scripts/train.py \
     --device cuda  # or cpu
 ```
 
-### 4. Cross-Validation
+### 5. Cross-Validation
 
 For robust performance estimation with 5-fold cross-validation:
 
 ```bash
+# Using preprocessed data (recommended)
+python scripts/train.py \
+    --preprocessed-data /path/to/preprocessed_data.pt \
+    --level L3 \
+    --cv 5 \
+    --epochs 100 \
+    --batch-size 2 \
+    --gradient-accumulation-steps 16 \
+    --max-variants-per-batch 3000 \
+    --lr 0.001 \
+    --early-stopping 10 \
+    --output-dir outputs/my_experiment \
+    --experiment-name cohort_L3_cv5 \
+    --device cuda
+
+# Or from VCF directly (slower)
 python scripts/train.py \
     --vcf /path/to/your/data.vcf.gz \
     --phenotypes /path/to/phenotypes.tsv \
     --level L3 \
     --cv 5 \
     --epochs 100 \
-    --batch-size 32 \
+    --batch-size 2 \
+    --gradient-accumulation-steps 16 \
+    --max-variants-per-batch 3000 \
     --lr 0.001 \
     --early-stopping 10 \
     --output-dir outputs/my_experiment \
@@ -201,12 +254,15 @@ Then compare AUC across levels to assess annotation importance.
 ## Command-Line Arguments Reference
 
 ### Data Arguments
-- `--vcf`: Path to VCF file (required)
-- `--phenotypes`: Path to phenotype TSV file (required)
+- `--vcf`: Path to VCF file (required if not using --preprocessed-data)
+- `--phenotypes`: Path to phenotype TSV file (required if not using --preprocessed-data)
+- `--preprocessed-data`: Path to preprocessed data file (.pt from preprocess.py)
 - `--level`: Annotation level [L0, L1, L2, L3, L4] (required)
 
 ### Training Arguments
-- `--batch-size`: Batch size (default: 32)
+- `--batch-size`: Batch size (default: 32, **use 2-4 for large datasets**)
+- `--gradient-accumulation-steps`: Simulate larger batches (default: 1, **use 8-16 for large datasets**)
+- `--max-variants-per-batch`: Cap variants per batch (default: 3000, prevents OOM)
 - `--epochs`: Maximum number of epochs (default: 100)
 - `--lr`: Learning rate (default: 0.001)
 - `--lambda-attr`: Attribution regularization weight (default: 0.0)
@@ -233,6 +289,63 @@ Then compare AUC across levels to assess annotation importance.
 
 ### Other Arguments
 - `--seed`: Random seed for reproducibility (default: 42)
+
+## Memory Optimization for Large Datasets
+
+**Critical for datasets with >1000 samples and 16K+ genes!**
+
+### The Problem
+
+With real exome data:
+- ~5000-7000 variants per sample
+- Attention matrix: `[batch_size, heads, variants, variants]`
+- batch=32, variants=5000 → **373 GB memory required!**
+
+### The Solution
+
+Use these three parameters together:
+
+```bash
+--batch-size 2                      # Small batches (2-4 samples)
+--gradient-accumulation-steps 16    # Simulate batch=32 (2×16=32)
+--max-variants-per-batch 3000       # Cap variants to prevent OOM
+```
+
+### Memory Usage by Configuration
+
+| Configuration | GPU Memory | Notes |
+|--------------|------------|-------|
+| batch=32, no limit | 373 GB | **FAILS** |
+| batch=32, max=3000 | ~40 GB | Still too large for most GPUs |
+| batch=8, max=3000 | ~12 GB | Borderline for T4 (15GB) |
+| **batch=2, max=3000** | **~7 GB** | ✓ **Works on T4/RTX5000** |
+| batch=1, max=2000 | ~3 GB | Very safe, slower training |
+
+### Recommended Settings by GPU
+
+**T4 / RTX 5000 (15-16 GB):**
+```bash
+--batch-size 2 --gradient-accumulation-steps 16 --max-variants-per-batch 3000
+```
+
+**A100 40GB:**
+```bash
+--batch-size 4 --gradient-accumulation-steps 8 --max-variants-per-batch 4000
+```
+
+**A100 80GB:**
+```bash
+--batch-size 8 --gradient-accumulation-steps 4 --max-variants-per-batch 5000
+```
+
+### Gradient Accumulation Explained
+
+Simulates larger batches without extra memory:
+- Physical batch=2: Process 2 samples at a time
+- Accumulation=16: Accumulate gradients over 16 mini-batches
+- Effective batch=32: Same training dynamics as batch_size=32
+
+**No loss in training quality!**
 
 ## Interpreting Results
 
