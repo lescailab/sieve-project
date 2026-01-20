@@ -167,9 +167,12 @@ def build_variant_tensor(
     }
 
 
-def collate_samples(batch: List[Dict[str, Any]]) -> Dict[str, Tensor]:
+def collate_samples(
+    batch: List[Dict[str, Any]],
+    max_variants_per_batch: Optional[int] = 3000
+) -> Dict[str, Tensor]:
     """
-    Collate multiple samples into a padded batch.
+    Collate multiple samples into a padded batch with optional variant limit.
 
     Pads all samples to the maximum number of variants within the batch.
     This is more memory-efficient than padding to a global maximum.
@@ -225,6 +228,10 @@ def collate_samples(batch: List[Dict[str, Any]]) -> Dict[str, Tensor]:
     # Get max number of variants in this batch
     max_variants = max(sample['features'].shape[0] for sample in batch)
 
+    # Cap at max_variants_per_batch to prevent OOM
+    if max_variants_per_batch is not None and max_variants > max_variants_per_batch:
+        max_variants = max_variants_per_batch
+
     # Handle edge case where all samples have zero variants
     if max_variants == 0:
         # Find feature dimension from any sample with known dimension
@@ -270,10 +277,12 @@ def collate_samples(batch: List[Dict[str, Any]]) -> Dict[str, Tensor]:
         n_variants = sample['features'].shape[0]
 
         if n_variants > 0:
-            features_padded[i, :n_variants] = sample['features']
-            positions_padded[i, :n_variants] = sample['positions']
-            gene_ids_padded[i, :n_variants] = sample['gene_ids']
-            mask_padded[i, :n_variants] = sample['mask']
+            # Truncate to max_variants if necessary
+            n_to_copy = min(n_variants, max_variants)
+            features_padded[i, :n_to_copy] = sample['features'][:n_to_copy]
+            positions_padded[i, :n_to_copy] = sample['positions'][:n_to_copy]
+            gene_ids_padded[i, :n_to_copy] = sample['gene_ids'][:n_to_copy]
+            mask_padded[i, :n_to_copy] = sample['mask'][:n_to_copy]
 
         labels[i] = sample['label']
         sample_ids.append(sample['sample_id'])
