@@ -67,6 +67,10 @@ def parse_args():
                         help='Early stopping patience (epochs)')
     parser.add_argument('--gradient-clip', type=float, default=None,
                         help='Gradient clipping value')
+    parser.add_argument('--gradient-accumulation-steps', type=int, default=1,
+                        help='Number of batches to accumulate gradients over (simulates larger batch)')
+    parser.add_argument('--max-variants-per-batch', type=int, default=3000,
+                        help='Maximum variants to process per batch (prevents OOM)')
 
     # Model arguments
     parser.add_argument('--latent-dim', type=int, default=64,
@@ -164,6 +168,7 @@ def train_single_fold(
         scheduler=scheduler,
         early_stopping_patience=args.early_stopping,
         gradient_clip_value=args.gradient_clip,
+        gradient_accumulation_steps=args.gradient_accumulation_steps,
     )
 
     # Train
@@ -251,6 +256,7 @@ def main():
                 val_indices=val_idx,
                 batch_size=args.batch_size,
                 num_workers=args.num_workers,
+                max_variants_per_batch=args.max_variants_per_batch,
             )
 
             # Create model
@@ -334,6 +340,7 @@ def main():
             val_indices=val_idx,
             batch_size=args.batch_size,
             num_workers=args.num_workers,
+            max_variants_per_batch=args.max_variants_per_batch,
         )
 
         # Create model
