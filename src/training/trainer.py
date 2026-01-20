@@ -65,6 +65,7 @@ class Trainer:
         scheduler: Optional[_LRScheduler] = None,
         early_stopping_patience: int = 10,
         gradient_clip_value: Optional[float] = None,
+        gradient_accumulation_steps: int = 1,
     ):
         self.model = model.to(device)
         self.optimizer = optimizer
@@ -74,6 +75,7 @@ class Trainer:
         self.scheduler = scheduler
         self.early_stopping_patience = early_stopping_patience
         self.gradient_clip_value = gradient_clip_value
+        self.gradient_accumulation_steps = gradient_accumulation_steps
 
         # Create checkpoint directory
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -114,7 +116,9 @@ class Trainer:
         all_preds = []
         all_labels = []
 
-        for batch in train_loader:
+        self.optimizer.zero_grad()  # Zero once at start
+
+        for batch_idx, batch in enumerate(train_loader):
             # Move batch to device
             features = batch['features'].to(self.device)
             positions = batch['positions'].to(self.device)
@@ -123,8 +127,6 @@ class Trainer:
             labels = batch['labels'].to(self.device)
 
             # Forward pass
-            self.optimizer.zero_grad()
-
             if self.loss_fn.lambda_attr > 0:
                 # Need variant embeddings for attribution loss
                 logits, intermediates = self.model(
@@ -145,19 +147,25 @@ class Trainer:
 
             loss = loss_dict['total']
 
+            # Scale loss for gradient accumulation
+            scaled_loss = loss / self.gradient_accumulation_steps
+
             # Backward pass
-            loss.backward()
+            scaled_loss.backward()
 
-            # Gradient clipping
-            if self.gradient_clip_value is not None:
-                torch.nn.utils.clip_grad_norm_(
-                    self.model.parameters(),
-                    self.gradient_clip_value
-                )
+            # Optimizer step every accumulation_steps batches
+            if (batch_idx + 1) % self.gradient_accumulation_steps == 0:
+                # Gradient clipping
+                if self.gradient_clip_value is not None:
+                    torch.nn.utils.clip_grad_norm_(
+                        self.model.parameters(),
+                        self.gradient_clip_value
+                    )
 
-            self.optimizer.step()
+                self.optimizer.step()
+                self.optimizer.zero_grad()
 
-            # Track metrics
+            # Track metrics (use unscaled loss)
             all_losses.append(loss.item())
             all_classification_losses.append(loss_dict['classification'].item())
             all_attribution_losses.append(loss_dict['attribution_sparsity'].item())
@@ -166,6 +174,16 @@ class Trainer:
             probs = torch.sigmoid(logits).detach().cpu().numpy().flatten()
             all_preds.extend(probs)
             all_labels.extend(labels.cpu().numpy())
+
+        # Final optimizer step if there are remaining gradients
+        if len(train_loader) % self.gradient_accumulation_steps != 0:
+            if self.gradient_clip_value is not None:
+                torch.nn.utils.clip_grad_norm_(
+                    self.model.parameters(),
+                    self.gradient_clip_value
+                )
+            self.optimizer.step()
+            self.optimizer.zero_grad()
 
         # Compute epoch metrics
         train_loss = np.mean(all_losses)
