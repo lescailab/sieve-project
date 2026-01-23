@@ -18,7 +18,10 @@ import numpy as np
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description='Plot ablation experiment results')
+    parser = argparse.ArgumentParser(
+        description='Plot ablation experiment results',
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
     parser.add_argument('--results-dir', type=str, required=True,
                         help='Directory containing ablation results')
     parser.add_argument('--output', type=str, default='ablation_results.png',
@@ -37,11 +40,29 @@ def load_results(results_dir):
     for level in ['L0', 'L1', 'L2', 'L3', 'L4']:
         cv_results_path = results_dir / f'ablation_{level}' / 'cv_results.yaml'
         if cv_results_path.exists():
-            with open(cv_results_path) as f:
-                data = yaml.safe_load(f)
-                levels.append(level)
-                mean_aucs.append(data['mean_auc'])
-                std_aucs.append(data['std_auc'])
+            try:
+                with open(cv_results_path) as f:
+                    data = yaml.safe_load(f)
+                # Ensure the expected keys are present
+                mean_auc = data['mean_auc']
+                std_auc = data['std_auc']
+            except (FileNotFoundError, PermissionError) as e:
+                print(f"Warning: Could not open '{cv_results_path}': {e}. Skipping {level}.")
+                continue
+            except yaml.YAMLError as e:
+                print(f"Warning: Failed to parse YAML in '{cv_results_path}': {e}. Skipping {level}.")
+                continue
+            except (KeyError, TypeError) as e:
+                print(f"Warning: Missing 'mean_auc'/'std_auc' in '{cv_results_path}': {e}. Skipping {level}.")
+                continue
+
+            levels.append(level)
+            mean_aucs.append(mean_auc)
+            std_aucs.append(std_auc)
+
+    # Convert to numpy arrays for consistency with scientific computing
+    mean_aucs = np.array(mean_aucs)
+    std_aucs = np.array(std_aucs)
 
     return levels, mean_aucs, std_aucs
 
@@ -85,13 +106,22 @@ def create_plot(levels, mean_aucs, std_aucs, output_path):
     }
 
     desc_text = '\n'.join([f'{k}: {v}' for k, v in descriptions.items() if k in levels])
-    ax.text(0.02, 0.98, desc_text, transform=ax.transAxes,
-            fontsize=9, verticalalignment='top',
-            bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+    if desc_text:
+        ax.text(0.02, 0.98, desc_text, transform=ax.transAxes,
+                fontsize=9, verticalalignment='top',
+                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
 
     plt.tight_layout()
+
+    # Ensure output directory exists
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
     print(f"Plot saved to {output_path}")
+
+    # Close figure to prevent memory leaks
+    plt.close(fig)
 
     return fig
 
@@ -107,11 +137,27 @@ def print_summary(levels, mean_aucs, std_aucs):
 
     # Find best
     best_idx = np.argmax(mean_aucs)
-    baseline_idx = 0  # L0
+
+    # Determine baseline: prefer L0 if available, otherwise use first level
+    if 'L0' in levels:
+        baseline_idx = levels.index('L0')
+        baseline_label = levels[baseline_idx]
+    else:
+        baseline_idx = 0
+        baseline_label = levels[baseline_idx]
+        print(f"\n[Warning] Baseline level 'L0' not found; using first available level "
+              f"('{baseline_label}') as baseline.")
 
     print(f"\nBest: {levels[best_idx]} with AUC = {mean_aucs[best_idx]:.4f}")
-    print(f"Improvement over baseline (L0): {mean_aucs[best_idx] - mean_aucs[baseline_idx]:.4f} AUC")
-    print(f"Relative improvement: {100 * (mean_aucs[best_idx] - mean_aucs[baseline_idx]) / mean_aucs[baseline_idx]:.1f}%")
+    improvement = mean_aucs[best_idx] - mean_aucs[baseline_idx]
+    print(f"Improvement over baseline ({baseline_label}): {improvement:.4f} AUC")
+
+    # Avoid division by zero
+    if mean_aucs[baseline_idx] != 0:
+        rel_improvement = 100 * improvement / mean_aucs[baseline_idx]
+        print(f"Relative improvement: {rel_improvement:.1f}%")
+    else:
+        print(f"Relative improvement: N/A (baseline AUC is {mean_aucs[baseline_idx]:.4f})")
 
 
 def main():
