@@ -21,6 +21,7 @@ from torch.optim.lr_scheduler import _LRScheduler
 from torch.utils.data import DataLoader
 from sklearn.metrics import roc_auc_score, accuracy_score
 import numpy as np
+import yaml
 
 from .loss import SIEVELoss
 
@@ -356,6 +357,9 @@ class Trainer:
                           f"({self.early_stopping_patience} epochs without improvement)")
                 break
 
+        # Save training history
+        self.save_history()
+
         return self.history
 
     def save_checkpoint(self, filename: str, metrics: Dict[str, float]) -> None:
@@ -380,6 +384,32 @@ class Trainer:
 
         checkpoint_path = self.checkpoint_dir / filename
         torch.save(checkpoint, checkpoint_path)
+
+    def save_history(self, filename: str = 'training_history.yaml') -> None:
+        """
+        Save training history to YAML file.
+
+        Args:
+            filename: History filename (default: 'training_history.yaml')
+        """
+        history_path = self.checkpoint_dir / filename
+
+        # Convert history to serializable format
+        history_serializable = {
+            key: [float(val) for val in values]
+            for key, values in self.history.items()
+        }
+
+        # Add metadata
+        history_data = {
+            'history': history_serializable,
+            'best_val_auc': float(self.best_val_auc),
+            'total_epochs': len(self.history['train_loss']),
+            'best_epoch': int(np.argmax(self.history['val_auc'])) + 1 if self.history['val_auc'] else 0,
+        }
+
+        with open(history_path, 'w') as f:
+            yaml.dump(history_data, f, default_flow_style=False)
 
     def load_checkpoint(self, filename: str) -> Dict[str, float]:
         """
