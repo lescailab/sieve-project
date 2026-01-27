@@ -23,7 +23,7 @@ import yaml
 import torch
 import pandas as pd
 
-from src.data.dataset import SIEVEDataset
+from src.encoding import VariantDataset, get_feature_dimension, AnnotationLevel
 from src.models.sieve import create_sieve_model
 from src.explain.shap_epistasis import SHAPEpistasisDetector
 
@@ -95,16 +95,22 @@ def main():
     # Load data
     print("Loading data...")
     preprocessed = torch.load(args.preprocessed_data)
-    dataset = SIEVEDataset(
+
+    # Get annotation level
+    annotation_level = AnnotationLevel[config['level']]
+
+    dataset = VariantDataset(
         variant_data=preprocessed['variant_data'],
         positions=preprocessed['positions'],
         gene_ids=preprocessed['gene_ids'],
         labels=preprocessed['labels'],
-        level=config['level'],
-        annotation_levels=preprocessed['annotation_levels']
+        level=annotation_level
     )
 
-    # Create model
+    # Create model (add input_dim if missing)
+    if 'input_dim' not in config:
+        config['input_dim'] = get_feature_dimension(annotation_level)
+
     model = create_sieve_model(config, num_genes=dataset.num_genes)
     model.load_state_dict(checkpoint['model_state_dict'])
     model = model.to(args.device)
