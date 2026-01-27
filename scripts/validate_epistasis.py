@@ -90,11 +90,11 @@ def main():
     with open(args.config) as f:
         config = yaml.safe_load(f)
 
-    checkpoint = torch.load(args.checkpoint, map_location='cpu')
+    checkpoint = torch.load(args.checkpoint, map_location='cpu', weights_only=False)
 
     # Load data
     print("Loading data...")
-    preprocessed = torch.load(args.preprocessed_data)
+    preprocessed = torch.load(args.preprocessed_data, weights_only=False)
 
     # Get annotation level
     annotation_level = AnnotationLevel[config['level']]
