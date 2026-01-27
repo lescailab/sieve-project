@@ -40,13 +40,69 @@ def parse_args():
 
 def load_history(history_path):
     """Load training history from YAML file."""
-    with open(history_path) as f:
-        data = yaml.safe_load(f)
+    try:
+        with open(history_path) as f:
+            data = yaml.safe_load(f)
+    except FileNotFoundError:
+        raise FileNotFoundError(f"History file not found: {history_path}")
+    except PermissionError:
+        raise PermissionError(f"Permission denied while accessing history file: {history_path}")
+    except yaml.YAMLError as e:
+        raise yaml.YAMLError(f"Error parsing YAML history file '{history_path}': {e}")
     return data
 
 
-def plot_single_run(history_data, output_path):
+def validate_history_data(history_data, history_path):
+    """
+    Validate that history data contains all required keys.
+
+    Args:
+        history_data: Loaded history data dictionary
+        history_path: Path to history file (for error messages)
+
+    Raises:
+        ValueError: If required keys are missing or data is invalid
+    """
+    required_top_keys = ['history']
+    required_history_keys = [
+        'train_loss', 'val_loss',
+        'train_auc', 'val_auc',
+        'train_accuracy', 'val_accuracy',
+        'learning_rate'
+    ]
+
+    # Check top-level keys
+    for key in required_top_keys:
+        if key not in history_data:
+            raise ValueError(f"Missing required key '{key}' in {history_path}")
+
+    history = history_data['history']
+
+    # Check history keys
+    missing_keys = [key for key in required_history_keys if key not in history]
+    if missing_keys:
+        raise ValueError(
+            f"Missing required history keys in {history_path}: {', '.join(missing_keys)}"
+        )
+
+    # Check that lists are not empty
+    for key in required_history_keys:
+        if not history[key]:
+            raise ValueError(f"History key '{key}' has empty list in {history_path}")
+
+    # Check that all metrics have the same length
+    lengths = {key: len(history[key]) for key in required_history_keys}
+    if len(set(lengths.values())) > 1:
+        raise ValueError(
+            f"Inconsistent history lengths in {history_path}: {lengths}"
+        )
+
+
+def plot_single_run(history_data, output_path, history_path=""):
     """Plot training curves for a single run."""
+    # Validate data
+    validate_history_data(history_data, history_path)
+
     history = history_data['history']
     best_epoch = history_data.get('best_epoch', 0)
 
@@ -137,7 +193,12 @@ def plot_cv_runs(experiment_dir, output_path, max_folds=10):
     for fold_dir in fold_dirs:
         history_path = fold_dir / 'training_history.yaml'
         if history_path.exists():
-            histories.append(load_history(history_path))
+            try:
+                history_data = load_history(history_path)
+                validate_history_data(history_data, history_path)
+                histories.append(history_data)
+            except (ValueError, yaml.YAMLError) as e:
+                print(f"Warning: Skipping {fold_dir} due to invalid history: {e}")
         else:
             print(f"Warning: No training_history.yaml found in {fold_dir}")
 
@@ -232,8 +293,11 @@ def plot_cv_runs(experiment_dir, output_path, max_folds=10):
     return fig
 
 
-def print_training_analysis(history_data):
+def print_training_analysis(history_data, history_path=""):
     """Print analysis of training dynamics."""
+    # Validate data
+    validate_history_data(history_data, history_path)
+
     history = history_data['history']
     best_epoch = history_data.get('best_epoch', 0)
     total_epochs = history_data.get('total_epochs', len(history['train_loss']))
@@ -295,8 +359,8 @@ def main():
     if args.history_file is not None:
         # Single run
         history_data = load_history(args.history_file)
-        print_training_analysis(history_data)
-        plot_single_run(history_data, args.output)
+        print_training_analysis(history_data, args.history_file)
+        plot_single_run(history_data, args.output, args.history_file)
     elif args.experiment_dir is not None:
         # Cross-validation
         plot_cv_runs(args.experiment_dir, args.output, max_folds=args.max_folds)
