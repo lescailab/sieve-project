@@ -10,12 +10,11 @@ Validates SIEVE discoveries against known biological databases:
 Author: Lescai Lab
 """
 
-from typing import Dict, List, Optional, Set, Tuple
-from collections import defaultdict, Counter
+from typing import Dict, List, Optional, Set
+from collections import defaultdict
 from pathlib import Path
 
 import pandas as pd
-import numpy as np
 from scipy.stats import hypergeom, fisher_exact
 
 
