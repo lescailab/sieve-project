@@ -152,55 +152,56 @@ class IntegratedGradientsExplainer:
         all_metadata = []
 
         self.model.eval()
-        with torch.no_grad():
-            for batch in dataloader:
-                # Extract batch data
-                features = batch['features']
-                positions = batch['positions']
-                gene_ids = batch['gene_ids']
-                mask = batch['mask']
+        # NOTE: Do NOT use torch.no_grad() - we need gradients for integrated gradients!
+        for batch in dataloader:
+            # Extract batch data
+            features = batch['features']
+            positions = batch['positions']
+            gene_ids = batch['gene_ids']
+            mask = batch['mask']
 
-                # Compute attributions
-                attributions = self.attribute(
-                    features, positions, gene_ids, mask
-                )
+            # Compute attributions
+            attributions = self.attribute(
+                features, positions, gene_ids, mask
+            )
 
-                # Convert to numpy
-                attributions_np = attributions.cpu().numpy()
-                mask_np = mask.cpu().numpy()
+            # Convert to numpy
+            attributions_np = attributions.cpu().numpy()
+            mask_np = mask.cpu().numpy()
 
-                # Aggregate feature attributions to variant scores
-                if aggregate == 'l2':
-                    variant_scores = np.linalg.norm(attributions_np, ord=2, axis=2)
-                elif aggregate == 'l1':
-                    variant_scores = np.linalg.norm(attributions_np, ord=1, axis=2)
-                elif aggregate == 'sum':
-                    variant_scores = np.sum(attributions_np, axis=2)
-                elif aggregate == 'mean':
-                    variant_scores = np.mean(attributions_np, axis=2)
-                else:
-                    raise ValueError(f"Unknown aggregation method: {aggregate}")
+            # Aggregate feature attributions to variant scores
+            if aggregate == 'l2':
+                variant_scores = np.linalg.norm(attributions_np, ord=2, axis=2)
+            elif aggregate == 'l1':
+                variant_scores = np.linalg.norm(attributions_np, ord=1, axis=2)
+            elif aggregate == 'sum':
+                variant_scores = np.sum(attributions_np, axis=2)
+            elif aggregate == 'mean':
+                variant_scores = np.mean(attributions_np, axis=2)
+            else:
+                raise ValueError(f"Unknown aggregation method: {aggregate}")
 
-                # Store per-sample results
-                for i in range(features.shape[0]):
-                    # Get valid variants only
-                    valid_mask = mask_np[i]
+            # Store per-sample results
+            for i in range(features.shape[0]):
+                # Get valid variants only
+                valid_mask = mask_np[i]
 
-                    all_attributions.append(attributions_np[i][valid_mask])
-                    all_variant_scores.append(variant_scores[i][valid_mask])
+                all_attributions.append(attributions_np[i][valid_mask])
+                all_variant_scores.append(variant_scores[i][valid_mask])
 
-                    # Store metadata
-                    metadata = {
-                        'positions': positions[i][mask[i]].cpu().numpy(),
-                        'gene_ids': gene_ids[i][mask[i]].cpu().numpy(),
-                        'sample_idx': len(all_metadata),
-                    }
-                    if 'sample_id' in batch:
-                        metadata['sample_id'] = batch['sample_id'][i]
-                    if 'labels' in batch:
-                        metadata['label'] = batch['labels'][i].cpu().item()
+                # Store metadata
+                metadata = {
+                    'positions': positions[i][mask[i]].cpu().numpy(),
+                    'gene_ids': gene_ids[i][mask[i]].cpu().numpy(),
+                    'sample_idx': len(all_metadata),
+                }
+                # Fix: use sample_ids (plural) not sample_id
+                if 'sample_ids' in batch:
+                    metadata['sample_id'] = batch['sample_ids'][i]
+                if 'labels' in batch:
+                    metadata['label'] = batch['labels'][i].cpu().item()
 
-                    all_metadata.append(metadata)
+                all_metadata.append(metadata)
 
         return all_attributions, all_variant_scores, all_metadata
 
