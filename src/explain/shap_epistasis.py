@@ -7,14 +7,13 @@ variant-variant interactions more rigorously than attention weights alone.
 Author: Lescai Lab
 """
 
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
 import torch
 import torch.nn as nn
 from torch import Tensor
 import numpy as np
 import shap
-from tqdm import tqdm
 
 
 class SHAPEpistasisDetector:
@@ -351,6 +350,14 @@ class SHAPEpistasisDetector:
         combined = pred_both - pred_neither
         synergy = combined - individual_v1 - individual_v2
 
+        # Classify interaction type
+        if abs(synergy) <= 0.01:  # Small epsilon for near-zero
+            interaction_type = 'independent'
+        elif synergy > 0:
+            interaction_type = 'synergistic'
+        else:
+            interaction_type = 'antagonistic'
+
         return {
             'pred_both': pred_both,
             'pred_variant1_only': pred_v1,
@@ -360,6 +367,6 @@ class SHAPEpistasisDetector:
             'effect_variant2': individual_v2,
             'effect_combined': combined,
             'synergy': synergy,
-            'interaction_type': 'synergistic' if synergy > 0 else 'antagonistic',
+            'interaction_type': interaction_type,
             'is_significant': abs(synergy) > 0.05  # Threshold
         }
