@@ -7,7 +7,7 @@ by their importance for disease prediction.
 Author: Lescai Lab
 """
 
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 from collections import defaultdict
 
 import numpy as np
@@ -224,7 +224,7 @@ class VariantRanker:
 
         gene_rankings = gene_agg.merge(top_variants, on='gene_id')
         gene_rankings['gene_rank'] = rankdata(-gene_rankings['gene_score']).astype(int)
-        gene_rankings = gene_rankings.sort_values('gene_rank').reset_index()
+        gene_rankings = gene_rankings.sort_values('gene_rank').reset_index(drop=True)
 
         return gene_rankings
 
