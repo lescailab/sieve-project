@@ -135,7 +135,8 @@ def load_model_and_config(args):
     print(f"Loading model from {checkpoint_path}")
 
     # Load checkpoint
-    checkpoint = torch.load(checkpoint_path, map_location='cpu')
+    # Note: weights_only=False is safe here since these are our own trusted checkpoints
+    checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
 
     return config, checkpoint
 
@@ -156,7 +157,7 @@ def main():
 
     # Load data
     print("\nLoading data...")
-    preprocessed = torch.load(args.preprocessed_data)
+    preprocessed = torch.load(args.preprocessed_data, weights_only=False)
 
     # Get annotation level
     annotation_level = AnnotationLevel[config['level']]
