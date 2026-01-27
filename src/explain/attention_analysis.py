@@ -7,13 +7,12 @@ to identify variant-variant interactions (epistasis).
 Author: Lescai Lab
 """
 
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List
 
 import torch
 import torch.nn as nn
 from torch import Tensor
 import numpy as np
-from scipy.stats import spearmanr
 
 
 class AttentionAnalyzer:
