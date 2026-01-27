@@ -43,12 +43,12 @@ def load_history(history_path):
     try:
         with open(history_path) as f:
             data = yaml.safe_load(f)
-    except FileNotFoundError:
-        raise FileNotFoundError(f"History file not found: {history_path}")
-    except PermissionError:
-        raise PermissionError(f"Permission denied while accessing history file: {history_path}")
+    except FileNotFoundError as e:
+        raise FileNotFoundError(f"History file not found: {history_path}") from e
+    except PermissionError as e:
+        raise PermissionError(f"Permission denied while accessing history file: {history_path}") from e
     except yaml.YAMLError as e:
-        raise yaml.YAMLError(f"Error parsing YAML history file '{history_path}': {e}")
+        raise ValueError(f"Error parsing YAML history file '{history_path}': {e}") from e
     return data
 
 
@@ -71,12 +71,24 @@ def validate_history_data(history_data, history_path):
         'learning_rate'
     ]
 
+    # Check if history_data is None or not a dict
+    if history_data is None:
+        raise ValueError(f"Empty or invalid YAML file: {history_path}")
+    if not isinstance(history_data, dict):
+        raise ValueError(
+            f"Invalid history file format in {history_path}: expected a dictionary"
+        )
+
     # Check top-level keys
     for key in required_top_keys:
         if key not in history_data:
             raise ValueError(f"Missing required key '{key}' in {history_path}")
 
     history = history_data['history']
+
+    # Check that history is a dictionary
+    if not isinstance(history, dict):
+        raise ValueError(f"'history' must be a dictionary in {history_path}")
 
     # Check history keys
     missing_keys = [key for key in required_history_keys if key not in history]
@@ -85,10 +97,13 @@ def validate_history_data(history_data, history_path):
             f"Missing required history keys in {history_path}: {', '.join(missing_keys)}"
         )
 
-    # Check that lists are not empty
+    # Check that history entries are non-empty lists
     for key in required_history_keys:
-        if not history[key]:
-            raise ValueError(f"History key '{key}' has empty list in {history_path}")
+        value = history[key]
+        if not isinstance(value, list) or not value:
+            raise ValueError(
+                f"History key '{key}' must be a non-empty list in {history_path}"
+            )
 
     # Check that all metrics have the same length
     lengths = {key: len(history[key]) for key in required_history_keys}
@@ -197,7 +212,7 @@ def plot_cv_runs(experiment_dir, output_path, max_folds=10):
                 history_data = load_history(history_path)
                 validate_history_data(history_data, history_path)
                 histories.append(history_data)
-            except (ValueError, yaml.YAMLError) as e:
+            except (FileNotFoundError, PermissionError, ValueError) as e:
                 print(f"Warning: Skipping {fold_dir} due to invalid history: {e}")
         else:
             print(f"Warning: No training_history.yaml found in {fold_dir}")
