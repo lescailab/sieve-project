@@ -37,7 +37,7 @@ import torch
 from torch.utils.data import DataLoader
 import numpy as np
 
-from src.data.dataset import SIEVEDataset
+from src.encoding import VariantDataset, collate_samples, get_feature_dimension, AnnotationLevel
 from src.models.sieve import create_sieve_model
 from src.explain.gradients import IntegratedGradientsExplainer
 from src.explain.attention_analysis import AttentionAnalyzer
@@ -157,28 +157,35 @@ def main():
     # Load data
     print("\nLoading data...")
     preprocessed = torch.load(args.preprocessed_data)
-    dataset = SIEVEDataset(
+
+    # Get annotation level
+    annotation_level = AnnotationLevel[config['level']]
+
+    # Create dataset
+    dataset = VariantDataset(
         variant_data=preprocessed['variant_data'],
         positions=preprocessed['positions'],
         gene_ids=preprocessed['gene_ids'],
         labels=preprocessed['labels'],
-        level=config['level'],
-        annotation_levels=preprocessed['annotation_levels']
+        level=annotation_level
     )
 
     dataloader = DataLoader(
         dataset,
         batch_size=args.batch_size,
         shuffle=False,
-        collate_fn=dataset.collate_fn
+        collate_fn=collate_samples
     )
 
     print(f"Loaded {len(dataset)} samples")
     print(f"  Cases: {sum(preprocessed['labels'])}")
     print(f"  Controls: {len(preprocessed['labels']) - sum(preprocessed['labels'])}")
 
-    # Create model
+    # Create model (add input_dim if missing from config)
     print("\nCreating model...")
+    if 'input_dim' not in config:
+        config['input_dim'] = get_feature_dimension(annotation_level)
+
     model = create_sieve_model(config, num_genes=dataset.num_genes)
     model.load_state_dict(checkpoint['model_state_dict'])
     model = model.to(args.device)
