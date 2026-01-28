@@ -49,24 +49,32 @@ def build_gene_id_mapping(samples):
     return gene_map
 
 
-def build_position_mapping(samples):
-    """Build mapping from position to (chromosome, gene_name)."""
-    pos_map = {}
+def build_position_gene_mapping(samples):
+    """Build mapping from (position, gene_id) to (chromosome, gene_name).
+
+    CRITICAL: Positions are NOT unique across chromosomes!
+    Position 12345 can exist on chr1, chr2, chr3, etc.
+    We must use (position, gene_id) as the key, not just position.
+    """
+    # First build gene_index (same as in encoding)
+    gene_symbols = sorted(set(v.gene for s in samples for v in s.variants))
+    gene_index = {gene: idx for idx, gene in enumerate(gene_symbols)}
+
+    # Now build the mapping using (pos, gene_id) as key
+    pos_gene_map = {}
 
     for sample in samples:
         for variant in sample.variants:
             pos = variant.pos
             chrom = variant.chrom
-            gene = variant.gene
+            gene_symbol = variant.gene
+            gene_id = gene_index[gene_symbol]
 
-            if pos not in pos_map:
-                pos_map[pos] = (chrom, gene)
-            elif pos_map[pos][0] != chrom:
-                # Position exists on multiple chromosomes - keep the more common one
-                # or just use the first one seen
-                pass
+            key = (pos, gene_id)
+            if key not in pos_gene_map:
+                pos_gene_map[key] = (chrom, gene_symbol)
 
-    return pos_map
+    return pos_gene_map, gene_index
 
 
 def build_gene_index_reverse(samples):
@@ -87,9 +95,9 @@ def fix_variant_rankings(variant_df, preprocessed_data):
     """Add chromosome and gene_name columns to variant rankings."""
     samples = preprocessed_data['samples']
 
-    # Build mappings
-    pos_to_chrom_gene = build_position_mapping(samples)
-    index_to_gene, gene_index = build_gene_index_reverse(samples)
+    # Build mappings with CORRECT key: (position, gene_id)
+    pos_gene_to_info, gene_index = build_position_gene_mapping(samples)
+    index_to_gene = {idx: gene for gene, idx in gene_index.items()}
 
     # Add columns
     chromosomes = []
@@ -99,9 +107,10 @@ def fix_variant_rankings(variant_df, preprocessed_data):
         position = int(row['position'])
         gene_id = int(row['gene_id'])
 
-        # Get chromosome and gene_name
-        if position in pos_to_chrom_gene:
-            chrom, gene_name = pos_to_chrom_gene[position]
+        # Use (position, gene_id) as key - this is unique!
+        key = (position, gene_id)
+        if key in pos_gene_to_info:
+            chrom, gene_name = pos_gene_to_info[key]
         else:
             chrom = 'unknown'
             gene_name = index_to_gene.get(gene_id, f'GENE_{gene_id}')
