@@ -120,33 +120,52 @@ class Trainer:
         self.optimizer.zero_grad()  # Zero once at start
 
         for batch_idx, batch in enumerate(train_loader):
-            # Move batch to device
-            features = batch['features'].to(self.device)
-            positions = batch['positions'].to(self.device)
-            gene_ids = batch['gene_ids'].to(self.device)
-            mask = batch['mask'].to(self.device)
-            labels = batch['labels'].to(self.device)
+            # Check if model has train_step (for chunked processing)
+            if hasattr(self.model, 'train_step'):
+                # Use model's train_step for chunked processing
+                loss, logits = self.model.train_step(batch, self.loss_fn, self.device)
+                loss_dict = {'total': loss, 'classification': loss, 'attribution_sparsity': torch.tensor(0.0)}
 
-            # Forward pass
-            if self.loss_fn.lambda_attr > 0:
-                # Need variant embeddings for attribution loss
-                logits, intermediates = self.model(
-                    features, positions, gene_ids, mask,
-                    return_intermediate=True
-                )
-                variant_embeddings = intermediates['variant_embeddings']
-                loss_dict = self.loss_fn(
-                    logits=logits,
-                    labels=labels,
-                    variant_embeddings=variant_embeddings,
-                    mask=mask,
-                )
+                # Get sample labels for metrics
+                if 'original_sample_indices' in batch:
+                    # Chunked: labels are per-sample, need to aggregate from chunks
+                    original_indices = batch['original_sample_indices']
+                    unique_samples = original_indices.unique()
+                    labels_for_metrics = torch.zeros(len(unique_samples), dtype=torch.long)
+                    for i, sample_idx in enumerate(unique_samples):
+                        chunk_mask = (original_indices == sample_idx)
+                        labels_for_metrics[i] = batch['labels'][chunk_mask][0]
+                    labels = labels_for_metrics
+                else:
+                    labels = batch['labels']
             else:
-                # Standard forward pass
-                logits, _ = self.model(features, positions, gene_ids, mask)
-                loss_dict = self.loss_fn(logits=logits, labels=labels)
+                # Standard processing (no chunking)
+                features = batch['features'].to(self.device)
+                positions = batch['positions'].to(self.device)
+                gene_ids = batch['gene_ids'].to(self.device)
+                mask = batch['mask'].to(self.device)
+                labels = batch['labels'].to(self.device)
 
-            loss = loss_dict['total']
+                # Forward pass
+                if self.loss_fn.lambda_attr > 0:
+                    # Need variant embeddings for attribution loss
+                    logits, intermediates = self.model(
+                        features, positions, gene_ids, mask,
+                        return_intermediate=True
+                    )
+                    variant_embeddings = intermediates['variant_embeddings']
+                    loss_dict = self.loss_fn(
+                        logits=logits,
+                        labels=labels,
+                        variant_embeddings=variant_embeddings,
+                        mask=mask,
+                    )
+                else:
+                    # Standard forward pass
+                    logits, _ = self.model(features, positions, gene_ids, mask)
+                    loss_dict = self.loss_fn(logits=logits, labels=labels)
+
+                loss = loss_dict['total']
 
             # Scale loss for gradient accumulation
             scaled_loss = loss / self.gradient_accumulation_steps
@@ -221,31 +240,50 @@ class Trainer:
         all_labels = []
 
         for batch in val_loader:
-            # Move batch to device
-            features = batch['features'].to(self.device)
-            positions = batch['positions'].to(self.device)
-            gene_ids = batch['gene_ids'].to(self.device)
-            mask = batch['mask'].to(self.device)
-            labels = batch['labels'].to(self.device)
+            # Check if model has train_step (for chunked processing)
+            if hasattr(self.model, 'train_step'):
+                # Use model's train_step for chunked processing (works for eval too)
+                loss, logits = self.model.train_step(batch, self.loss_fn, self.device)
+                loss_dict = {'total': loss, 'classification': loss, 'attribution_sparsity': torch.tensor(0.0)}
 
-            # Forward pass
-            if self.loss_fn.lambda_attr > 0:
-                logits, intermediates = self.model(
-                    features, positions, gene_ids, mask,
-                    return_intermediate=True
-                )
-                variant_embeddings = intermediates['variant_embeddings']
-                loss_dict = self.loss_fn(
-                    logits=logits,
-                    labels=labels,
-                    variant_embeddings=variant_embeddings,
-                    mask=mask,
-                )
+                # Get sample labels for metrics
+                if 'original_sample_indices' in batch:
+                    # Chunked: labels are per-sample, need to aggregate from chunks
+                    original_indices = batch['original_sample_indices']
+                    unique_samples = original_indices.unique()
+                    labels_for_metrics = torch.zeros(len(unique_samples), dtype=torch.long)
+                    for i, sample_idx in enumerate(unique_samples):
+                        chunk_mask = (original_indices == sample_idx)
+                        labels_for_metrics[i] = batch['labels'][chunk_mask][0]
+                    labels = labels_for_metrics
+                else:
+                    labels = batch['labels']
             else:
-                logits, _ = self.model(features, positions, gene_ids, mask)
-                loss_dict = self.loss_fn(logits=logits, labels=labels)
+                # Standard processing (no chunking)
+                features = batch['features'].to(self.device)
+                positions = batch['positions'].to(self.device)
+                gene_ids = batch['gene_ids'].to(self.device)
+                mask = batch['mask'].to(self.device)
+                labels = batch['labels'].to(self.device)
 
-            loss = loss_dict['total']
+                # Forward pass
+                if self.loss_fn.lambda_attr > 0:
+                    logits, intermediates = self.model(
+                        features, positions, gene_ids, mask,
+                        return_intermediate=True
+                    )
+                    variant_embeddings = intermediates['variant_embeddings']
+                    loss_dict = self.loss_fn(
+                        logits=logits,
+                        labels=labels,
+                        variant_embeddings=variant_embeddings,
+                        mask=mask,
+                    )
+                else:
+                    logits, _ = self.model(features, positions, gene_ids, mask)
+                    loss_dict = self.loss_fn(logits=logits, labels=labels)
+
+                loss = loss_dict['total']
 
             # Track metrics
             all_losses.append(loss.item())
