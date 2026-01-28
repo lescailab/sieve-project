@@ -71,8 +71,8 @@ def parse_args():
     # Analysis options
     parser.add_argument('--n-steps', type=int, default=50,
                         help='Number of integration steps for IG')
-    parser.add_argument('--batch-size', type=int, default=8,
-                        help='Batch size for analysis')
+    parser.add_argument('--batch-size', type=int, default=4,
+                        help='Batch size for dataloader (samples processed individually during IG to avoid OOM)')
     parser.add_argument('--skip-attention', action='store_true',
                         help='Skip attention analysis (faster)')
     parser.add_argument('--top-k-variants', type=int, default=100,
