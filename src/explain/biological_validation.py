@@ -131,22 +131,48 @@ class BiologicalValidator:
         # Get top variants
         top_variants = variant_rankings.head(top_k).copy()
 
-        # Match against ClinVar (assuming position-based matching)
-        # In practice, you'd match chr:pos:ref:alt
+        # Match against ClinVar using chromosome + position
         top_variants['in_clinvar'] = False
         top_variants['clinvar_significance'] = None
 
-        if 'position' in top_variants.columns and 'pos' in clinvar_df.columns:
+        # Check if required columns exist
+        has_chrom_in_variants = 'chromosome' in top_variants.columns
+        has_pos_in_variants = 'position' in top_variants.columns
+        has_chrom_in_clinvar = 'chrom' in clinvar_df.columns
+        has_pos_in_clinvar = 'pos' in clinvar_df.columns
+
+        if has_chrom_in_variants and has_pos_in_variants and has_chrom_in_clinvar and has_pos_in_clinvar:
+            # Create chr:pos keys for matching
+            clinvar_df['chr_pos_key'] = clinvar_df['chrom'].astype(str) + ':' + clinvar_df['pos'].astype(str)
+            clinvar_keys = set(clinvar_df['chr_pos_key'])
+
+            top_variants['chr_pos_key'] = top_variants['chromosome'].astype(str) + ':' + top_variants['position'].astype(str)
+            top_variants['in_clinvar'] = top_variants['chr_pos_key'].isin(clinvar_keys)
+
+            # Add significance
+            for idx, row in top_variants[top_variants['in_clinvar']].iterrows():
+                matches = clinvar_df[clinvar_df['chr_pos_key'] == row['chr_pos_key']]
+                if len(matches) > 0:
+                    top_variants.at[idx, 'clinvar_significance'] = matches.iloc[0].get(
+                        'clinical_significance', 'Unknown'
+                    )
+
+            # Clean up temporary column
+            top_variants.drop(columns=['chr_pos_key'], inplace=True)
+        elif has_pos_in_variants and has_pos_in_clinvar:
+            # Fallback to position-only matching (less accurate)
+            print("WARNING: Chromosome information missing - matching by position only")
             clinvar_positions = set(clinvar_df['pos'])
             top_variants['in_clinvar'] = top_variants['position'].isin(clinvar_positions)
 
-            # Add significance
             for idx, row in top_variants[top_variants['in_clinvar']].iterrows():
                 matches = clinvar_df[clinvar_df['pos'] == row['position']]
                 if len(matches) > 0:
                     top_variants.at[idx, 'clinvar_significance'] = matches.iloc[0].get(
                         'clinical_significance', 'Unknown'
                     )
+        else:
+            print("ERROR: Required columns missing for ClinVar matching")
 
         n_in_clinvar = top_variants['in_clinvar'].sum()
         print(f"Found {n_in_clinvar}/{top_k} top variants in ClinVar")
@@ -186,33 +212,60 @@ class BiologicalValidator:
         # Get top genes
         top_genes = gene_rankings.head(top_k).copy()
 
-        # Match against GWAS
+        # Match against GWAS using gene_name (gene symbol)
         top_genes['in_gwas'] = False
         top_genes['gwas_traits'] = None
         top_genes['gwas_studies'] = 0
 
-        if 'gene_id' in top_genes.columns and 'gene' in gwas_df.columns:
+        # Check column names in GWAS file (could be 'gene' or 'gene_name')
+        gwas_gene_col = None
+        if 'gene' in gwas_df.columns:
+            gwas_gene_col = 'gene'
+        elif 'gene_name' in gwas_df.columns:
+            gwas_gene_col = 'gene_name'
+
+        # Check if we have gene_name in rankings
+        has_gene_name = 'gene_name' in top_genes.columns
+
+        if has_gene_name and gwas_gene_col:
             # Filter GWAS by disease if provided
             if disease_terms:
-                gwas_filtered = gwas_df[
-                    gwas_df['trait'].str.contains('|'.join(disease_terms), case=False, na=False)
-                ]
-                print(f"Filtered GWAS to {len(gwas_filtered)} disease-relevant associations")
+                # GWAS trait column could be 'disease_trait' or 'trait'
+                trait_col = 'disease_trait' if 'disease_trait' in gwas_df.columns else 'trait'
+                if trait_col in gwas_df.columns:
+                    gwas_filtered = gwas_df[
+                        gwas_df[trait_col].astype(str).str.contains('|'.join(disease_terms), case=False, na=False)
+                    ]
+                    print(f"Filtered GWAS to {len(gwas_filtered)} disease-relevant associations")
+                else:
+                    gwas_filtered = gwas_df
             else:
                 gwas_filtered = gwas_df
 
-            # Count GWAS hits per gene
-            gwas_gene_counts = gwas_filtered.groupby('gene').size().to_dict()
-            gwas_gene_traits = gwas_filtered.groupby('gene')['trait'].apply(
-                lambda x: '; '.join(x.unique()[:5])  # Top 5 traits
-            ).to_dict()
+            # Count GWAS hits per gene (case-insensitive matching)
+            gwas_filtered[gwas_gene_col] = gwas_filtered[gwas_gene_col].astype(str).str.upper()
+            gwas_gene_counts = gwas_filtered.groupby(gwas_gene_col).size().to_dict()
 
+            # Get traits per gene
+            trait_col = 'disease_trait' if 'disease_trait' in gwas_filtered.columns else 'trait'
+            if trait_col in gwas_filtered.columns:
+                gwas_gene_traits = gwas_filtered.groupby(gwas_gene_col)[trait_col].apply(
+                    lambda x: '; '.join(x.dropna().unique()[:5])  # Top 5 traits
+                ).to_dict()
+            else:
+                gwas_gene_traits = {}
+
+            # Match genes
             for idx, row in top_genes.iterrows():
-                gene_id = row['gene_id']
-                if gene_id in gwas_gene_counts:
+                gene_name = str(row['gene_name']).upper()
+                if gene_name in gwas_gene_counts:
                     top_genes.at[idx, 'in_gwas'] = True
-                    top_genes.at[idx, 'gwas_studies'] = gwas_gene_counts[gene_id]
-                    top_genes.at[idx, 'gwas_traits'] = gwas_gene_traits[gene_id]
+                    top_genes.at[idx, 'gwas_studies'] = gwas_gene_counts[gene_name]
+                    top_genes.at[idx, 'gwas_traits'] = gwas_gene_traits.get(gene_name, '')
+        else:
+            print(f"ERROR: Required columns missing for GWAS matching")
+            print(f"  Rankings has gene_name: {has_gene_name}")
+            print(f"  GWAS has gene column: {gwas_gene_col}")
 
         n_in_gwas = top_genes['in_gwas'].sum()
         print(f"Found {n_in_gwas}/{top_k} top genes in GWAS Catalog")
@@ -287,9 +340,9 @@ class BiologicalValidator:
 
     def perform_go_enrichment(
         self,
-        gene_list: List[int],
-        gene_to_go: Dict[int, List[str]],
-        background_genes: Optional[List[int]] = None,
+        gene_list: List[str],
+        gene_to_go: Dict[str, List[str]],
+        background_genes: Optional[List[str]] = None,
         min_genes_per_term: int = 3,
         max_genes_per_term: int = 500
     ) -> pd.DataFrame:
@@ -298,11 +351,11 @@ class BiologicalValidator:
 
         Parameters
         ----------
-        gene_list : List[int]
-            Genes to test for enrichment
-        gene_to_go : Dict[int, List[str]]
-            Mapping of gene IDs to GO terms
-        background_genes : Optional[List[int]]
+        gene_list : List[str]
+            Gene symbols to test for enrichment
+        gene_to_go : Dict[str, List[str]]
+            Mapping of gene symbols to GO term IDs
+        background_genes : Optional[List[str]]
             Background gene set (default: all genes in gene_to_go)
         min_genes_per_term : int
             Minimum genes per term to test
@@ -317,10 +370,15 @@ class BiologicalValidator:
         if background_genes is None:
             background_genes = list(gene_to_go.keys())
 
+        # Convert to uppercase for case-insensitive matching
+        gene_list = [str(g).upper() for g in gene_list]
+        gene_to_go_upper = {str(k).upper(): v for k, v in gene_to_go.items()}
+        background_genes_upper = [str(g).upper() for g in background_genes]
+
         # Create term-to-genes mapping
         term_to_genes = defaultdict(set)
-        for gene, terms in gene_to_go.items():
-            if gene in background_genes:
+        for gene, terms in gene_to_go_upper.items():
+            if gene in background_genes_upper:
                 for term in terms:
                     term_to_genes[term].add(gene)
 
@@ -334,7 +392,7 @@ class BiologicalValidator:
         # Test enrichment for each term
         results = []
         gene_set = set(gene_list)
-        total_genes = len(background_genes)
+        total_genes = len(background_genes_upper)
 
         for term, term_genes in term_to_genes.items():
             overlap = len(gene_set & term_genes)
