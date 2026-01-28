@@ -71,6 +71,8 @@ def parse_args():
     # Analysis options
     parser.add_argument('--n-steps', type=int, default=50,
                         help='Number of integration steps for IG')
+    parser.add_argument('--max-variants', type=int, default=2000,
+                        help='Maximum variants per sample for IG (to avoid OOM). Samples with more variants are randomly sampled.')
     parser.add_argument('--batch-size', type=int, default=4,
                         help='Batch size for dataloader (samples processed individually during IG to avoid OOM)')
     parser.add_argument('--skip-attention', action='store_true',
@@ -201,8 +203,14 @@ def main():
     explainer = IntegratedGradientsExplainer(
         model=model,
         device=args.device,
-        n_steps=args.n_steps
+        n_steps=args.n_steps,
+        max_variants=args.max_variants
     )
+
+    print(f"IG Configuration:")
+    print(f"  Integration steps: {args.n_steps}")
+    print(f"  Max variants per sample: {args.max_variants}")
+    print(f"  Note: Samples with >{args.max_variants} variants will be randomly sampled")
 
     print(f"Computing attributions with {args.n_steps} integration steps...")
     attributions, variant_scores, metadata = explainer.attribute_batch(
