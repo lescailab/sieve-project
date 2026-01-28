@@ -189,7 +189,7 @@ def main():
                 max_genes_per_term=500
             )
 
-        if not go_enrichment.empty:
+        if go_enrichment is not None and not go_enrichment.empty:
             # Save results
             go_path = output_dir / 'go_enrichment.csv'
             go_enrichment.to_csv(go_path, index=False)
