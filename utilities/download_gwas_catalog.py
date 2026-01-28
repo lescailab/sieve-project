@@ -34,16 +34,14 @@ except ImportError:
 # The main GWAS catalog file includes both GRCh37 and GRCh38 coordinates
 # We filter based on the genome parameter after download
 #
-# Primary: EBI GWAS Catalog API (verified 2026-01)
-# Source: https://www.ebi.ac.uk/gwas/downloads
-GWAS_URL = 'https://www.ebi.ac.uk/gwas/api/search/downloads/full'
+# Primary: EBI GWAS Catalog API (verified 2026-01-28 by user)
+# Source: https://www.ebi.ac.uk/gwas/docs/file-downloads
+# NOTE: This endpoint does NOT specify genome version in URL - file contains both builds
+GWAS_URL = 'https://www.ebi.ac.uk/gwas/api/search/downloads/associations/v1.0?split=false'
 
-# Fallback: EBI FTP site (if API endpoint changes)
-# FTP structure: http://ftp.ebi.ac.uk/pub/databases/gwas/releases/YYYY/MM/DD/
-# The 'latest' symlink should point to most recent release
-GWAS_FTP_FALLBACK = 'http://ftp.ebi.ac.uk/pub/databases/gwas/releases/latest/gwas-catalog-associations_ontology-annotated.tsv'
-
-# NOTE: If both URLs fail, visit https://www.ebi.ac.uk/gwas/downloads for current links
+# NOTE: If this URL fails, visit https://www.ebi.ac.uk/gwas/docs/file-downloads for current links
+# The GWAS Catalog does not maintain separate files per genome build - coordinates for
+# both GRCh37 and GRCh38 are included in the same file and we extract based on --genome parameter
 
 
 def download_with_progress(url: str, output_path: Path) -> None:
@@ -283,26 +281,18 @@ Examples:
             temp_gwas.close()
             gwas_path = Path(temp_gwas.name)
 
-        # Try primary API endpoint, fall back to FTP if it fails
+        # Download from GWAS Catalog API
         try:
             download_with_progress(url, gwas_path)
-        except urllib.error.HTTPError as e:
-            if e.code == 404:
-                print(f"\nWARNING: API endpoint failed (404). Trying FTP fallback...")
-                try:
-                    download_with_progress(GWAS_FTP_FALLBACK, gwas_path)
-                except Exception as e2:
-                    print(f"\nERROR: Both download attempts failed.")
-                    print(f"  API URL: {url}")
-                    print(f"  FTP URL: {GWAS_FTP_FALLBACK}")
-                    print(f"\nLast error: {e2}")
-                    print("\nPlease try:")
-                    print("1. Check your internet connection")
-                    print("2. Visit https://www.ebi.ac.uk/gwas/downloads to find current download URLs")
-                    print("3. Download manually and use --gwas parameter")
-                    sys.exit(1)
-            else:
-                raise
+        except Exception as e:
+            print(f"\nERROR: Download failed: {e}")
+            print(f"  URL: {url}")
+            print("\nTroubleshooting:")
+            print("1. Check your internet connection")
+            print("2. Visit https://www.ebi.ac.uk/gwas/docs/file-downloads for current download URLs")
+            print("3. Download manually and use --gwas parameter:")
+            print(f"   python utilities/download_gwas_catalog.py --gwas <downloaded_file> --output {output_path}")
+            sys.exit(1)
 
     try:
         # Parse GWAS catalog

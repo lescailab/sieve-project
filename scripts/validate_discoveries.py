@@ -40,11 +40,11 @@ def parse_args():
                         help='Path to gene rankings CSV')
 
     # Database files (optional)
-    parser.add_argument('--clinvar', type=str,
+    parser.add_argument('--clinvar-db', '--clinvar', type=str, dest='clinvar',
                         help='Path to ClinVar database (TSV format)')
-    parser.add_argument('--gwas', type=str,
+    parser.add_argument('--gwas-db', '--gwas', type=str, dest='gwas',
                         help='Path to GWAS Catalog (TSV format)')
-    parser.add_argument('--go-mapping', type=str,
+    parser.add_argument('--go-annotations', '--go-mapping', type=str, dest='go_mapping',
                         help='Path to gene-to-GO mapping (JSON format)')
 
     # Output

@@ -49,8 +49,7 @@ def main():
     print("="*70)
 
     urls_to_test = {
-        'GWAS Catalog API': 'https://www.ebi.ac.uk/gwas/api/search/downloads/full',
-        'GWAS Catalog FTP': 'http://ftp.ebi.ac.uk/pub/databases/gwas/releases/latest/gwas-catalog-associations_ontology-annotated.tsv',
+        'GWAS Catalog API': 'https://www.ebi.ac.uk/gwas/api/search/downloads/associations/v1.0?split=false',
         'ClinVar GRCh37 VCF': 'https://ftp.ncbi.nlm.nih.gov/pub/clinvar/vcf_GRCh37/clinvar.vcf.gz',
         'ClinVar GRCh38 VCF': 'https://ftp.ncbi.nlm.nih.gov/pub/clinvar/vcf_GRCh38/clinvar.vcf.gz',
     }
@@ -79,7 +78,7 @@ def main():
         print("  1. Internet connection")
         print("  2. Firewall/proxy settings")
         print("  3. Database provider websites for URL changes:")
-        print("     - GWAS: https://www.ebi.ac.uk/gwas/downloads")
+        print("     - GWAS: https://www.ebi.ac.uk/gwas/docs/file-downloads")
         print("     - ClinVar: https://ftp.ncbi.nlm.nih.gov/pub/clinvar/")
         sys.exit(1)
     else:
