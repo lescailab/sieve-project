@@ -116,39 +116,47 @@ def parse_gwas_catalog(gwas_path: Path, output_path: Path, genome: str = 'GRCh37
         print("Trying Python parser (slower but more robust)...")
 
         try:
-            # Try with Python parser (no low_memory option, more robust)
+            # Try with Python parser with minimal quoting
             df = pd.read_csv(
                 gwas_path,
                 sep='\t',
                 encoding='latin-1',
                 engine='python',
-                on_bad_lines='warn',
-                error_bad_lines=False
+                on_bad_lines='skip',
+                quoting=3  # QUOTE_NONE - don't interpret quotes at all
             )
             print(f"Loaded {len(df):,} total associations with Python parser")
         except Exception as e2:
             print(f"Python parser also failed: {e2}")
-            print("Trying to read file in chunks...")
+            print("Trying final fallback: line-by-line reading with error tolerance...")
 
             try:
-                # Last resort: read in chunks and concatenate
-                chunks = []
-                chunk_size = 10000
-                with pd.read_csv(
-                    gwas_path,
-                    sep='\t',
-                    encoding='latin-1',
-                    chunksize=chunk_size,
-                    on_bad_lines='skip',
-                    engine='python'
-                ) as reader:
-                    for i, chunk in enumerate(reader):
-                        chunks.append(chunk)
-                        if i % 10 == 0:
-                            print(f"  Read {len(chunks) * chunk_size:,} rows...")
+                # Ultimate fallback: Read raw lines and parse manually
+                import csv
+                rows = []
+                with open(gwas_path, 'r', encoding='latin-1', errors='replace') as f:
+                    reader = csv.reader(f, delimiter='\t', quoting=csv.QUOTE_NONE)
+                    header = next(reader)
 
-                df = pd.concat(chunks, ignore_index=True)
-                print(f"Successfully loaded {len(df):,} associations using chunked reading")
+                    for i, row in enumerate(reader):
+                        try:
+                            # Only keep rows that have the right number of columns (±2)
+                            if abs(len(row) - len(header)) <= 2:
+                                # Pad or truncate to match header length
+                                if len(row) < len(header):
+                                    row.extend([''] * (len(header) - len(row)))
+                                elif len(row) > len(header):
+                                    row = row[:len(header)]
+                                rows.append(row)
+                        except Exception:
+                            continue  # Skip problematic rows
+
+                        if i > 0 and i % 100000 == 0:
+                            print(f"  Processed {i:,} lines, kept {len(rows):,} valid rows...")
+
+                df = pd.DataFrame(rows, columns=header)
+                print(f"Successfully loaded {len(df):,} associations using manual parsing")
+                print(f"  (skipped {i - len(rows):,} malformed rows)")
             except Exception as e3:
                 print(f"ERROR: All parsing methods failed: {e3}")
                 print(f"\nFile location: {gwas_path}")
