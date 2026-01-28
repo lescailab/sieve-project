@@ -233,7 +233,6 @@ def main():
     # === BUILD VARIANT INFO MAP ===
     # Map (position, gene_id) -> {chromosome, gene_name} for annotation
     print("\nBuilding variant info map...")
-    from collections import defaultdict
 
     # Build gene index (same as in encoding)
     gene_symbols = sorted(set(v.gene for s in all_samples for v in s.variants))
