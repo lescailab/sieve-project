@@ -168,21 +168,26 @@ def main():
         print("Gene Ontology Enrichment")
         print("="*60)
 
-        # Load GO mapping
+        # Load GO mapping (maps gene symbols to GO terms)
         with open(args.go_mapping) as f:
             gene_to_go = json.load(f)
 
-        # Convert gene IDs to integers if needed
-        gene_to_go = {int(k): v for k, v in gene_to_go.items()}
+        print(f"Loaded GO annotations for {len(gene_to_go)} genes")
 
-        top_genes = list(gene_rankings['gene_id'].head(args.top_k_genes))
+        # Get top gene names (not gene IDs!)
+        if 'gene_name' in gene_rankings.columns:
+            top_genes = list(gene_rankings['gene_name'].head(args.top_k_genes))
+        else:
+            print("ERROR: gene_name column missing in gene rankings - skipping GO enrichment")
+            top_genes = []
 
-        go_enrichment = validator.perform_go_enrichment(
-            gene_list=top_genes,
-            gene_to_go=gene_to_go,
-            min_genes_per_term=3,
-            max_genes_per_term=500
-        )
+        if top_genes:
+            go_enrichment = validator.perform_go_enrichment(
+                gene_list=top_genes,
+                gene_to_go=gene_to_go,
+                min_genes_per_term=3,
+                max_genes_per_term=500
+            )
 
         if not go_enrichment.empty:
             # Save results
