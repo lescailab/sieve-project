@@ -157,8 +157,9 @@ class BiologicalValidator:
                         'clinical_significance', 'Unknown'
                     )
 
-            # Clean up temporary column
+            # Clean up temporary columns
             top_variants.drop(columns=['chr_pos_key'], inplace=True)
+            clinvar_df.drop(columns=['chr_pos_key'], inplace=True)
         elif has_pos_in_variants and has_pos_in_clinvar:
             # Fallback to position-only matching (less accurate)
             print("WARNING: Chromosome information missing - matching by position only")
@@ -235,12 +236,12 @@ class BiologicalValidator:
                 if trait_col in gwas_df.columns:
                     gwas_filtered = gwas_df[
                         gwas_df[trait_col].astype(str).str.contains('|'.join(disease_terms), case=False, na=False)
-                    ]
+                    ].copy()
                     print(f"Filtered GWAS to {len(gwas_filtered)} disease-relevant associations")
                 else:
-                    gwas_filtered = gwas_df
+                    gwas_filtered = gwas_df.copy()
             else:
-                gwas_filtered = gwas_df
+                gwas_filtered = gwas_df.copy()
 
             # Count GWAS hits per gene (case-insensitive matching)
             gwas_filtered[gwas_gene_col] = gwas_filtered[gwas_gene_col].astype(str).str.upper()
