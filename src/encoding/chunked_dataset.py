@@ -1,0 +1,248 @@
+"""
+Chunked variant dataset for processing all variants with bounded memory.
+
+This module implements chunked processing to ensure the model sees all variants
+across the entire genome, not just the first N variants (which would bias toward
+chr1/chr2 due to VCF ordering).
+
+Key innovation: Split each sample into multiple chunks, process chunks independently,
+then aggregate chunk-level outputs into sample-level predictions.
+
+Author: Lescai Lab
+"""
+
+from typing import List, Dict, Any, Optional
+import numpy as np
+import torch
+from torch.utils.data import Dataset
+
+from src.data import SampleVariants
+from src.encoding.levels import AnnotationLevel
+from src.encoding.sparse_tensor import build_variant_tensor, build_gene_index
+
+
+class ChunkedVariantDataset(Dataset):
+    """
+    Dataset that splits each sample into chunks for memory-efficient processing.
+
+    Instead of truncating samples to max_variants (which loses chr3-22),
+    this dataset yields multiple chunks per sample. Each chunk contains
+    up to chunk_size variants from different parts of the genome.
+
+    The model processes each chunk independently, then aggregates chunk
+    embeddings/logits to produce a final sample-level prediction.
+
+    Parameters
+    ----------
+    samples : List[SampleVariants]
+        All samples
+    annotation_level : AnnotationLevel
+        Annotation level to use
+    chunk_size : int
+        Maximum variants per chunk (default: 3000, safe for memory)
+    overlap : int
+        Number of overlapping variants between adjacent chunks (default: 0)
+    gene_index : Optional[Dict[str, int]]
+        Gene index. If None, built from samples.
+    impute_value : float
+        Imputation value for missing scores
+
+    Attributes
+    ----------
+    chunk_info : List[Dict]
+        Metadata for each chunk:
+        - sample_idx: index into samples
+        - chunk_idx: which chunk within the sample
+        - start_idx: start variant index in original sample
+        - end_idx: end variant index in original sample
+        - total_chunks: total chunks for this sample
+
+    Examples
+    --------
+    >>> dataset = ChunkedVariantDataset(samples, AnnotationLevel.L3, chunk_size=3000)
+    >>> print(f"Original samples: {len(samples)}")
+    >>> print(f"Total chunks: {len(dataset)}")
+    >>> # Train on chunks, aggregate during forward pass
+    """
+
+    def __init__(
+        self,
+        samples: List[SampleVariants],
+        annotation_level: AnnotationLevel,
+        chunk_size: int = 3000,
+        overlap: int = 0,
+        gene_index: Optional[Dict[str, int]] = None,
+        impute_value: float = 0.5
+    ):
+        self.samples = samples
+        self.annotation_level = annotation_level
+        self.chunk_size = chunk_size
+        self.overlap = overlap
+        self.impute_value = impute_value
+
+        # Build gene index if not provided
+        if gene_index is None:
+            self.gene_index = build_gene_index(samples)
+        else:
+            self.gene_index = gene_index
+
+        self.num_genes = len(self.gene_index)
+
+        # Build chunk metadata
+        self.chunk_info = []
+        for sample_idx, sample in enumerate(samples):
+            n_variants = len(sample.variants)
+
+            if n_variants == 0:
+                # Empty sample - create one empty chunk
+                self.chunk_info.append({
+                    'sample_idx': sample_idx,
+                    'chunk_idx': 0,
+                    'start_idx': 0,
+                    'end_idx': 0,
+                    'total_chunks': 1,
+                    'sample_id': sample.sample_id,
+                    'label': sample.label
+                })
+            else:
+                # Calculate chunks with overlap
+                stride = chunk_size - overlap
+                total_chunks = max(1, int(np.ceil(n_variants / stride)))
+
+                for chunk_idx in range(total_chunks):
+                    start_idx = chunk_idx * stride
+                    end_idx = min(start_idx + chunk_size, n_variants)
+
+                    self.chunk_info.append({
+                        'sample_idx': sample_idx,
+                        'chunk_idx': chunk_idx,
+                        'start_idx': start_idx,
+                        'end_idx': end_idx,
+                        'total_chunks': total_chunks,
+                        'sample_id': sample.sample_id,
+                        'label': sample.label
+                    })
+
+        print(f"ChunkedVariantDataset created:")
+        print(f"  Samples: {len(samples)}")
+        print(f"  Total chunks: {len(self.chunk_info)}")
+        print(f"  Chunk size: {chunk_size}")
+        print(f"  Overlap: {overlap}")
+        print(f"  Avg chunks per sample: {len(self.chunk_info) / len(samples):.1f}")
+
+    def __len__(self) -> int:
+        return len(self.chunk_info)
+
+    def __getitem__(self, idx: int) -> Dict[str, Any]:
+        """Get a single chunk as tensors."""
+        info = self.chunk_info[idx]
+        sample = self.samples[info['sample_idx']]
+
+        # Extract chunk of variants
+        chunk_variants = sample.variants[info['start_idx']:info['end_idx']]
+
+        # Create temporary SampleVariants for this chunk
+        chunk_sample = SampleVariants(
+            sample_id=sample.sample_id,
+            label=sample.label,
+            variants=chunk_variants
+        )
+
+        # Build tensor for this chunk
+        chunk_tensor = build_variant_tensor(
+            chunk_sample,
+            self.annotation_level,
+            self.gene_index,
+            max_variants=None,  # Don't truncate - chunk is already sized
+            impute_value=self.impute_value
+        )
+
+        # Add chunk metadata
+        chunk_tensor['chunk_idx'] = info['chunk_idx']
+        chunk_tensor['total_chunks'] = info['total_chunks']
+        chunk_tensor['original_sample_idx'] = info['sample_idx']
+
+        return chunk_tensor
+
+    def get_chunks_for_sample(self, sample_idx: int) -> List[int]:
+        """Get list of chunk indices for a given sample."""
+        return [i for i, info in enumerate(self.chunk_info)
+                if info['sample_idx'] == sample_idx]
+
+
+def collate_chunks(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Collate multiple chunks into a padded batch.
+
+    This is similar to collate_samples but simpler because chunks
+    are already sized appropriately.
+
+    Parameters
+    ----------
+    batch : List[Dict[str, Any]]
+        List of chunk tensors from ChunkedVariantDataset
+
+    Returns
+    -------
+    Dict[str, Any]
+        Batched tensors with chunk metadata
+    """
+    batch_size = len(batch)
+
+    # Get max variants in this batch of chunks
+    max_variants = max(sample['features'].shape[0] for sample in batch)
+
+    if max_variants == 0:
+        feature_dim = batch[0]['features'].shape[1] if len(batch[0]['features'].shape) > 1 else 0
+        return {
+            'features': torch.zeros((batch_size, 0, feature_dim), dtype=torch.float32),
+            'positions': torch.zeros((batch_size, 0), dtype=torch.long),
+            'gene_ids': torch.zeros((batch_size, 0), dtype=torch.long),
+            'mask': torch.zeros((batch_size, 0), dtype=torch.bool),
+            'labels': torch.tensor([s['label'] for s in batch], dtype=torch.long),
+            'sample_ids': [s['sample_id'] for s in batch],
+            'chunk_indices': torch.tensor([s['chunk_idx'] for s in batch], dtype=torch.long),
+            'total_chunks': torch.tensor([s['total_chunks'] for s in batch], dtype=torch.long),
+            'original_sample_indices': torch.tensor([s['original_sample_idx'] for s in batch], dtype=torch.long),
+        }
+
+    feature_dim = batch[0]['features'].shape[1]
+
+    # Initialize padded tensors
+    features_padded = torch.zeros((batch_size, max_variants, feature_dim), dtype=torch.float32)
+    positions_padded = torch.zeros((batch_size, max_variants), dtype=torch.long)
+    gene_ids_padded = torch.zeros((batch_size, max_variants), dtype=torch.long)
+    mask_padded = torch.zeros((batch_size, max_variants), dtype=torch.bool)
+    labels = torch.zeros(batch_size, dtype=torch.long)
+    sample_ids = []
+    chunk_indices = torch.zeros(batch_size, dtype=torch.long)
+    total_chunks = torch.zeros(batch_size, dtype=torch.long)
+    original_sample_indices = torch.zeros(batch_size, dtype=torch.long)
+
+    # Fill in the data
+    for i, sample in enumerate(batch):
+        n_variants = sample['features'].shape[0]
+
+        if n_variants > 0:
+            features_padded[i, :n_variants] = sample['features']
+            positions_padded[i, :n_variants] = sample['positions']
+            gene_ids_padded[i, :n_variants] = sample['gene_ids']
+            mask_padded[i, :n_variants] = sample['mask']
+
+        labels[i] = sample['label']
+        sample_ids.append(sample['sample_id'])
+        chunk_indices[i] = sample['chunk_idx']
+        total_chunks[i] = sample['total_chunks']
+        original_sample_indices[i] = sample['original_sample_idx']
+
+    return {
+        'features': features_padded,
+        'positions': positions_padded,
+        'gene_ids': gene_ids_padded,
+        'mask': mask_padded,
+        'labels': labels,
+        'sample_ids': sample_ids,
+        'chunk_indices': chunk_indices,
+        'total_chunks': total_chunks,
+        'original_sample_indices': original_sample_indices,
+    }
