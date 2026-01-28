@@ -53,12 +53,14 @@ class IntegratedGradientsExplainer:
         self,
         model: nn.Module,
         device: str = 'cuda',
-        n_steps: int = 50
+        n_steps: int = 50,
+        max_variants: int = 2000
     ):
         self.model = model.to(device)
         self.model.eval()
         self.device = device
         self.n_steps = n_steps
+        self.max_variants = max_variants
 
         # Wrap model to work with Captum
         self.model_wrapper = SIEVEWrapper(model)
@@ -186,14 +188,43 @@ class IntegratedGradientsExplainer:
                 sample_gene_ids = gene_ids[i:i+1]
                 sample_mask = mask[i:i+1]
 
-                # Compute attributions for this single sample
+                # CRITICAL: Limit variants to avoid OOM
+                # Count valid variants for this sample
+                num_valid_variants = sample_mask[0].sum().item()
+
+                if num_valid_variants > self.max_variants:
+                    # Too many variants - need to subsample
+                    valid_indices = torch.where(sample_mask[0])[0]
+
+                    # Random sampling of variant indices
+                    selected_indices = valid_indices[torch.randperm(len(valid_indices))[:self.max_variants]]
+                    selected_indices = selected_indices.sort()[0]  # Keep sorted for locality
+
+                    # Truncate to selected variants
+                    sample_features_truncated = sample_features[:, selected_indices, :]
+                    sample_positions_truncated = sample_positions[:, selected_indices]
+                    sample_gene_ids_truncated = sample_gene_ids[:, selected_indices]
+                    sample_mask_truncated = sample_mask[:, selected_indices]
+
+                    # Track original indices for metadata
+                    original_indices = selected_indices
+                else:
+                    # Use all variants
+                    sample_features_truncated = sample_features
+                    sample_positions_truncated = sample_positions
+                    sample_gene_ids_truncated = sample_gene_ids
+                    sample_mask_truncated = sample_mask
+                    original_indices = None
+
+                # Compute attributions for this single sample (possibly truncated)
                 sample_attributions = self.attribute(
-                    sample_features, sample_positions, sample_gene_ids, sample_mask
+                    sample_features_truncated, sample_positions_truncated,
+                    sample_gene_ids_truncated, sample_mask_truncated
                 )
 
                 # Convert to numpy
                 attributions_np = sample_attributions[0].cpu().numpy()
-                mask_np = sample_mask[0].cpu().numpy()
+                mask_np_truncated = sample_mask_truncated[0].cpu().numpy()
 
                 # Aggregate feature attributions to variant scores
                 if aggregate == 'l2':
@@ -208,17 +239,32 @@ class IntegratedGradientsExplainer:
                     raise ValueError(f"Unknown aggregation method: {aggregate}")
 
                 # Get valid variants only
-                valid_mask = mask_np
+                valid_mask = mask_np_truncated
 
                 all_attributions.append(attributions_np[valid_mask])
                 all_variant_scores.append(variant_scores[valid_mask])
 
-                # Store metadata
-                metadata = {
-                    'positions': positions[i][mask[i]].cpu().numpy(),
-                    'gene_ids': gene_ids[i][mask[i]].cpu().numpy(),
-                    'sample_idx': len(all_metadata),
-                }
+                # Store metadata (use truncated positions/genes if applicable)
+                if original_indices is not None:
+                    # Was truncated - use the selected subset
+                    metadata = {
+                        'positions': sample_positions_truncated[0][sample_mask_truncated[0]].cpu().numpy(),
+                        'gene_ids': sample_gene_ids_truncated[0][sample_mask_truncated[0]].cpu().numpy(),
+                        'sample_idx': len(all_metadata),
+                        'num_variants_original': num_valid_variants,
+                        'num_variants_analyzed': self.max_variants,
+                        'truncated': True,
+                    }
+                else:
+                    # Not truncated - use all
+                    metadata = {
+                        'positions': positions[i][mask[i]].cpu().numpy(),
+                        'gene_ids': gene_ids[i][mask[i]].cpu().numpy(),
+                        'sample_idx': len(all_metadata),
+                        'num_variants_original': num_valid_variants,
+                        'num_variants_analyzed': num_valid_variants,
+                        'truncated': False,
+                    }
                 # Fix: use sample_ids (plural) not sample_id
                 if 'sample_ids' in batch:
                     metadata['sample_id'] = batch['sample_ids'][i]
