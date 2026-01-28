@@ -415,6 +415,22 @@ python utilities/download_gene_ontology.py \
 
 ---
 
+## URL Verification
+
+**Before running downloads**, verify that all database URLs are accessible:
+
+```bash
+python utilities/test_download_urls.py
+```
+
+This checks:
+- GWAS Catalog API endpoint and FTP fallback
+- ClinVar GRCh37 and GRCh38 VCF files
+
+If any URLs are inaccessible, the script provides troubleshooting guidance and links to check for updated URLs.
+
+---
+
 ## Testing
 
 Test the utilities with small datasets before full downloads:
