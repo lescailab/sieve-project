@@ -1,0 +1,4 @@
+chrom	pos	ref	alt	gene	clinical_significance
+1	12345	A	G	BRCA1	Pathogenic
+1	23456	C	T	TP53	Likely_pathogenic
+3	45678	T	C	APOE	Pathogenic/Likely_pathogenic
