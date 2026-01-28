@@ -4,6 +4,29 @@
 
 All three database download utilities have been tested with both unit tests and integration tests to ensure reliability and correct output formatting.
 
+## URL Verification Test
+
+**IMPORTANT**: Before running database downloads, verify that all URLs are accessible.
+
+```bash
+# Test all download URLs
+python utilities/test_download_urls.py
+```
+
+This script checks:
+- GWAS Catalog API endpoint
+- GWAS Catalog FTP fallback
+- ClinVar GRCh37 VCF
+- ClinVar GRCh38 VCF
+
+If any URLs fail, the script provides troubleshooting guidance and links to check for updated URLs.
+
+**Run this test whenever**:
+- Setting up on a new system
+- After long periods without downloads
+- If downloads are failing
+- Before releasing updated utilities
+
 ## Test Coverage
 
 ### Unit Tests (`tests/test_utilities.py`)
