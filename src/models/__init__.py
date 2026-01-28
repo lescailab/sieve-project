@@ -16,6 +16,7 @@ from .attention import PositionAwareSparseAttention, MultiLayerAttention
 from .aggregation import GeneAggregator, EfficientGeneAggregator
 from .classifier import PhenotypeClassifier, AttentionPoolingClassifier
 from .sieve import SIEVE, create_sieve_model
+from .chunked_sieve import ChunkedSIEVEModel
 
 __all__ = [
     # Encoder
@@ -36,4 +37,7 @@ __all__ = [
     # Full model
     'SIEVE',
     'create_sieve_model',
+
+    # Chunked processing
+    'ChunkedSIEVEModel',
 ]
