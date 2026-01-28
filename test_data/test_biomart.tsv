@@ -1,0 +1,10 @@
+Gene name	GO term accession	GO term name	GO domain
+TP53	GO:0006355	regulation of transcription, DNA-templated	P
+TP53	GO:0003677	DNA binding	F
+TP53	GO:0005634	nucleus	C
+BRCA1	GO:0006281	DNA repair	P
+BRCA1	GO:0003677	DNA binding	F
+BRCA1	GO:0005634	nucleus	C
+APOE	GO:0006869	lipid transport	P
+APOE	GO:0005319	lipid transporter activity	F
+TCF7L2	GO:0006355	regulation of transcription, DNA-templated	P
