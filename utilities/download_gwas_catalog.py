@@ -75,24 +75,70 @@ def download_with_progress(url: str, output_path: Path) -> None:
         raise
 
 
+def extract_if_zip(file_path: Path) -> Path:
+    """Check if file is a ZIP and extract it. Returns path to TSV file."""
+    import zipfile
+
+    # Check if it's a ZIP file by reading the magic number
+    with open(file_path, 'rb') as f:
+        magic = f.read(4)
+
+    if magic.startswith(b'PK\x03\x04'):  # ZIP file signature
+        print(f"Detected ZIP file, extracting...")
+        with zipfile.ZipFile(file_path, 'r') as zip_ref:
+            # List contents
+            files = zip_ref.namelist()
+            print(f"ZIP contains {len(files)} file(s):")
+            for fname in files:
+                print(f"  - {fname}")
+
+            # Find the TSV file (should be the associations file)
+            tsv_files = [f for f in files if f.endswith('.tsv')]
+            if not tsv_files:
+                raise ValueError(f"No .tsv file found in ZIP archive. Contents: {files}")
+
+            tsv_file = tsv_files[0]
+            print(f"Extracting {tsv_file}...")
+
+            # Extract to same directory
+            extract_dir = file_path.parent
+            zip_ref.extract(tsv_file, extract_dir)
+
+            extracted_path = extract_dir / tsv_file
+            print(f"Extracted to {extracted_path}")
+
+            return extracted_path
+    else:
+        # Not a ZIP, return as-is
+        return file_path
+
+
 def parse_gwas_catalog(gwas_path: Path, output_path: Path, genome: str = 'GRCh37',
-                      min_pvalue: float = 5e-8) -> None:
+                      min_pvalue: float = 5e-8) -> Path:
     """
     Parse GWAS Catalog and extract gene-disease associations.
 
     Parameters
     ----------
     gwas_path : Path
-        Path to downloaded GWAS catalog TSV
+        Path to downloaded GWAS catalog TSV (or ZIP containing TSV)
     output_path : Path
         Path to output TSV file
     genome : str
         Reference genome version ('GRCh37' or 'GRCh38')
     min_pvalue : float
         Minimum p-value threshold (default: 5e-8, genome-wide significance)
+
+    Returns
+    -------
+    Path
+        Path to extracted TSV file (same as input if not a ZIP, different if extracted)
     """
     print("\nParsing GWAS Catalog...")
     print(f"Filtering for p-value < {min_pvalue}")
+
+    # Check if file is a ZIP and extract if needed
+    gwas_path = extract_if_zip(gwas_path)
 
     # Read GWAS catalog
     # The GWAS API endpoint returns a TSV file, but format may vary
@@ -288,6 +334,9 @@ def parse_gwas_catalog(gwas_path: Path, output_path: Path, genome: str = 'GRCh37
     for gene, count in top_genes.items():
         print(f"  {gene}: {count}")
 
+    # Return the extracted TSV path for cleanup
+    return gwas_path
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -364,10 +413,11 @@ Examples:
             print(f"   python utilities/download_gwas_catalog.py --gwas <downloaded_file> --output {output_path}")
             sys.exit(1)
 
+    extracted_tsv = None
     try:
-        # Parse GWAS catalog
-        parse_gwas_catalog(gwas_path, output_path, genome=args.genome,
-                          min_pvalue=args.min_pvalue)
+        # Parse GWAS catalog (may extract from ZIP)
+        extracted_tsv = parse_gwas_catalog(gwas_path, output_path, genome=args.genome,
+                                          min_pvalue=args.min_pvalue)
 
         print("\n" + "="*60)
         print("SUCCESS!")
@@ -379,10 +429,16 @@ Examples:
         print(f"    ...")
 
     finally:
-        # Clean up temp file if needed
-        if temp_gwas and gwas_path.exists() and not args.keep_raw:
-            print(f"\nCleaning up temporary file...")
-            gwas_path.unlink()
+        # Clean up temp files if needed
+        if not args.keep_raw:
+            if temp_gwas and gwas_path.exists():
+                print(f"\nCleaning up temporary ZIP file...")
+                gwas_path.unlink()
+
+            # Also clean up extracted TSV if it's different from the ZIP
+            if extracted_tsv and extracted_tsv != gwas_path and extracted_tsv.exists():
+                print(f"Cleaning up extracted TSV file...")
+                extracted_tsv.unlink()
 
 
 if __name__ == '__main__':
