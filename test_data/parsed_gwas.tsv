@@ -1,0 +1,4 @@
+gene	disease_trait	chr	pos	snp_id	p_value	risk_allele
+TCF7L2	Type 2 diabetes	1	100000	rs7903146	1e-12	rs7903146-A
+APOE	Alzheimer's disease	19	45411941	rs429358	5e-100	rs429358-C
+CDKN2A	Coronary artery disease	9	22125503	rs1333049	2e-15	rs1333049-C
