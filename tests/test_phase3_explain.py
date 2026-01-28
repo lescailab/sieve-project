@@ -271,3 +271,87 @@ class TestSHAPEpistasis:
 
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])
+
+
+def test_validate_epistasis_empty_file():
+    """Test validate_epistasis.py handles empty interaction files."""
+    import subprocess
+    import tempfile
+    import os
+    from pathlib import Path
+
+    # Create temporary empty interactions file
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as f:
+        f.write("")  # Empty file
+        empty_file = f.name
+
+    try:
+        # Set PYTHONPATH for subprocess
+        env = os.environ.copy()
+        project_root = Path(__file__).parent.parent
+        env['PYTHONPATH'] = str(project_root)
+
+        # Run validate_epistasis.py script
+        result = subprocess.run(
+            ['python', 'scripts/validate_epistasis.py',
+             '--interactions', empty_file,
+             '--checkpoint', 'test_data/small/test_model/L3_run/fold_0/best_model.pt',
+             '--config', 'test_data/small/test_model/L3_run/config.yaml',
+             '--preprocessed-data', 'test_data/small/preprocessed_test.pt',
+             '--output-dir', '/tmp/test_epistasis',
+             '--device', 'cpu'],
+            cwd=project_root,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        
+        # Should exit cleanly (not crash) with helpful error message
+        assert 'ERROR: Interactions file is empty' in result.stdout
+        assert 'No interactions were found' in result.stdout
+        
+    finally:
+        # Clean up
+        Path(empty_file).unlink(missing_ok=True)
+
+
+def test_validate_epistasis_no_data():
+    """Test validate_epistasis.py handles CSV with headers but no data."""
+    import subprocess
+    import tempfile
+    import os
+    from pathlib import Path
+
+    # Create CSV with headers but no data
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as f:
+        f.write("pos1,pos2,gene1,gene2,weight\n")  # Header only
+        header_only_file = f.name
+
+    try:
+        # Set PYTHONPATH for subprocess
+        env = os.environ.copy()
+        project_root = Path(__file__).parent.parent
+        env['PYTHONPATH'] = str(project_root)
+
+        result = subprocess.run(
+            ['python', 'scripts/validate_epistasis.py',
+             '--interactions', header_only_file,
+             '--checkpoint', 'test_data/small/test_model/L3_run/fold_0/best_model.pt',
+             '--config', 'test_data/small/test_model/L3_run/config.yaml',
+             '--preprocessed-data', 'test_data/small/preprocessed_test.pt',
+             '--output-dir', '/tmp/test_epistasis',
+             '--device', 'cpu'],
+            cwd=project_root,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        
+        # Should exit cleanly with helpful error message
+        assert 'ERROR: Interactions file has no rows' in result.stdout
+        assert 'No interactions available' in result.stdout
+        
+    finally:
+        Path(header_only_file).unlink(missing_ok=True)
