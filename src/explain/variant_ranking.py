@@ -38,8 +38,9 @@ class VariantRanker:
     ... )
     """
 
-    def __init__(self, aggregation: str = 'rank_average'):
+    def __init__(self, aggregation: str = 'rank_average', variant_info_map: Optional[Dict] = None):
         self.aggregation = aggregation
+        self.variant_info_map = variant_info_map or {}
         if aggregation not in ['mean', 'max', 'rank_average']:
             raise ValueError(f"Unknown aggregation: {aggregation}")
 
@@ -116,8 +117,15 @@ class VariantRanker:
         for (pos, gene), scores in variant_scores.items():
             attrs = np.array(scores['attributions'])
 
+            # Get chromosome and gene_name from variant_info_map
+            variant_info = self.variant_info_map.get((pos, gene), {})
+            chrom = variant_info.get('chromosome', 'unknown')
+            gene_name = variant_info.get('gene_name', f'GENE_{gene}')
+
             record = {
+                'chromosome': chrom,
                 'position': pos,
+                'gene_name': gene_name,
                 'gene_id': gene,
                 'mean_attribution': float(np.mean(attrs)),
                 'max_attribution': float(np.max(attrs)),
@@ -223,6 +231,25 @@ class VariantRanker:
         })
 
         gene_rankings = gene_agg.merge(top_variants, on='gene_id')
+
+        # Add gene_name and chromosome from variant_rankings
+        gene_names = []
+        chromosomes = []
+        for gene_id in gene_rankings['gene_id']:
+            # Get gene_name and chromosome from first variant with this gene_id
+            gene_variants = variant_rankings[variant_rankings['gene_id'] == gene_id]
+            if len(gene_variants) > 0 and 'gene_name' in gene_variants.columns:
+                gene_name = gene_variants.iloc[0]['gene_name']
+                chrom = gene_variants.iloc[0]['chromosome'] if 'chromosome' in gene_variants.columns else 'unknown'
+            else:
+                gene_name = f'GENE_{gene_id}'
+                chrom = 'unknown'
+            gene_names.append(gene_name)
+            chromosomes.append(chrom)
+
+        gene_rankings.insert(0, 'chromosome', chromosomes)
+        gene_rankings.insert(1, 'gene_name', gene_names)
+
         gene_rankings['gene_rank'] = rankdata(-gene_rankings['gene_score']).astype(int)
         gene_rankings = gene_rankings.sort_values('gene_rank').reset_index(drop=True)
 
