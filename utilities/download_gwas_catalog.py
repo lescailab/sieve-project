@@ -101,25 +101,63 @@ def parse_gwas_catalog(gwas_path: Path, output_path: Path, genome: str = 'GRCh37
 
     # Try to detect the actual format
     try:
-        # First, try as TSV
-        df = pd.read_csv(gwas_path, sep='\t', encoding='latin-1', low_memory=False, on_bad_lines='warn')
+        # First, try as TSV with C parser
+        df = pd.read_csv(
+            gwas_path,
+            sep='\t',
+            encoding='latin-1',
+            low_memory=False,
+            on_bad_lines='warn',
+            engine='c'
+        )
         print(f"Loaded {len(df):,} total associations")
-    except pd.errors.ParserError as e:
-        print(f"TSV parsing failed: {e}")
-        print("Trying alternative parsing methods...")
+    except (pd.errors.ParserError, pd.errors.EmptyDataError) as e:
+        print(f"C parser failed: {e}")
+        print("Trying Python parser (slower but more robust)...")
 
         try:
-            # Try auto-detection
-            df = pd.read_csv(gwas_path, encoding='latin-1', low_memory=False, sep=None, engine='python', on_bad_lines='warn')
-            print(f"Loaded {len(df):,} total associations with auto-detected delimiter")
+            # Try with Python parser (no low_memory option, more robust)
+            df = pd.read_csv(
+                gwas_path,
+                sep='\t',
+                encoding='latin-1',
+                engine='python',
+                on_bad_lines='warn',
+                error_bad_lines=False
+            )
+            print(f"Loaded {len(df):,} total associations with Python parser")
         except Exception as e2:
-            print(f"ERROR: Failed to read GWAS catalog with auto-detection: {e2}")
-            print(f"\nFile location: {gwas_path}")
-            print("Please check the file format manually:")
-            print(f"  head -20 {gwas_path}")
-            raise
+            print(f"Python parser also failed: {e2}")
+            print("Trying to read file in chunks...")
+
+            try:
+                # Last resort: read in chunks and concatenate
+                chunks = []
+                chunk_size = 10000
+                with pd.read_csv(
+                    gwas_path,
+                    sep='\t',
+                    encoding='latin-1',
+                    chunksize=chunk_size,
+                    on_bad_lines='skip',
+                    engine='python'
+                ) as reader:
+                    for i, chunk in enumerate(reader):
+                        chunks.append(chunk)
+                        if i % 10 == 0:
+                            print(f"  Read {len(chunks) * chunk_size:,} rows...")
+
+                df = pd.concat(chunks, ignore_index=True)
+                print(f"Successfully loaded {len(df):,} associations using chunked reading")
+            except Exception as e3:
+                print(f"ERROR: All parsing methods failed: {e3}")
+                print(f"\nFile location: {gwas_path}")
+                print("Please check the file format manually:")
+                print(f"  head -20 {gwas_path}")
+                print(f"  wc -l {gwas_path}")
+                raise
     except Exception as e:
-        print(f"ERROR: Failed to read GWAS catalog: {e}")
+        print(f"ERROR: Unexpected error reading GWAS catalog: {e}")
         print(f"\nFile location: {gwas_path}")
         raise
 
