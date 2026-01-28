@@ -158,18 +158,19 @@ def main():
     # Load data
     print("\nLoading data...")
     preprocessed = torch.load(args.preprocessed_data, weights_only=False)
+    all_samples = preprocessed['samples']
+    metadata = preprocessed.get('metadata', {})
+
+    print(f"Loaded {len(all_samples)} samples")
+    if metadata:
+        print(f"  Cases: {metadata.get('num_cases', 'unknown')}")
+        print(f"  Controls: {metadata.get('num_controls', 'unknown')}")
 
     # Get annotation level
     annotation_level = AnnotationLevel[config['level']]
 
-    # Create dataset
-    dataset = VariantDataset(
-        variant_data=preprocessed['variant_data'],
-        positions=preprocessed['positions'],
-        gene_ids=preprocessed['gene_ids'],
-        labels=preprocessed['labels'],
-        level=annotation_level
-    )
+    # Create dataset (same way as training)
+    dataset = VariantDataset(all_samples, annotation_level=annotation_level)
 
     dataloader = DataLoader(
         dataset,
@@ -178,9 +179,6 @@ def main():
         collate_fn=collate_samples
     )
 
-    print(f"Loaded {len(dataset)} samples")
-    print(f"  Cases: {sum(preprocessed['labels'])}")
-    print(f"  Controls: {len(preprocessed['labels']) - sum(preprocessed['labels'])}")
 
     # Create model (add input_dim if missing from config)
     print("\nCreating model...")
