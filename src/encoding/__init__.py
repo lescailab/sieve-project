@@ -43,6 +43,11 @@ from .sparse_tensor import (
     test_sparse_tensor,
 )
 
+from .chunked_dataset import (
+    ChunkedVariantDataset,
+    collate_chunks,
+)
+
 __all__ = [
     # Annotation levels
     'AnnotationLevel',
@@ -74,4 +79,8 @@ __all__ = [
     'collate_samples',
     'VariantDataset',
     'test_sparse_tensor',
+
+    # Chunked processing (whole-genome coverage)
+    'ChunkedVariantDataset',
+    'collate_chunks',
 ]
