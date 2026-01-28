@@ -47,7 +47,9 @@ def create_manhattan_plot(df, score_col='mean_attribution', top_n=10, figsize=(1
     chrom_map.update({'X': 23, 'Y': 24, 'MT': 25, 'M': 25})
 
     df = df.copy()
-    df['chrom_num'] = df['chromosome'].astype(str).map(chrom_map)
+    # Strip 'chr' prefix if present (e.g., 'chr1' -> '1')
+    df['chromosome'] = df['chromosome'].astype(str).str.replace('^chr', '', case=False, regex=True)
+    df['chrom_num'] = df['chromosome'].map(chrom_map)
 
     # Remove unmapped chromosomes
     df = df.dropna(subset=['chrom_num'])
@@ -133,7 +135,7 @@ def create_manhattan_plot(df, score_col='mean_attribution', top_n=10, figsize=(1
     # Adjust layout
     plt.tight_layout()
 
-    return fig
+    return fig, df
 
 
 def main():
@@ -156,7 +158,7 @@ def main():
 
     # Create plot
     print(f"Creating Manhattan plot...")
-    fig = create_manhattan_plot(
+    fig, df_filtered = create_manhattan_plot(
         df,
         score_col=args.score_column,
         top_n=args.top_n,
@@ -171,8 +173,8 @@ def main():
     print(f"Manhattan plot saved to {output_path}")
 
     print("\nPlot statistics:")
-    print(f"  Chromosomes: {df['chromosome'].nunique()}")
-    print(f"  Total variants plotted: {len(df)}")
+    print(f"  Chromosomes: {df_filtered['chrom_num'].nunique()}")
+    print(f"  Total variants plotted: {len(df_filtered)}")
     print(f"  Top {args.top_n} variants labeled")
 
 

@@ -152,8 +152,16 @@ def plot_gwas_validation(df, top_n=15, figsize=(10, 8)):
     study_counts = top_gwas['gwas_studies'] if 'gwas_studies' in top_gwas.columns else [0] * len(top_gwas)
 
     # Normalize study counts for color
-    norm = plt.Normalize(vmin=min(study_counts), vmax=max(study_counts))
-    colors_map = plt.cm.RdYlGn(norm(study_counts))
+    min_count = min(study_counts)
+    max_count = max(study_counts)
+
+    # Handle edge case where all counts are the same
+    if min_count == max_count:
+        # Use a single color for all bars
+        colors_map = ['steelblue'] * len(study_counts)
+    else:
+        norm = plt.Normalize(vmin=min_count, vmax=max_count)
+        colors_map = plt.cm.RdYlGn(norm(study_counts))
 
     bars = ax.barh(y_pos, scores, color=colors_map, alpha=0.8)
 
@@ -177,11 +185,12 @@ def plot_gwas_validation(df, top_n=15, figsize=(10, 8)):
     ax.grid(axis='x', alpha=0.3, linestyle='--')
     ax.set_axisbelow(True)
 
-    # Add colorbar
-    sm = plt.cm.ScalarMappable(cmap='RdYlGn', norm=norm)
-    sm.set_array([])
-    cbar = plt.colorbar(sm, ax=ax)
-    cbar.set_label('Number of GWAS Studies', fontsize=10)
+    # Add colorbar (only if there's variation in study counts)
+    if min_count != max_count:
+        sm = plt.cm.ScalarMappable(cmap='RdYlGn', norm=norm)
+        sm.set_array([])
+        cbar = plt.colorbar(sm, ax=ax)
+        cbar.set_label('Number of GWAS Studies', fontsize=10)
 
     plt.tight_layout()
     return fig
@@ -253,4 +262,4 @@ def main():
 
 
 if __name__ == '__main__':
-    exit(main() or 0)
+    main()
