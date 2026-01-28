@@ -230,12 +230,38 @@ def main():
     )
     print(f"Saved attributions to {attributions_path}")
 
+    # === BUILD VARIANT INFO MAP ===
+    # Map (position, gene_id) -> {chromosome, gene_name} for annotation
+    print("\nBuilding variant info map...")
+    from collections import defaultdict
+
+    # Build gene index (same as in encoding)
+    gene_symbols = sorted(set(v.gene for s in all_samples for v in s.variants))
+    gene_index = {gene: idx for idx, gene in enumerate(gene_symbols)}
+
+    variant_info_map = {}
+    for sample in all_samples:
+        for variant in sample.variants:
+            pos = variant.pos
+            gene_symbol = variant.gene
+            chrom = variant.chrom
+            gene_id = gene_index[gene_symbol]
+
+            key = (pos, gene_id)
+            if key not in variant_info_map:
+                variant_info_map[key] = {
+                    'chromosome': chrom,
+                    'gene_name': gene_symbol
+                }
+
+    print(f"Mapped {len(variant_info_map)} unique (position, gene_id) combinations")
+
     # === VARIANT RANKING ===
     print("\n" + "="*60)
     print("Ranking Variants")
     print("="*60)
 
-    ranker = VariantRanker(aggregation='rank_average')
+    ranker = VariantRanker(aggregation='rank_average', variant_info_map=variant_info_map)
 
     # Separate cases and controls
     case_indices = [i for i, m in enumerate(metadata) if m.get('label') == 1]
