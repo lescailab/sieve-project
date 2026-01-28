@@ -28,8 +28,14 @@ import yaml
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.data import build_sample_variants
-from src.encoding import AnnotationLevel, VariantDataset, get_feature_dimension
-from src.models import SIEVE
+from src.encoding import (
+    AnnotationLevel,
+    VariantDataset,
+    ChunkedVariantDataset,
+    collate_chunks,
+    get_feature_dimension
+)
+from src.models import SIEVE, ChunkedSIEVEModel
 from src.training import (
     SIEVELoss,
     Trainer,
@@ -72,8 +78,13 @@ def parse_args():
                         help='Gradient clipping value')
     parser.add_argument('--gradient-accumulation-steps', type=int, default=1,
                         help='Number of batches to accumulate gradients over (simulates larger batch)')
-    parser.add_argument('--max-variants-per-batch', type=int, default=3000,
-                        help='Maximum variants to process per batch (prevents OOM)')
+    parser.add_argument('--chunk-size', type=int, default=3000,
+                        help='Chunk size for processing variants (default: 3000, ensures whole-genome coverage)')
+    parser.add_argument('--chunk-overlap', type=int, default=0,
+                        help='Overlap between adjacent chunks (default: 0)')
+    parser.add_argument('--aggregation-method', type=str, default='mean',
+                        choices=['mean', 'max', 'attention', 'logit_mean'],
+                        help='How to aggregate chunk outputs into sample predictions')
 
     # Model arguments
     parser.add_argument('--latent-dim', type=int, default=64,
@@ -126,9 +137,16 @@ def create_model(
     num_heads: int,
     num_attention_layers: int,
     hidden_dim: int,
-) -> SIEVE:
-    """Create SIEVE model."""
-    model = SIEVE(
+    aggregation_method: str = 'mean',
+) -> ChunkedSIEVEModel:
+    """
+    Create Chunked SIEVE model for whole-genome processing.
+
+    This wraps the base SIEVE model to handle chunked variant processing,
+    ensuring all chromosomes are seen (not just chr1/chr2).
+    """
+    # Create base SIEVE model
+    base_model = SIEVE(
         input_dim=input_dim,
         latent_dim=latent_dim,
         num_genes=num_genes,
@@ -136,6 +154,14 @@ def create_model(
         num_heads=num_heads,
         hidden_dim=hidden_dim,
     )
+
+    # Wrap in chunked model for whole-genome coverage
+    model = ChunkedSIEVEModel(
+        base_model=base_model,
+        aggregation_method=aggregation_method,
+        embedding_dim=latent_dim if aggregation_method == 'attention' else None
+    )
+
     return model
 
 
@@ -250,16 +276,25 @@ def main():
         load_time = time.time() - start_time
         print(f"Loaded {len(all_samples)} samples in {load_time:.1f} seconds")
 
-    # Create dataset
+    # Create chunked dataset (ensures whole-genome coverage)
     annotation_level = AnnotationLevel[args.level]
-    print(f"\nCreating dataset with annotation level {args.level}...")
-    dataset = VariantDataset(all_samples, annotation_level=annotation_level)
+    print(f"\nCreating CHUNKED dataset with annotation level {args.level}...")
+    print(f"  Chunk size: {args.chunk_size}")
+    print(f"  Chunk overlap: {args.chunk_overlap}")
+    print(f"  Aggregation method: {args.aggregation_method}")
+    dataset = ChunkedVariantDataset(
+        samples=all_samples,
+        annotation_level=annotation_level,
+        chunk_size=args.chunk_size,
+        overlap=args.chunk_overlap
+    )
 
     # Get dimensions
     input_dim = get_feature_dimension(annotation_level)
     num_genes = dataset.num_genes
     print(f"Input dimension: {input_dim}")
     print(f"Number of genes: {num_genes}")
+    print(f"CRITICAL: Using chunked processing for FULL GENOME coverage (not just chr1/chr2)!")
 
     # Get labels
     labels = np.array([sample.label for sample in all_samples])
@@ -286,17 +321,30 @@ def main():
             val_labels = labels[val_idx]
             print_fold_stats(fold_idx, train_labels, val_labels)
 
-            # Create data loaders
-            train_loader, val_loader = get_train_val_loaders(
-                dataset=dataset,
-                train_indices=train_idx,
-                val_indices=val_idx,
+            # Create data loaders with chunked processing
+            from torch.utils.data import DataLoader, Subset
+            train_dataset = Subset(dataset, train_idx)
+            val_dataset = Subset(dataset, val_idx)
+
+            train_loader = DataLoader(
+                train_dataset,
                 batch_size=args.batch_size,
+                shuffle=True,
+                collate_fn=collate_chunks,
                 num_workers=args.num_workers,
-                max_variants_per_batch=args.max_variants_per_batch,
+                pin_memory=True if args.num_workers > 0 else False,
             )
 
-            # Create model
+            val_loader = DataLoader(
+                val_dataset,
+                batch_size=args.batch_size,
+                shuffle=False,
+                collate_fn=collate_chunks,
+                num_workers=args.num_workers,
+                pin_memory=True if args.num_workers > 0 else False,
+            )
+
+            # Create chunked model (for whole-genome processing)
             model = create_model(
                 input_dim=input_dim,
                 num_genes=num_genes,
@@ -304,6 +352,7 @@ def main():
                 num_heads=args.num_heads,
                 num_attention_layers=args.num_attention_layers,
                 hidden_dim=args.hidden_dim,
+                aggregation_method=args.aggregation_method,
             )
 
             # Create fold checkpoint directory
@@ -371,17 +420,30 @@ def main():
         val_labels = labels[val_idx]
         print_fold_stats(0, train_labels, val_labels)
 
-        # Create data loaders
-        train_loader, val_loader = get_train_val_loaders(
-            dataset=dataset,
-            train_indices=train_idx,
-            val_indices=val_idx,
+        # Create data loaders with chunked processing
+        from torch.utils.data import DataLoader, Subset
+        train_dataset = Subset(dataset, train_idx)
+        val_dataset = Subset(dataset, val_idx)
+
+        train_loader = DataLoader(
+            train_dataset,
             batch_size=args.batch_size,
+            shuffle=True,
+            collate_fn=collate_chunks,
             num_workers=args.num_workers,
-            max_variants_per_batch=args.max_variants_per_batch,
+            pin_memory=True if args.num_workers > 0 else False,
         )
 
-        # Create model
+        val_loader = DataLoader(
+            val_dataset,
+            batch_size=args.batch_size,
+            shuffle=False,
+            collate_fn=collate_chunks,
+            num_workers=args.num_workers,
+            pin_memory=True if args.num_workers > 0 else False,
+        )
+
+        # Create chunked model (for whole-genome processing)
         model = create_model(
             input_dim=input_dim,
             num_genes=num_genes,
@@ -389,6 +451,7 @@ def main():
             num_heads=args.num_heads,
             num_attention_layers=args.num_attention_layers,
             hidden_dim=args.hidden_dim,
+            aggregation_method=args.aggregation_method,
         )
 
         # Train

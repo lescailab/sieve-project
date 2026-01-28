@@ -37,8 +37,16 @@ import torch
 from torch.utils.data import DataLoader
 import numpy as np
 
-from src.encoding import VariantDataset, collate_samples, get_feature_dimension, AnnotationLevel
+from src.encoding import (
+    VariantDataset,
+    ChunkedVariantDataset,
+    collate_samples,
+    collate_chunks,
+    get_feature_dimension,
+    AnnotationLevel
+)
 from src.models.sieve import create_sieve_model
+from src.models import ChunkedSIEVEModel
 from src.explain.gradients import IntegratedGradientsExplainer
 from src.explain.attention_analysis import AttentionAnalyzer
 from src.explain.variant_ranking import VariantRanker
@@ -171,64 +179,167 @@ def main():
     # Get annotation level
     annotation_level = AnnotationLevel[config['level']]
 
-    # Create dataset (same way as training)
-    dataset = VariantDataset(all_samples, annotation_level=annotation_level)
+    # Create CHUNKED dataset for whole-genome coverage
+    print("\nCreating CHUNKED dataset for FULL GENOME explainability...")
+    chunk_size = min(args.max_variants, 2000)  # Smaller chunks for IG (memory-intensive)
+    print(f"  Chunk size: {chunk_size}")
+    print(f"  This ensures ALL chromosomes are analyzed, not just chr1/chr2!")
 
-    dataloader = DataLoader(
-        dataset,
-        batch_size=args.batch_size,
-        shuffle=False,
-        collate_fn=collate_samples
+    dataset = ChunkedVariantDataset(
+        samples=all_samples,
+        annotation_level=annotation_level,
+        chunk_size=chunk_size,
+        overlap=0
     )
-
 
     # Create model (add input_dim if missing from config)
     print("\nCreating model...")
     if 'input_dim' not in config:
         config['input_dim'] = get_feature_dimension(annotation_level)
 
-    model = create_sieve_model(config, num_genes=dataset.num_genes)
-    model.load_state_dict(checkpoint['model_state_dict'])
+    # Load base model
+    base_model = create_sieve_model(config, num_genes=dataset.num_genes)
+
+    # Check if checkpoint has chunked model or base model
+    state_dict = checkpoint['model_state_dict']
+
+    # Try to detect if this is a chunked model checkpoint
+    if any(k.startswith('base_model.') for k in state_dict.keys()):
+        # Checkpoint is from chunked model - need to wrap base model
+        model = ChunkedSIEVEModel(
+            base_model=base_model,
+            aggregation_method=config.get('aggregation_method', 'mean')
+        )
+        model.load_state_dict(state_dict)
+    else:
+        # Checkpoint is from base model only - just use base model for IG
+        # (IG works on individual chunks, doesn't need aggregation)
+        model = base_model
+        model.load_state_dict(state_dict)
+
     model = model.to(args.device)
     model.eval()
 
     print(f"Model loaded successfully")
     print(f"  Parameters: {sum(p.numel() for p in model.parameters()):,}")
 
-    # === INTEGRATED GRADIENTS ===
+    # For IG, we need the base model (not wrapped)
+    if isinstance(model, ChunkedSIEVEModel):
+        ig_model = model.base_model
+        print("  Using base model for Integrated Gradients (chunk-level attributions)")
+    else:
+        ig_model = model
+        print("  Using model directly for Integrated Gradients")
+
+    # === INTEGRATED GRADIENTS (CHUNKED) ===
     print("\n" + "="*60)
-    print("Computing Integrated Gradients Attributions")
+    print("Computing Integrated Gradients Attributions (CHUNKED)")
     print("="*60)
 
     explainer = IntegratedGradientsExplainer(
-        model=model,
+        model=ig_model,
         device=args.device,
         n_steps=args.n_steps,
-        max_variants=args.max_variants
+        max_variants=chunk_size  # Process full chunks (no truncation within chunks)
     )
 
     print(f"IG Configuration:")
     print(f"  Integration steps: {args.n_steps}")
-    print(f"  Max variants per sample: {args.max_variants}")
-    print(f"  Note: Samples with >{args.max_variants} variants will be randomly sampled")
+    print(f"  Chunk size: {chunk_size}")
+    print(f"  Processing ALL chunks per sample for FULL GENOME coverage")
 
-    print(f"Computing attributions with {args.n_steps} integration steps...")
-    attributions, variant_scores, metadata = explainer.attribute_batch(
-        dataloader=dataloader,
-        aggregate='l2'
-    )
+    # Process each sample's chunks and combine attributions
+    all_attributions = []
+    all_variant_scores = []
+    all_metadata = []
 
-    print(f"Computed attributions for {len(attributions)} samples")
+    num_samples = len(all_samples)
+    print(f"\nProcessing {num_samples} samples (chunk-by-chunk)...")
+
+    for sample_idx in range(num_samples):
+        if (sample_idx + 1) % 10 == 0 or (sample_idx + 1) == num_samples:
+            print(f"  Sample {sample_idx + 1}/{num_samples}...")
+
+        # Get all chunks for this sample
+        chunk_indices = dataset.get_chunks_for_sample(sample_idx)
+
+        # Process each chunk
+        chunk_attributions = []
+        chunk_positions = []
+        chunk_gene_ids = []
+
+        for chunk_idx in chunk_indices:
+            chunk = dataset[chunk_idx]
+
+            # Move to device
+            features = chunk['features'].unsqueeze(0).to(args.device)
+            positions = chunk['positions'].unsqueeze(0).to(args.device)
+            gene_ids = chunk['gene_ids'].unsqueeze(0).to(args.device)
+            mask = chunk['mask'].unsqueeze(0).to(args.device)
+
+            # Compute attributions for this chunk
+            attr = explainer.attribute(features, positions, gene_ids, mask)
+
+            # Extract valid variants (non-padded)
+            valid_mask = mask[0].cpu().numpy()
+            attr_valid = attr[0][valid_mask]
+
+            chunk_attributions.append(attr_valid)
+            chunk_positions.append(positions[0][valid_mask].cpu().numpy())
+            chunk_gene_ids.append(gene_ids[0][valid_mask].cpu().numpy())
+
+        # Combine all chunks for this sample
+        sample_attributions = np.concatenate(chunk_attributions, axis=0)
+        sample_positions = np.concatenate(chunk_positions, axis=0)
+        sample_gene_ids = np.concatenate(chunk_gene_ids, axis=0)
+
+        # Aggregate to variant scores (L2 norm across features)
+        if sample_attributions.ndim > 1:
+            sample_variant_scores = np.linalg.norm(sample_attributions, ord=2, axis=1)
+        else:
+            sample_variant_scores = np.abs(sample_attributions)
+
+        # Store for this sample
+        all_attributions.append(sample_attributions)
+        all_variant_scores.append(sample_variant_scores)
+        all_metadata.append({
+            'positions': sample_positions,
+            'gene_ids': sample_gene_ids,
+            'sample_idx': sample_idx,
+            'sample_id': all_samples[sample_idx].sample_id,
+            'label': all_samples[sample_idx].label
+        })
+
+    attributions = all_attributions
+    variant_scores = all_variant_scores
+    metadata = all_metadata
+
+    print(f"\nComputed attributions for {len(attributions)} samples")
+    print(f"CRITICAL: All chunks processed - FULL GENOME coverage achieved!")
 
     # Diagnostic: Check what variants are in the metadata
     print(f"\nDiagnostic: Checking metadata variant distribution...")
     metadata_variant_count = sum(len(m['positions']) for m in metadata)
-    print(f"  Total variants in metadata across all samples: {metadata_variant_count}")
+    print(f"  Total variants in metadata across all samples: {metadata_variant_count:,}")
+
+    # Check chromosome distribution in metadata
+    from collections import Counter
+    all_chroms = []
+    for sample in all_samples:
+        for variant in sample.variants:
+            all_chroms.append(variant.chrom)
+
+    chrom_dist = Counter(all_chroms)
+    print(f"  Chromosomes in original data: {len(chrom_dist)}")
+    for chrom in sorted(chrom_dist.keys(), key=lambda x: (not x.isdigit(), int(x) if x.isdigit() else 999, x))[:10]:
+        print(f"    Chr {chrom}: {chrom_dist[chrom]:,} variants")
+    if len(chrom_dist) > 10:
+        print(f"    ... and {len(chrom_dist) - 10} more chromosomes")
 
     # Check a sample of positions and genes from metadata
     if len(metadata) > 0 and len(metadata[0]['positions']) > 0:
         sample_meta = metadata[0]
-        print(f"  First sample has {len(sample_meta['positions'])} variants")
+        print(f"\n  First sample has {len(sample_meta['positions']):,} variants in attributions")
         print(f"  First 5 positions: {sample_meta['positions'][:5].tolist()}")
         print(f"  First 5 gene_ids: {sample_meta['gene_ids'][:5].tolist()}")
 
