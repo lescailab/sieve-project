@@ -127,6 +127,11 @@ class IntegratedGradientsExplainer:
         """
         Compute attributions for a full dataset.
 
+        IMPORTANT: Processes samples one at a time to avoid OOM errors.
+        Integrated gradients requires storing all intermediate activations
+        for gradient computation. With attention mechanisms over thousands
+        of variants, batch processing exceeds GPU memory.
+
         Parameters
         ----------
         dataloader : DataLoader
@@ -153,41 +158,60 @@ class IntegratedGradientsExplainer:
 
         self.model.eval()
         # NOTE: Do NOT use torch.no_grad() - we need gradients for integrated gradients!
-        for batch in dataloader:
+
+        # Calculate total samples for progress tracking
+        total_samples = len(dataloader.dataset)
+        print(f"Processing {total_samples} samples individually (required for memory efficiency)...")
+
+        for batch_idx, batch in enumerate(dataloader):
             # Extract batch data
             features = batch['features']
             positions = batch['positions']
             gene_ids = batch['gene_ids']
             mask = batch['mask']
+            batch_size = features.shape[0]
 
-            # Compute attributions
-            attributions = self.attribute(
-                features, positions, gene_ids, mask
-            )
+            # CRITICAL: Process each sample individually to avoid OOM
+            # Integrated gradients requires storing all intermediate activations,
+            # which for attention mechanisms with many variants becomes huge
+            for i in range(batch_size):
+                # Progress update
+                sample_num = len(all_metadata) + 1
+                if sample_num % 10 == 0 or sample_num == total_samples:
+                    print(f"  Processed {sample_num}/{total_samples} samples...", flush=True)
 
-            # Convert to numpy
-            attributions_np = attributions.cpu().numpy()
-            mask_np = mask.cpu().numpy()
+                # Extract single sample (keep batch dimension)
+                sample_features = features[i:i+1]
+                sample_positions = positions[i:i+1]
+                sample_gene_ids = gene_ids[i:i+1]
+                sample_mask = mask[i:i+1]
 
-            # Aggregate feature attributions to variant scores
-            if aggregate == 'l2':
-                variant_scores = np.linalg.norm(attributions_np, ord=2, axis=2)
-            elif aggregate == 'l1':
-                variant_scores = np.linalg.norm(attributions_np, ord=1, axis=2)
-            elif aggregate == 'sum':
-                variant_scores = np.sum(attributions_np, axis=2)
-            elif aggregate == 'mean':
-                variant_scores = np.mean(attributions_np, axis=2)
-            else:
-                raise ValueError(f"Unknown aggregation method: {aggregate}")
+                # Compute attributions for this single sample
+                sample_attributions = self.attribute(
+                    sample_features, sample_positions, sample_gene_ids, sample_mask
+                )
 
-            # Store per-sample results
-            for i in range(features.shape[0]):
+                # Convert to numpy
+                attributions_np = sample_attributions[0].cpu().numpy()
+                mask_np = sample_mask[0].cpu().numpy()
+
+                # Aggregate feature attributions to variant scores
+                if aggregate == 'l2':
+                    variant_scores = np.linalg.norm(attributions_np, ord=2, axis=1)
+                elif aggregate == 'l1':
+                    variant_scores = np.linalg.norm(attributions_np, ord=1, axis=1)
+                elif aggregate == 'sum':
+                    variant_scores = np.sum(attributions_np, axis=1)
+                elif aggregate == 'mean':
+                    variant_scores = np.mean(attributions_np, axis=1)
+                else:
+                    raise ValueError(f"Unknown aggregation method: {aggregate}")
+
                 # Get valid variants only
-                valid_mask = mask_np[i]
+                valid_mask = mask_np
 
-                all_attributions.append(attributions_np[i][valid_mask])
-                all_variant_scores.append(variant_scores[i][valid_mask])
+                all_attributions.append(attributions_np[valid_mask])
+                all_variant_scores.append(variant_scores[valid_mask])
 
                 # Store metadata
                 metadata = {
@@ -202,6 +226,10 @@ class IntegratedGradientsExplainer:
                     metadata['label'] = batch['labels'][i].cpu().item()
 
                 all_metadata.append(metadata)
+
+                # Clear GPU cache after each sample
+                if self.device == 'cuda':
+                    torch.cuda.empty_cache()
 
         return all_attributions, all_variant_scores, all_metadata
 
