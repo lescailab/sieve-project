@@ -96,6 +96,24 @@ Given network restrictions, testing focused on:
 
 ## Recommended User Testing
 
+### Genome Version Verification
+
+**CRITICAL FIRST STEP**: Verify you're using the correct genome build for your VCF data.
+
+```bash
+# Check your VCF reference genome
+zgrep "^##reference" your_data.vcf.gz
+
+# Check chromosome naming convention
+zgrep -v "^#" your_data.vcf.gz | head -1 | cut -f1
+```
+
+**Then download databases with matching genome build**:
+- If GRCh37/hg19 → use `--genome GRCh37`
+- If GRCh38/hg38 → use `--genome GRCh38`
+
+### Testing Workflow
+
 When using these utilities for the first time, users should:
 
 1. **Test with small datasets first**:
