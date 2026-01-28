@@ -95,14 +95,37 @@ def parse_gwas_catalog(gwas_path: Path, output_path: Path, genome: str = 'GRCh37
     print(f"Filtering for p-value < {min_pvalue}")
 
     # Read GWAS catalog
-    # The file is tab-separated
+    # The GWAS API endpoint returns a TSV file, but format may vary
     # IMPORTANT: GWAS Catalog uses latin-1 encoding, NOT UTF-8
+    print("Attempting to read GWAS catalog file...")
+
+    # Try to detect the actual format
     try:
-        df = pd.read_csv(gwas_path, sep='\t', encoding='latin-1', low_memory=False)
+        # First, try as TSV
+        df = pd.read_csv(gwas_path, sep='\t', encoding='latin-1', low_memory=False, on_bad_lines='warn')
         print(f"Loaded {len(df):,} total associations")
+    except pd.errors.ParserError as e:
+        print(f"TSV parsing failed: {e}")
+        print("Trying alternative parsing methods...")
+
+        try:
+            # Try auto-detection
+            df = pd.read_csv(gwas_path, encoding='latin-1', low_memory=False, sep=None, engine='python', on_bad_lines='warn')
+            print(f"Loaded {len(df):,} total associations with auto-detected delimiter")
+        except Exception as e2:
+            print(f"ERROR: Failed to read GWAS catalog with auto-detection: {e2}")
+            print(f"\nFile location: {gwas_path}")
+            print("Please check the file format manually:")
+            print(f"  head -20 {gwas_path}")
+            raise
     except Exception as e:
         print(f"ERROR: Failed to read GWAS catalog: {e}")
+        print(f"\nFile location: {gwas_path}")
         raise
+
+    # Debug: Print column information
+    print(f"\nFile has {len(df.columns)} columns")
+    print(f"Columns: {list(df.columns)[:10]}...")  # Show first 10
 
     # Select relevant columns based on what's available
     # GWAS Catalog columns (may vary by version):
