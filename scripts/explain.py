@@ -220,6 +220,18 @@ def main():
 
     print(f"Computed attributions for {len(attributions)} samples")
 
+    # Diagnostic: Check what variants are in the metadata
+    print(f"\nDiagnostic: Checking metadata variant distribution...")
+    metadata_variant_count = sum(len(m['positions']) for m in metadata)
+    print(f"  Total variants in metadata across all samples: {metadata_variant_count}")
+
+    # Check a sample of positions and genes from metadata
+    if len(metadata) > 0 and len(metadata[0]['positions']) > 0:
+        sample_meta = metadata[0]
+        print(f"  First sample has {len(sample_meta['positions'])} variants")
+        print(f"  First 5 positions: {sample_meta['positions'][:5].tolist()}")
+        print(f"  First 5 gene_ids: {sample_meta['gene_ids'][:5].tolist()}")
+
     # Save raw attributions
     attributions_path = output_dir / 'attributions.npz'
     np.savez(
@@ -232,11 +244,11 @@ def main():
 
     # === BUILD VARIANT INFO MAP ===
     # Map (position, gene_id) -> {chromosome, gene_name} for annotation
+    # CRITICAL: Use the same gene_index as the dataset to ensure consistency
     print("\nBuilding variant info map...")
 
-    # Build gene index (same as in encoding)
-    gene_symbols = sorted(set(v.gene for s in all_samples for v in s.variants))
-    gene_index = {gene: idx for idx, gene in enumerate(gene_symbols)}
+    # Use the dataset's gene_index (not a new one!)
+    gene_index = dataset.gene_index
 
     variant_info_map = {}
     for sample in all_samples:
@@ -244,6 +256,12 @@ def main():
             pos = variant.pos
             gene_symbol = variant.gene
             chrom = variant.chrom
+
+            # Skip genes not in dataset's gene_index (shouldn't happen but be safe)
+            if gene_symbol not in gene_index:
+                print(f"WARNING: Gene {gene_symbol} not in dataset gene_index!")
+                continue
+
             gene_id = gene_index[gene_symbol]
 
             key = (pos, gene_id)
@@ -254,6 +272,18 @@ def main():
                 }
 
     print(f"Mapped {len(variant_info_map)} unique (position, gene_id) combinations")
+
+    # Diagnostic: Check chromosome distribution in variant_info_map
+    chrom_counts = {}
+    for info in variant_info_map.values():
+        chrom = info['chromosome']
+        chrom_counts[chrom] = chrom_counts.get(chrom, 0) + 1
+
+    print(f"Variant info map chromosome distribution:")
+    for chrom in sorted(chrom_counts.keys(), key=lambda x: (x.isdigit() and int(x) or 999, x))[:10]:
+        print(f"  Chr {chrom}: {chrom_counts[chrom]} unique variants")
+    if len(chrom_counts) > 10:
+        print(f"  ... and {len(chrom_counts) - 10} more chromosomes")
 
     # === VARIANT RANKING ===
     print("\n" + "="*60)
@@ -277,6 +307,21 @@ def main():
     )
 
     print(f"Ranked {len(variant_rankings)} unique variants")
+
+    # Diagnostic: Check chromosome distribution in variant rankings
+    if 'chromosome' in variant_rankings.columns:
+        ranking_chrom_counts = variant_rankings['chromosome'].value_counts()
+        print(f"\nDiagnostic: Variant rankings chromosome distribution:")
+        print(f"  Unique chromosomes: {len(ranking_chrom_counts)}")
+        for chrom in sorted(ranking_chrom_counts.index, key=lambda x: (not x.isdigit(), int(x) if x.isdigit() else 999, x))[:10]:
+            print(f"  Chr {chrom}: {ranking_chrom_counts[chrom]} variants")
+        if len(ranking_chrom_counts) > 10:
+            print(f"  ... and {len(ranking_chrom_counts) - 10} more chromosomes")
+
+        if len(ranking_chrom_counts) == 1:
+            print(f"  ❌ CRITICAL: Only 1 chromosome in rankings! This is the bug we're looking for.")
+    else:
+        print("  ⚠️ WARNING: No chromosome column in variant rankings!")
 
     # Rank genes
     gene_rankings = ranker.rank_genes(
