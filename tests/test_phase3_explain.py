@@ -1,0 +1,273 @@
+"""
+Unit tests for Phase 3 explainability components.
+"""
+import pytest
+import torch
+import numpy as np
+from pathlib import Path
+
+from src.encoding import VariantDataset, collate_samples, AnnotationLevel
+from src.models.sieve import create_sieve_model
+from src.explain.gradients import IntegratedGradientsExplainer
+from src.explain.attention_analysis import AttentionAnalyzer
+from src.explain.variant_ranking import VariantRanker
+from src.explain.shap_epistasis import SHAPEpistasisDetector
+
+
+@pytest.fixture
+def test_data_dir():
+    """Path to test data directory."""
+    return Path(__file__).parent.parent / "test_data" / "small"
+
+
+@pytest.fixture
+def preprocessed_data(test_data_dir):
+    """Load preprocessed test data."""
+    data_path = test_data_dir / "preprocessed_test.pt"
+    if not data_path.exists():
+        pytest.skip(f"Test data not found: {data_path}")
+    return torch.load(data_path, weights_only=False)
+
+
+@pytest.fixture
+def test_checkpoint(test_data_dir):
+    """Load test model checkpoint."""
+    checkpoint_path = test_data_dir / "test_model" / "L3_run" / "fold_0" / "best_model.pt"
+    if not checkpoint_path.exists():
+        pytest.skip(f"Test checkpoint not found: {checkpoint_path}")
+    return torch.load(checkpoint_path, weights_only=False, map_location='cpu')
+
+
+@pytest.fixture
+def test_dataset(preprocessed_data):
+    """Create test dataset."""
+    samples = preprocessed_data['samples']
+    return VariantDataset(samples, annotation_level=AnnotationLevel.L3)
+
+
+@pytest.fixture
+def test_model(test_checkpoint, test_dataset):
+    """Create and load test model."""
+    config = {
+        'input_dim': 71,
+        'latent_dim': 64,
+        'hidden_dim': 32,
+        'num_heads': 2,
+        'num_attention_layers': 1,
+        'dropout': 0.1,
+    }
+    model = create_sieve_model(config, num_genes=test_dataset.num_genes)
+    model.load_state_dict(test_checkpoint['model_state_dict'])
+    model.eval()
+    return model
+
+
+class TestIntegratedGradients:
+    """Test integrated gradients explainer."""
+
+    def test_initialization(self, test_model):
+        """Test explainer initialization."""
+        explainer = IntegratedGradientsExplainer(test_model, device='cpu', n_steps=5)
+        assert explainer.model is test_model
+        assert explainer.device == 'cpu'
+        assert explainer.n_steps == 5
+
+    def test_attribute_single_sample(self, test_model, test_dataset):
+        """Test attribution for a single sample."""
+        explainer = IntegratedGradientsExplainer(test_model, device='cpu', n_steps=5)
+
+        # Get a sample
+        sample = test_dataset[0]
+        features = sample['features'].unsqueeze(0)
+        positions = sample['positions'].unsqueeze(0)
+        gene_ids = sample['gene_ids'].unsqueeze(0)
+        mask = sample['mask'].unsqueeze(0)
+
+        # Compute attributions
+        attributions = explainer.attribute(features, positions, gene_ids, mask)
+
+        # Check output shape
+        assert attributions.shape == features.shape
+        assert not torch.isnan(attributions).any()
+
+    def test_attribute_batch(self, test_model, test_dataset):
+        """Test batch attribution."""
+        from torch.utils.data import DataLoader
+
+        explainer = IntegratedGradientsExplainer(test_model, device='cpu', n_steps=5)
+        dataloader = DataLoader(
+            test_dataset,
+            batch_size=4,
+            collate_fn=collate_samples,
+            shuffle=False
+        )
+
+        all_attrs, all_scores, all_meta = explainer.attribute_batch(
+            dataloader, aggregate='l2'
+        )
+
+        # Check we got results for all samples
+        assert len(all_attrs) == len(test_dataset)
+        assert len(all_scores) == len(test_dataset)
+        assert len(all_meta) == len(test_dataset)
+
+        # Check shapes and values
+        for attrs, scores in zip(all_attrs, all_scores):
+            assert attrs.ndim == 2  # (n_variants, n_features)
+            assert scores.ndim == 1  # (n_variants,)
+            assert len(attrs) == len(scores)
+            assert not np.isnan(attrs).any()
+            assert not np.isnan(scores).any()
+
+
+class TestAttentionAnalysis:
+    """Test attention pattern analysis."""
+
+    def test_initialization(self, test_model):
+        """Test analyzer initialization."""
+        analyzer = AttentionAnalyzer(test_model, device='cpu')
+        assert analyzer.model is not None
+
+    def test_extract_attention(self, test_model, test_dataset):
+        """Test attention extraction."""
+        analyzer = AttentionAnalyzer(test_model, device='cpu')
+
+        # Get a sample
+        sample = test_dataset[0]
+        features = sample['features'].unsqueeze(0)
+        positions = sample['positions'].unsqueeze(0)
+        gene_ids = sample['gene_ids'].unsqueeze(0)
+        mask = sample['mask'].unsqueeze(0)
+
+        # Extract attention weights
+        attention_weights = analyzer.extract_attention_weights(
+            features, positions, gene_ids, mask
+        )
+
+        # Should return a list of attention weight tensors
+        assert isinstance(attention_weights, list)
+        if len(attention_weights) > 0:
+            # Each element should be a tensor
+            assert isinstance(attention_weights[0], torch.Tensor)
+            # Find interactions
+            interactions = analyzer.find_top_interactions(
+                attention_weights, positions, gene_ids, mask, top_k=10
+            )
+            assert isinstance(interactions, list)
+
+
+class TestVariantRanking:
+    """Test variant ranking."""
+
+    def test_rank_variants(self):
+        """Test variant ranking."""
+        ranker = VariantRanker()
+
+        # Create dummy attribution data
+        all_scores = [
+            np.array([0.5, 0.3, 0.8]),
+            np.array([0.2, 0.9]),
+        ]
+        all_meta = [
+            {
+                'positions': np.array([100, 200, 300]),
+                'gene_ids': np.array([0, 1, 0]),
+                'label': 1
+            },
+            {
+                'positions': np.array([100, 400]),
+                'gene_ids': np.array([0, 2]),
+                'label': 0
+            }
+        ]
+
+        rankings = ranker.rank_variants(all_scores, all_meta)
+
+        # Check output structure (check only fields that are actually returned)
+        assert 'position' in rankings.columns
+        assert 'gene_id' in rankings.columns
+        assert 'mean_attribution' in rankings.columns
+        assert 'num_samples' in rankings.columns
+
+        # Check we got all unique positions
+        unique_positions = set()
+        for meta in all_meta:
+            unique_positions.update(meta['positions'])
+        assert len(rankings) == len(unique_positions)
+
+    def test_rank_genes(self):
+        """Test gene ranking."""
+        ranker = VariantRanker()
+
+        # Create dummy variant rankings
+        import pandas as pd
+        variant_rankings = pd.DataFrame({
+            'position': [100, 200, 300, 400],
+            'gene_id': [0, 1, 0, 2],
+            'mean_attribution': [0.5, 0.3, 0.8, 0.2],
+            'num_samples': [2, 1, 1, 1]
+        })
+
+        gene_rankings = ranker.rank_genes(variant_rankings)
+
+        # Check output structure
+        assert 'gene_id' in gene_rankings.columns
+        assert 'num_variants' in gene_rankings.columns
+        assert 'gene_score' in gene_rankings.columns
+        assert 'top_variant_pos' in gene_rankings.columns
+
+        # Check gene with 2 variants has higher count
+        gene0 = gene_rankings[gene_rankings['gene_id'] == 0].iloc[0]
+        assert gene0['num_variants'] == 2
+
+
+class TestSHAPEpistasis:
+    """Test SHAP epistasis detection."""
+
+    def test_initialization(self, test_model):
+        """Test detector initialization."""
+        detector = SHAPEpistasisDetector(test_model, device='cpu')
+        assert detector.model is test_model
+        assert detector.device == 'cpu'
+
+    def test_validate_interaction(self, test_model, test_dataset):
+        """Test counterfactual perturbation."""
+        detector = SHAPEpistasisDetector(test_model, device='cpu')
+
+        # Get a sample with multiple variants
+        sample = test_dataset[0]
+        features = sample['features'].unsqueeze(0)
+        positions = sample['positions'].unsqueeze(0)
+        gene_ids = sample['gene_ids'].unsqueeze(0)
+        mask = sample['mask'].unsqueeze(0)
+
+        # Find two variants to test
+        variant_indices = torch.where(mask[0])[0]
+        if len(variant_indices) < 2:
+            pytest.skip("Sample needs at least 2 variants")
+
+        v1_idx = variant_indices[0].item()
+        v2_idx = variant_indices[1].item()
+
+        # Validate interaction
+        result = detector.validate_interaction_with_perturbation(
+            features, positions, gene_ids, mask, v1_idx, v2_idx
+        )
+
+        # Check result structure (use actual keys returned)
+        assert 'pred_both' in result
+        assert 'pred_variant1_only' in result
+        assert 'pred_variant2_only' in result
+        assert 'pred_neither' in result
+        assert 'effect_variant1' in result
+        assert 'effect_variant2' in result
+        assert 'effect_combined' in result
+        assert 'synergy' in result
+        assert 'interaction_type' in result
+
+        # Check interaction type is valid
+        assert result['interaction_type'] in ['synergistic', 'antagonistic', 'independent']
+
+
+if __name__ == '__main__':
+    pytest.main([__file__, '-v'])
