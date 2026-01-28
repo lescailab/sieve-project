@@ -1,0 +1,24 @@
+data_loading_time_seconds: 0.033104896545410156
+fold_results:
+- accuracy: 0.5
+  attribution_loss: 0.0
+  auc: 0.64
+  best_epoch: 1.0
+  classification_loss: 3.2221967776616416
+  epochs_trained: 2.0
+  loss: 3.2221967776616416
+  time_per_epoch_seconds: 1.403004765510559
+  training_time_seconds: 2.806009531021118
+- accuracy: 0.5
+  attribution_loss: 0.0
+  auc: 0.4
+  best_epoch: 1.0
+  classification_loss: 3.5186172081157565
+  epochs_trained: 2.0
+  loss: 3.5186172081157565
+  time_per_epoch_seconds: 0.45074474811553955
+  training_time_seconds: 0.9014894962310791
+mean_accuracy: 0.5
+mean_auc: 0.52
+std_accuracy: 0.0
+std_auc: 0.12
