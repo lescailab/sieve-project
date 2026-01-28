@@ -11,17 +11,47 @@ Phase 3C biological validation requires three external databases:
 
 These scripts automatically download, parse, and format the data for use with SIEVE.
 
+## ⚠️ IMPORTANT: Genome Version Selection
+
+**All scripts support genome version selection to match your VCF data.**
+
+- **ClinVar**: `--genome {GRCh37, GRCh38}` (default: GRCh37)
+- **GWAS Catalog**: `--genome {GRCh37, GRCh38}` (default: GRCh37)
+- **Gene Ontology**: `--species {human, mouse}` (default: human)
+
+**You must use the same genome build across all databases and match your VCF reference genome.**
+
+### For GRCh37/hg19 Data (default)
+```bash
+python utilities/download_clinvar.py --genome GRCh37 --output data/clinvar_grch37.tsv
+python utilities/download_gwas_catalog.py --genome GRCh37 --output data/gwas_grch37.tsv
+python utilities/download_gene_ontology.py --species human --output data/gene_to_go.json
+```
+
+### For GRCh38/hg38 Data
+```bash
+python utilities/download_clinvar.py --genome GRCh38 --output data/clinvar_grch38.tsv
+python utilities/download_gwas_catalog.py --genome GRCh38 --output data/gwas_grch38.tsv
+python utilities/download_gene_ontology.py --species human --output data/gene_to_go.json
+```
+
+**Note**: Gene Ontology annotations are genome-agnostic (gene symbols → GO terms), so the same GO file works for both genome builds.
+
+---
+
 ## Quick Start
+
+**For GRCh37 data** (most common for research cohorts):
 
 ```bash
 # 1. Download ClinVar (GRCh37)
-python utilities/download_clinvar.py --output data/clinvar_grch37.tsv
+python utilities/download_clinvar.py --genome GRCh37 --output data/clinvar_grch37.tsv
 
-# 2. Download GWAS Catalog
-python utilities/download_gwas_catalog.py --output data/gwas_catalog.tsv
+# 2. Download GWAS Catalog (GRCh37)
+python utilities/download_gwas_catalog.py --genome GRCh37 --output data/gwas_grch37.tsv
 
-# 3. Download Gene Ontology annotations
-python utilities/download_gene_ontology.py --output data/gene_to_go.json
+# 3. Download Gene Ontology annotations (genome-agnostic)
+python utilities/download_gene_ontology.py --species human --output data/gene_to_go.json
 ```
 
 Then use with Phase 3C validation:
@@ -30,10 +60,12 @@ python scripts/validate_discoveries.py \
     --variant-rankings results/sieve_variant_rankings.csv \
     --gene-rankings results/sieve_gene_rankings.csv \
     --clinvar-db data/clinvar_grch37.tsv \
-    --gwas-db data/gwas_catalog.tsv \
+    --gwas-db data/gwas_grch37.tsv \
     --go-annotations data/gene_to_go.json \
     --output-dir results/biological_validation
 ```
+
+**For GRCh38 data**, simply change `--genome GRCh37` to `--genome GRCh38` in the first two commands.
 
 ---
 
@@ -231,6 +263,36 @@ File size: ~5 MB
 
 ## Troubleshooting
 
+### Genome Version Mismatch
+
+**CRITICAL**: Ensure all databases use the same genome build as your VCF data.
+
+**Symptoms of mismatch**:
+- Variants in ClinVar but not matching your positions
+- No overlap between GWAS hits and your variants
+- Validation failing with "0 variants found"
+
+**Solution**:
+1. Check your VCF reference genome (usually in VCF header):
+   ```bash
+   zgrep "^##reference" your_data.vcf.gz
+   # Example output: ##reference=file:///human_g1k_v37.fasta (= GRCh37)
+   # Example output: ##reference=GRCh38 (= GRCh38)
+   ```
+
+2. Check chromosome naming in your VCF:
+   - GRCh37 typically: `1, 2, 3, ..., X, Y` or `chr1, chr2, ...`
+   - GRCh38 typically: `chr1, chr2, chr3, ..., chrX, chrY`
+
+3. Re-download databases with correct `--genome` parameter:
+   ```bash
+   # If your VCF is GRCh38
+   python utilities/download_clinvar.py --genome GRCh38 --output data/clinvar_grch38.tsv
+   python utilities/download_gwas_catalog.py --genome GRCh38 --output data/gwas_grch38.tsv
+   ```
+
+**Note**: SIEVE automatically handles chromosome naming (removes "chr" prefix if present), so `chr1` and `1` are treated as equivalent.
+
 ### Download Failures
 
 If downloads fail due to network issues:
@@ -279,17 +341,77 @@ For very large downloads:
 
 ---
 
+## Reference Genome Builds
+
+### GRCh37 vs GRCh38
+
+**GRCh37** (also known as hg19):
+- Released: 2009
+- Most common in research datasets and older cohorts
+- UCSC nomenclature: hg19
+- Chromosome naming: `1, 2, 3, ..., X, Y` or `chr1, chr2, ...`
+- Use this if: Your VCF was aligned to b37, hg19, or hs37d5
+
+**GRCh38** (also known as hg38):
+- Released: 2013
+- Current reference genome
+- UCSC nomenclature: hg38
+- Chromosome naming: `chr1, chr2, chr3, ..., chrX, chrY`
+- Use this if: Your VCF was aligned to GRCh38 or hg38
+
+### How Database Genome Versions Differ
+
+**ClinVar**:
+- Separate VCF files for GRCh37 and GRCh38
+- Variant positions differ between builds (due to assembly changes)
+- Always use the version matching your VCF alignment
+
+**GWAS Catalog**:
+- Single file contains both GRCh37 and GRCh38 coordinates
+- Script extracts positions for the specified genome build
+- Positions can differ by several kilobases between builds
+
+**Gene Ontology**:
+- Genome-independent (maps gene symbols to GO terms)
+- Same file works for both GRCh37 and GRCh38
+- Only species matters (human vs mouse)
+
+### Position Coordinate Differences
+
+Example: Same variant in different builds:
+```
+GRCh37: chr1:12345678 A>G
+GRCh38: chr1:12456789 A>G  (positions differ!)
+```
+
+This is why **using the wrong genome build will result in NO overlaps** with your variant discoveries.
+
+---
+
 ## Updating Databases
 
 To keep databases current, re-run the download scripts periodically:
 
 ```bash
 # Recommended: quarterly updates
-# Create dated versions
-python utilities/download_clinvar.py --output data/clinvar_2026_01.tsv
-python utilities/download_gwas_catalog.py --output data/gwas_2026_01.tsv
-python utilities/download_gene_ontology.py --output data/go_2026_01.json
+# Create dated versions with genome build in filename
+python utilities/download_clinvar.py \
+    --genome GRCh37 \
+    --output data/clinvar_grch37_2026_01.tsv
+
+python utilities/download_gwas_catalog.py \
+    --genome GRCh37 \
+    --output data/gwas_grch37_2026_01.tsv
+
+python utilities/download_gene_ontology.py \
+    --species human \
+    --output data/go_human_2026_01.json
 ```
+
+**Best practice**: Include genome build in filenames to avoid confusion:
+- ✅ `clinvar_grch37_2026_01.tsv`
+- ✅ `gwas_grch38_latest.tsv`
+- ❌ `clinvar.tsv` (ambiguous)
 
 ---
 
@@ -298,19 +420,22 @@ python utilities/download_gene_ontology.py --output data/go_2026_01.json
 Test the utilities with small datasets before full downloads:
 
 ```bash
-# Test ClinVar (first 1000 variants)
+# Test ClinVar (first 1000 variants, specify genome)
 python utilities/download_clinvar.py \
-    --output test_data/test_clinvar.tsv \
+    --genome GRCh37 \
+    --output test_data/test_clinvar_grch37.tsv \
     --max-variants 1000
 
-# Test GWAS (lenient threshold, fewer results)
+# Test GWAS (lenient threshold, fewer results, specify genome)
 python utilities/download_gwas_catalog.py \
-    --output test_data/test_gwas.tsv \
+    --genome GRCh37 \
+    --output test_data/test_gwas_grch37.tsv \
     --min-pvalue 1e-10
 
-# Test GO (single aspect)
+# Test GO (single aspect, specify species)
 python utilities/download_gene_ontology.py \
-    --output test_data/test_go.json \
+    --species human \
+    --output test_data/test_go_human.json \
     --aspect biological_process
 ```
 
@@ -318,20 +443,36 @@ python utilities/download_gene_ontology.py \
 
 ## Integration with SIEVE
 
-Once databases are downloaded, use them with Phase 3C validation:
+Once databases are downloaded with the correct genome build, use them with Phase 3C validation:
 
+**For GRCh37 data**:
 ```bash
 # Complete Phase 3C validation pipeline
 python scripts/validate_discoveries.py \
     --variant-rankings results/sieve_variant_rankings.csv \
     --gene-rankings results/sieve_gene_rankings.csv \
     --clinvar-db data/clinvar_grch37.tsv \
-    --gwas-db data/gwas_catalog.tsv \
+    --gwas-db data/gwas_grch37.tsv \
     --go-annotations data/gene_to_go.json \
     --output-dir results/biological_validation \
     --min-go-overlap 3 \
     --fdr-threshold 0.05
 ```
+
+**For GRCh38 data**:
+```bash
+python scripts/validate_discoveries.py \
+    --variant-rankings results/sieve_variant_rankings.csv \
+    --gene-rankings results/sieve_gene_rankings.csv \
+    --clinvar-db data/clinvar_grch38.tsv \
+    --gwas-db data/gwas_grch38.tsv \
+    --go-annotations data/gene_to_go.json \
+    --output-dir results/biological_validation \
+    --min-go-overlap 3 \
+    --fdr-threshold 0.05
+```
+
+**Important**: Ensure the genome build of your databases matches your VCF reference genome. Mismatched builds will result in zero overlaps.
 
 See `PHASE3_GUIDE.md` for complete validation workflow.
 
