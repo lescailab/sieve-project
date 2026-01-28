@@ -232,23 +232,28 @@ class VariantRanker:
 
         gene_rankings = gene_agg.merge(top_variants, on='gene_id')
 
-        # Add gene_name and chromosome from variant_rankings
-        gene_names = []
-        chromosomes = []
-        for gene_id in gene_rankings['gene_id']:
-            # Get gene_name and chromosome from first variant with this gene_id
-            gene_variants = variant_rankings[variant_rankings['gene_id'] == gene_id]
-            if len(gene_variants) > 0 and 'gene_name' in gene_variants.columns:
-                gene_name = gene_variants.iloc[0]['gene_name']
-                chrom = gene_variants.iloc[0]['chromosome'] if 'chromosome' in gene_variants.columns else 'unknown'
-            else:
-                gene_name = f'GENE_{gene_id}'
-                chrom = 'unknown'
-            gene_names.append(gene_name)
-            chromosomes.append(chrom)
+        # Add gene_name and chromosome from variant_rankings (vectorized)
+        # Get first variant for each gene_id
+        if 'gene_name' in variant_rankings.columns and 'chromosome' in variant_rankings.columns:
+            gene_info = variant_rankings.groupby('gene_id').agg({
+                'gene_name': 'first',
+                'chromosome': 'first'
+            }).reset_index()
+            gene_rankings = gene_rankings.merge(gene_info, on='gene_id', how='left')
 
-        gene_rankings.insert(0, 'chromosome', chromosomes)
-        gene_rankings.insert(1, 'gene_name', gene_names)
+            # Fill missing values
+            gene_rankings['gene_name'] = gene_rankings['gene_name'].fillna(
+                gene_rankings['gene_id'].apply(lambda x: f'GENE_{x}')
+            )
+            gene_rankings['chromosome'] = gene_rankings['chromosome'].fillna('unknown')
+
+            # Reorder columns
+            cols = ['chromosome', 'gene_name'] + [c for c in gene_rankings.columns if c not in ['chromosome', 'gene_name']]
+            gene_rankings = gene_rankings[cols]
+        else:
+            # Fallback if columns missing
+            gene_rankings.insert(0, 'chromosome', 'unknown')
+            gene_rankings.insert(1, 'gene_name', gene_rankings['gene_id'].apply(lambda x: f'GENE_{x}'))
 
         gene_rankings['gene_rank'] = rankdata(-gene_rankings['gene_score']).astype(int)
         gene_rankings = gene_rankings.sort_values('gene_rank').reset_index(drop=True)
