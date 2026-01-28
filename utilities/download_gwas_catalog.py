@@ -30,14 +30,20 @@ except ImportError:
     print("ERROR: pandas not installed. Run: pip install pandas")
     sys.exit(1)
 
-# GWAS Catalog URLs (EBI FTP)
-GWAS_URLS = {
-    'GRCh37': 'https://www.ebi.ac.uk/gwas/api/search/downloads/alternative',
-    'GRCh38': 'https://www.ebi.ac.uk/gwas/api/search/downloads/alternative',
-}
+# GWAS Catalog URLs
+# The main GWAS catalog file includes both GRCh37 and GRCh38 coordinates
+# We filter based on the genome parameter after download
+#
+# Primary: EBI GWAS Catalog API (verified 2026-01)
+# Source: https://www.ebi.ac.uk/gwas/downloads
+GWAS_URL = 'https://www.ebi.ac.uk/gwas/api/search/downloads/full'
 
-# Note: The main GWAS catalog file includes both GRCh37 and GRCh38 coordinates
-# We'll filter based on the genome parameter
+# Fallback: EBI FTP site (if API endpoint changes)
+# FTP structure: http://ftp.ebi.ac.uk/pub/databases/gwas/releases/YYYY/MM/DD/
+# The 'latest' symlink should point to most recent release
+GWAS_FTP_FALLBACK = 'http://ftp.ebi.ac.uk/pub/databases/gwas/releases/latest/gwas-catalog-associations_ontology-annotated.tsv'
+
+# NOTE: If both URLs fail, visit https://www.ebi.ac.uk/gwas/downloads for current links
 
 
 def download_with_progress(url: str, output_path: Path) -> None:
@@ -267,19 +273,36 @@ Examples:
         temp_gwas = None
     else:
         # Download GWAS Catalog
-        url = GWAS_URLS[args.genome]
+        url = GWAS_URL
 
         if args.keep_raw:
-            # Download to same directory as output
             gwas_path = output_path.parent / f"gwas_catalog_raw.tsv"
-            download_with_progress(url, gwas_path)
             temp_gwas = None
         else:
-            # Download to temp file
             temp_gwas = tempfile.NamedTemporaryFile(suffix='.tsv', delete=False)
             temp_gwas.close()
             gwas_path = Path(temp_gwas.name)
+
+        # Try primary API endpoint, fall back to FTP if it fails
+        try:
             download_with_progress(url, gwas_path)
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                print(f"\nWARNING: API endpoint failed (404). Trying FTP fallback...")
+                try:
+                    download_with_progress(GWAS_FTP_FALLBACK, gwas_path)
+                except Exception as e2:
+                    print(f"\nERROR: Both download attempts failed.")
+                    print(f"  API URL: {url}")
+                    print(f"  FTP URL: {GWAS_FTP_FALLBACK}")
+                    print(f"\nLast error: {e2}")
+                    print("\nPlease try:")
+                    print("1. Check your internet connection")
+                    print("2. Visit https://www.ebi.ac.uk/gwas/downloads to find current download URLs")
+                    print("3. Download manually and use --gwas parameter")
+                    sys.exit(1)
+            else:
+                raise
 
     try:
         # Parse GWAS catalog
