@@ -96,8 +96,9 @@ def parse_gwas_catalog(gwas_path: Path, output_path: Path, genome: str = 'GRCh37
 
     # Read GWAS catalog
     # The file is tab-separated
+    # IMPORTANT: GWAS Catalog uses latin-1 encoding, NOT UTF-8
     try:
-        df = pd.read_csv(gwas_path, sep='\t', low_memory=False)
+        df = pd.read_csv(gwas_path, sep='\t', encoding='latin-1', low_memory=False)
         print(f"Loaded {len(df):,} total associations")
     except Exception as e:
         print(f"ERROR: Failed to read GWAS catalog: {e}")
