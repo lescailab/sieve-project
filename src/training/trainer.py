@@ -242,7 +242,7 @@ class Trainer:
         all_preds = []
         all_labels = []
 
-        for batch in val_loader:
+        for batch_idx, batch in enumerate(val_loader):
             # Check if model has train_step (for chunked processing)
             if hasattr(self.model, 'train_step'):
                 # Use model's train_step for chunked processing (works for eval too)
