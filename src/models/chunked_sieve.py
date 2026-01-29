@@ -199,16 +199,16 @@ class ChunkedSIEVEModel(nn.Module):
 
             # Aggregate chunk labels to sample labels (vectorized)
             # All chunks from same sample have same label.
-            # Use torch.unique with return_index to ensure ordering matches
-            # the forward method (which uses unique_samples = original_sample_indices.unique(sorted=True))
-            unique_samples, first_occurrence_indices = torch.unique(
-                original_sample_indices,
-                sorted=True,
-                return_index=True,
-            )
+            # Get unique samples in sorted order (matching forward method)
+            unique_samples = original_sample_indices.unique(sorted=True)
 
-            # Extract one label per unique sample, aligned with unique_samples order
-            sample_labels = labels[first_occurrence_indices]
+            # For each unique sample, find its first occurrence in original_sample_indices
+            # and extract the label at that position
+            sample_labels = torch.zeros(len(unique_samples), dtype=labels.dtype, device=device)
+            for i, sample_idx in enumerate(unique_samples):
+                # Find first chunk belonging to this sample
+                first_chunk_idx = (original_sample_indices == sample_idx).nonzero(as_tuple=True)[0][0]
+                sample_labels[i] = labels[first_chunk_idx]
         else:
             sample_labels = labels
 
