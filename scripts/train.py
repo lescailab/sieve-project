@@ -326,10 +326,20 @@ def main():
             val_labels = labels[val_idx]
             print_fold_stats(fold_idx, train_labels, val_labels)
 
+            # Convert sample indices to chunk indices
+            # CRITICAL: train_idx/val_idx are sample-level indices
+            # but dataset is indexed by chunks. Must convert!
+            train_chunk_idx = [i for i, info in enumerate(dataset.chunk_info) if info['sample_idx'] in train_idx]
+            val_chunk_idx = [i for i, info in enumerate(dataset.chunk_info) if info['sample_idx'] in val_idx]
+
+            print(f"\nChunk-level split:")
+            print(f"  Train: {len(train_chunk_idx)} chunks from {len(train_idx)} samples")
+            print(f"  Val: {len(val_chunk_idx)} chunks from {len(val_idx)} samples")
+
             # Create data loaders with chunked processing
             from torch.utils.data import DataLoader, Subset
-            train_dataset = Subset(dataset, train_idx)
-            val_dataset = Subset(dataset, val_idx)
+            train_dataset = Subset(dataset, train_chunk_idx)
+            val_dataset = Subset(dataset, val_chunk_idx)
 
             train_loader = DataLoader(
                 train_dataset,
@@ -425,10 +435,20 @@ def main():
         val_labels = labels[val_idx]
         print_fold_stats(0, train_labels, val_labels)
 
+        # Convert sample indices to chunk indices
+        # CRITICAL: train_idx/val_idx are sample-level indices (0-1967)
+        # but dataset is indexed by chunks (0-18282). Must convert!
+        train_chunk_idx = [i for i, info in enumerate(dataset.chunk_info) if info['sample_idx'] in train_idx]
+        val_chunk_idx = [i for i, info in enumerate(dataset.chunk_info) if info['sample_idx'] in val_idx]
+
+        print(f"\nChunk-level split:")
+        print(f"  Train: {len(train_chunk_idx)} chunks from {len(train_idx)} samples")
+        print(f"  Val: {len(val_chunk_idx)} chunks from {len(val_idx)} samples")
+
         # Create data loaders with chunked processing
         from torch.utils.data import DataLoader, Subset
-        train_dataset = Subset(dataset, train_idx)
-        val_dataset = Subset(dataset, val_idx)
+        train_dataset = Subset(dataset, train_chunk_idx)
+        val_dataset = Subset(dataset, val_chunk_idx)
 
         train_loader = DataLoader(
             train_dataset,
