@@ -101,7 +101,9 @@ class ChunkedSIEVEModel(nn.Module):
             Sample-level predictions [num_samples] or [num_samples, num_classes]
         """
         # Process all chunks through base model
-        chunk_outputs = self.base_model(features, positions, gene_ids, mask)
+        chunk_outputs, intermediates = self.base_model(
+            features, positions, gene_ids, mask, return_intermediate=True
+        )
 
         # If no chunk metadata, return as-is (regular processing)
         if original_sample_indices is None:
@@ -109,97 +111,45 @@ class ChunkedSIEVEModel(nn.Module):
 
         # Aggregate chunks by original sample
         device = chunk_outputs.device
-        batch_size = chunk_outputs.shape[0]
 
         # Get unique samples and their chunk counts
         unique_samples = original_sample_indices.unique()
         num_samples = len(unique_samples)
 
-        # Initialize aggregated outputs
-        if self.aggregation_method == 'logit_mean':
-            # Aggregate logits directly
-            aggregated = torch.zeros(num_samples, device=device)
+        # Aggregate chunk outputs into sample-level predictions
+        # NOTE: Currently only 'logit_mean' and 'mean' are supported
+        # Other aggregation methods require architectural changes to expose
+        # sample-level embeddings before the final classification layer
 
-            for i, sample_idx in enumerate(unique_samples):
-                # Find all chunks for this sample
-                chunk_mask = (original_sample_indices == sample_idx)
-                sample_chunks = chunk_outputs[chunk_mask]
+        # Map each chunk to its sample index
+        sample_mapping = torch.searchsorted(
+            unique_samples, original_sample_indices
+        )
 
-                # Average logits
-                aggregated[i] = sample_chunks.mean()
+        if self.aggregation_method == 'logit_mean' or self.aggregation_method == 'mean':
+            # Aggregate logits directly by averaging chunk predictions
+            aggregated = torch.zeros(num_samples, dtype=chunk_outputs.dtype, device=device)
+            counts = torch.zeros(num_samples, dtype=torch.float32, device=device)
+
+            # Sum logits per sample
+            chunk_outputs_flat = chunk_outputs.squeeze(-1) if chunk_outputs.dim() > 1 else chunk_outputs
+            aggregated.scatter_add_(0, sample_mapping, chunk_outputs_flat)
+            counts.scatter_add_(0, sample_mapping, torch.ones_like(chunk_outputs_flat, dtype=torch.float32))
+
+            # Average
+            aggregated = aggregated / counts.clamp(min=1)
+
+        elif self.aggregation_method in ['max', 'attention']:
+            # These methods are not currently supported
+            # They would require the base model to expose sample-level embeddings
+            # before classification, which the current architecture doesn't do
+            raise NotImplementedError(
+                f"Aggregation method '{self.aggregation_method}' is not yet implemented. "
+                f"Use 'logit_mean' or 'mean' instead. See ChunkedSIEVEModel docstring."
+            )
 
         else:
-            # Need embeddings for other aggregation methods
-            # For binary classification, chunk_outputs are logits [batch, 1]
-            # We need to get embeddings from base model
-            # This requires base model to have a get_embeddings method
-
-            if not hasattr(self.base_model, 'get_embeddings'):
-                # Fallback: use logit aggregation
-                aggregated = torch.zeros(num_samples, device=device)
-                for i, sample_idx in enumerate(unique_samples):
-                    chunk_mask = (original_sample_indices == sample_idx)
-                    sample_chunks = chunk_outputs[chunk_mask]
-                    aggregated[i] = sample_chunks.mean()
-            else:
-                # Get embeddings for all chunks
-                chunk_embeddings = self.base_model.get_embeddings(
-                    features, positions, gene_ids, mask
-                )
-                embedding_dim = chunk_embeddings.shape[1]
-
-                if self.aggregation_method == 'mean':
-                    # Mean pooling over chunks
-                    aggregated_embeddings = torch.zeros(
-                        num_samples, embedding_dim, device=device
-                    )
-                    for i, sample_idx in enumerate(unique_samples):
-                        chunk_mask = (original_sample_indices == sample_idx)
-                        sample_chunks = chunk_embeddings[chunk_mask]
-                        aggregated_embeddings[i] = sample_chunks.mean(dim=0)
-
-                elif self.aggregation_method == 'max':
-                    # Max pooling over chunks
-                    aggregated_embeddings = torch.zeros(
-                        num_samples, embedding_dim, device=device
-                    )
-                    for i, sample_idx in enumerate(unique_samples):
-                        chunk_mask = (original_sample_indices == sample_idx)
-                        sample_chunks = chunk_embeddings[chunk_mask]
-                        aggregated_embeddings[i] = sample_chunks.max(dim=0)[0]
-
-                elif self.aggregation_method == 'attention':
-                    # Attention-weighted pooling
-                    aggregated_embeddings = torch.zeros(
-                        num_samples, embedding_dim, device=device
-                    )
-                    for i, sample_idx in enumerate(unique_samples):
-                        chunk_mask = (original_sample_indices == sample_idx)
-                        sample_chunks = chunk_embeddings[chunk_mask]
-
-                        # Compute attention weights
-                        attention_scores = self.attention(sample_chunks)  # [num_chunks, 1]
-                        attention_weights = torch.softmax(attention_scores, dim=0)
-
-                        # Weighted sum
-                        aggregated_embeddings[i] = (sample_chunks * attention_weights).sum(dim=0)
-
-                else:
-                    raise ValueError(f"Unknown aggregation method: {self.aggregation_method}")
-
-                if return_embeddings:
-                    return aggregated_embeddings
-
-                # Apply final classifier to aggregated embeddings
-                if hasattr(self.base_model, 'classifier'):
-                    aggregated = self.base_model.classifier(aggregated_embeddings)
-                else:
-                    # Fallback: average chunk logits
-                    aggregated = torch.zeros(num_samples, device=device)
-                    for i, sample_idx in enumerate(unique_samples):
-                        chunk_mask = (original_sample_indices == sample_idx)
-                        sample_chunks = chunk_outputs[chunk_mask]
-                        aggregated[i] = sample_chunks.mean()
+            raise ValueError(f"Unknown aggregation method: {self.aggregation_method}")
 
         return aggregated
 
@@ -212,12 +162,16 @@ class ChunkedSIEVEModel(nn.Module):
         """
         Training step that handles chunk aggregation.
 
+        NOTE: Attribution regularization (lambda_attr > 0) is not currently
+        supported with chunked processing. Use lambda_attr=0.0 when training
+        chunked models.
+
         Parameters
         ----------
         batch : Dict[str, torch.Tensor]
             Batch from ChunkedVariantDataset
         criterion : nn.Module
-            Loss function
+            Loss function (should be BCEWithLogitsLoss or similar)
         device : torch.device
             Device to use
 
@@ -244,13 +198,21 @@ class ChunkedSIEVEModel(nn.Module):
             total_chunks = total_chunks.to(device)
             original_sample_indices = original_sample_indices.to(device)
 
-            # Get unique sample labels (aggregate from chunks)
-            unique_samples = original_sample_indices.unique()
-            sample_labels = torch.zeros(len(unique_samples), dtype=torch.long, device=device)
-            for i, sample_idx in enumerate(unique_samples):
-                chunk_mask = (original_sample_indices == sample_idx)
-                # All chunks from same sample have same label
-                sample_labels[i] = labels[chunk_mask][0]
+            # Aggregate chunk labels to sample labels (vectorized)
+            # All chunks from same sample have same label
+            # Strategy: sort by sample index, then take first of each group
+            sorted_indices = torch.argsort(original_sample_indices)
+            sorted_sample_ids = original_sample_indices[sorted_indices]
+
+            # Find where sample ID changes (these are the first chunks of each sample)
+            # Prepend True to always include first element
+            is_first_chunk = torch.cat([
+                torch.tensor([True], device=device),
+                sorted_sample_ids[1:] != sorted_sample_ids[:-1]
+            ])
+
+            # Extract labels at these positions
+            sample_labels = labels[sorted_indices[is_first_chunk]]
         else:
             sample_labels = labels
 
