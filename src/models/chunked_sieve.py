@@ -24,11 +24,11 @@ class ChunkedSIEVEModel(nn.Module):
     base_model : nn.Module
         The base SIEVE model
     aggregation_method : str
-        How to aggregate chunks: 'mean', 'max', 'attention', 'logit_mean'
-        - 'mean': Average chunk embeddings before final classification
-        - 'max': Max-pool chunk embeddings before final classification
-        - 'attention': Weighted average of chunk embeddings using learned attention
+        How to aggregate chunks: 'mean', 'logit_mean' (supported), 'max', 'attention' (not yet implemented)
+        - 'mean': Average chunk logits directly (same as logit_mean for efficiency)
         - 'logit_mean': Average chunk logits (predictions) directly
+        - 'max': Max-pool chunk embeddings (NOT YET IMPLEMENTED)
+        - 'attention': Weighted average of chunk embeddings (NOT YET IMPLEMENTED)
     embedding_dim : Optional[int]
         Dimension of chunk embeddings (required for attention aggregation)
 
@@ -101,9 +101,7 @@ class ChunkedSIEVEModel(nn.Module):
             Sample-level predictions [num_samples] or [num_samples, num_classes]
         """
         # Process all chunks through base model
-        chunk_outputs, intermediates = self.base_model(
-            features, positions, gene_ids, mask, return_intermediate=True
-        )
+        chunk_outputs, _ = self.base_model(features, positions, gene_ids, mask)
 
         # If no chunk metadata, return as-is (regular processing)
         if original_sample_indices is None:
@@ -113,7 +111,8 @@ class ChunkedSIEVEModel(nn.Module):
         device = chunk_outputs.device
 
         # Get unique samples and their chunk counts
-        unique_samples = original_sample_indices.unique()
+        # Note: sorted=True is required for torch.searchsorted below
+        unique_samples = original_sample_indices.unique(sorted=True)
         num_samples = len(unique_samples)
 
         # Aggregate chunk outputs into sample-level predictions
@@ -136,8 +135,8 @@ class ChunkedSIEVEModel(nn.Module):
             aggregated.scatter_add_(0, sample_mapping, chunk_outputs_flat)
             counts.scatter_add_(0, sample_mapping, torch.ones_like(chunk_outputs_flat, dtype=torch.float32))
 
-            # Average
-            aggregated = aggregated / counts.clamp(min=1)
+            # Average and preserve original dtype (important for mixed precision training)
+            aggregated = (aggregated / counts.clamp(min=1)).to(chunk_outputs.dtype)
 
         elif self.aggregation_method in ['max', 'attention']:
             # These methods are not currently supported
@@ -199,20 +198,17 @@ class ChunkedSIEVEModel(nn.Module):
             original_sample_indices = original_sample_indices.to(device)
 
             # Aggregate chunk labels to sample labels (vectorized)
-            # All chunks from same sample have same label
-            # Strategy: sort by sample index, then take first of each group
-            sorted_indices = torch.argsort(original_sample_indices)
-            sorted_sample_ids = original_sample_indices[sorted_indices]
+            # All chunks from same sample have same label.
+            # Use torch.unique with return_index to ensure ordering matches
+            # the forward method (which uses unique_samples = original_sample_indices.unique(sorted=True))
+            unique_samples, first_occurrence_indices = torch.unique(
+                original_sample_indices,
+                sorted=True,
+                return_index=True,
+            )
 
-            # Find where sample ID changes (these are the first chunks of each sample)
-            # Prepend True to always include first element
-            is_first_chunk = torch.cat([
-                torch.tensor([True], device=device),
-                sorted_sample_ids[1:] != sorted_sample_ids[:-1]
-            ])
-
-            # Extract labels at these positions
-            sample_labels = labels[sorted_indices[is_first_chunk]]
+            # Extract one label per unique sample, aligned with unique_samples order
+            sample_labels = labels[first_occurrence_indices]
         else:
             sample_labels = labels
 
