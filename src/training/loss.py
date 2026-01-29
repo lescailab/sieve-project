@@ -75,7 +75,9 @@ class SIEVELoss(nn.Module):
             ValueError: If lambda_attr > 0 but variant_embeddings or mask not provided
         """
         # Compute classification loss
-        logits = logits.squeeze(-1)  # [batch_size, 1] -> [batch_size]
+        # Handle both 2D [batch_size, 1] and 1D [batch_size] logits
+        if logits.dim() > 1:
+            logits = logits.squeeze(-1)  # [batch_size, 1] -> [batch_size]
         labels = labels.float()
         classification_loss = self.bce_loss(logits, labels)
 
