@@ -125,6 +125,8 @@ class ChunkedSIEVEModel(nn.Module):
         device = features.device
 
         # If no chunk metadata, process as regular batch
+        # NOTE: Delegates directly to base_model. The base model should be on the
+        # same device as ChunkedSIEVEModel to ensure output tensors match input device.
         if original_sample_indices is None:
             return self.base_model(
                 features, positions, gene_ids, mask,
@@ -169,18 +171,32 @@ class ChunkedSIEVEModel(nn.Module):
                 device=device
             )
 
-            # Accumulate embeddings per sample
-            for chunk_idx in range(len(chunk_gene_embeddings)):
-                sample_idx = sample_mapping[chunk_idx]
-                aggregated_embeddings[sample_idx] += chunk_gene_embeddings[chunk_idx]
+            # Vectorized accumulation of embeddings per sample
+            # Sum embeddings from all chunks into their corresponding samples
+            aggregated_embeddings.index_add_(0, sample_mapping, chunk_gene_embeddings)
 
-                # Count genes with non-zero embeddings
-                gene_has_variants = (chunk_gene_embeddings[chunk_idx].abs().sum(dim=-1) > 0)
-                counts[sample_idx] += gene_has_variants.float()
+            # Compute per-chunk gene presence mask: genes with non-zero embeddings
+            # Use L2 norm for robustness to sign cancellations
+            gene_has_variants = (chunk_gene_embeddings.pow(2).sum(dim=-1) > 1e-9).float()
 
-            # Average (avoiding division by zero)
-            counts_expanded = counts.unsqueeze(-1).clamp(min=1)
-            aggregated_embeddings = aggregated_embeddings / counts_expanded
+            # Accumulate counts of contributing chunks per gene and sample
+            counts.index_add_(0, sample_mapping, gene_has_variants)
+
+            # Average, explicitly avoiding division by zero:
+            # Only divide where at least one chunk contributed to a gene,
+            # and leave zero embeddings unchanged when there are no variants.
+            counts_expanded = counts.unsqueeze(-1)
+            nonzero_mask = counts_expanded > 0
+            safe_counts_expanded = torch.where(
+                nonzero_mask,
+                counts_expanded,
+                torch.ones_like(counts_expanded)
+            )
+            aggregated_embeddings = torch.where(
+                nonzero_mask,
+                aggregated_embeddings / safe_counts_expanded,
+                aggregated_embeddings
+            )
 
         elif self.aggregation_method == 'max':
             # Max-pool gene embeddings across chunks per sample
@@ -190,12 +206,16 @@ class ChunkedSIEVEModel(nn.Module):
                 device=device
             )
 
-            # Take element-wise max
-            for chunk_idx in range(len(chunk_gene_embeddings)):
-                sample_idx = sample_mapping[chunk_idx]
-                aggregated_embeddings[sample_idx] = torch.maximum(
-                    aggregated_embeddings[sample_idx],
-                    chunk_gene_embeddings[chunk_idx]
+            # Vectorized element-wise max across chunks per sample using scatter_reduce
+            if chunk_gene_embeddings.numel() > 0:
+                # sample_mapping: [num_chunks] -> expand to match chunk_gene_embeddings
+                index = sample_mapping.view(-1, 1, 1).expand(-1, num_genes, latent_dim)
+                aggregated_embeddings.scatter_reduce_(
+                    dim=0,
+                    index=index,
+                    src=chunk_gene_embeddings,
+                    reduce='amax',
+                    include_self=True  # Keep initial zeros, matching previous behavior
                 )
 
         elif self.aggregation_method == 'attention':
@@ -212,6 +232,11 @@ class ChunkedSIEVEModel(nn.Module):
             raise ValueError(f"Unknown aggregation method: {self.aggregation_method}")
 
         # Apply classifier on aggregated embeddings
+        # NOTE: This intentionally bypasses base_model.forward() and assumes
+        # that the base model exposes a callable 'classifier' attribute that
+        # can operate directly on aggregated gene embeddings of shape
+        # [num_samples, num_genes, latent_dim].
+        # If using a different base model, it must conform to this interface.
         logits = self.base_model.classifier(aggregated_embeddings)
 
         # Prepare intermediates if requested
@@ -246,16 +271,27 @@ class ChunkedSIEVEModel(nn.Module):
         batch : Dict[str, torch.Tensor]
             Batch from ChunkedVariantDataset
         criterion : nn.Module
-            Loss function (should be SIEVELoss or BCEWithLogitsLoss)
+            Loss function. Supported types:
+            - SIEVELoss: Returns dict {'total': scalar, ...} when lambda_attr > 0
+            - BCEWithLogitsLoss: Returns scalar tensor
+            Note: For attribution regularization support, loss function must have
+            a 'lambda_attr' attribute that can be checked via hasattr().
+            Custom loss functions should follow this interface convention.
         device : torch.device
             Device to use
 
         Returns
         -------
         loss : torch.Tensor
-            Loss value
+            Scalar loss value (extracted from dict if criterion returns dict)
         predictions : torch.Tensor
-            Sample-level predictions
+            Sample-level predictions [num_samples] or [num_samples, 1]
+
+        Notes
+        -----
+        Attribution regularization uses gene-level sparsity (not variant-level)
+        since chunked processing operates on aggregated gene embeddings.
+        This encourages the model to rely on fewer genes rather than fewer variants.
         """
         # Move to device
         features = batch['features'].to(device)
@@ -350,6 +386,20 @@ class ChunkedSIEVEModel(nn.Module):
             chunk_indices, total_chunks, original_sample_indices,
             return_intermediate=True
         )
+
+        if intermediates is None:
+            raise RuntimeError(
+                "ChunkedSIEVEModel.forward did not return intermediates "
+                "despite return_intermediate=True when calling get_gene_embeddings."
+            )
+
+        if 'gene_embeddings' not in intermediates:
+            raise KeyError(
+                "Intermediates returned by ChunkedSIEVEModel.forward do not contain "
+                "'gene_embeddings'. Ensure the base model is configured to produce "
+                "gene embeddings when return_intermediate=True."
+            )
+
         return intermediates['gene_embeddings']
 
     def get_attention_patterns(
@@ -378,7 +428,10 @@ class ChunkedSIEVEModel(nn.Module):
         Returns
         -------
         List[torch.Tensor]
-            Attention weights per chunk
+            Attention weights per chunk. Returns empty list if:
+            - Base model does not support attention (intermediates is None)
+            - Base model did not return attention weights
+            - return_attention=True was not honored by base model
         """
         _, intermediates = self.forward(
             features, positions, gene_ids, mask,
