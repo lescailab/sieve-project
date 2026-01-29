@@ -53,17 +53,20 @@ class SIEVELoss(nn.Module):
         labels: Tensor,
         variant_embeddings: Optional[Tensor] = None,
         mask: Optional[Tensor] = None,
+        gene_embeddings: Optional[Tensor] = None,
     ) -> Dict[str, Tensor]:
         """
         Compute combined loss.
 
         Args:
-            logits: Model predictions [batch_size, 1]
+            logits: Model predictions [batch_size, 1] or [batch_size]
             labels: True labels [batch_size]
             variant_embeddings: Variant embeddings for attribution [batch_size, num_variants, latent_dim]
-                Required if lambda_attr > 0
+                Used for variant-level sparsity (normal mode)
             mask: Valid variant mask [batch_size, num_variants]
-                Required if lambda_attr > 0
+                Required if using variant_embeddings
+            gene_embeddings: Gene embeddings for attribution [batch_size, num_genes, latent_dim]
+                Used for gene-level sparsity (chunked mode)
 
         Returns:
             Dictionary containing:
@@ -72,7 +75,11 @@ class SIEVELoss(nn.Module):
                 - 'attribution_sparsity': Attribution sparsity loss (scalar, 0 if lambda_attr=0)
 
         Raises:
-            ValueError: If lambda_attr > 0 but variant_embeddings or mask not provided
+            ValueError: If lambda_attr > 0 but neither embeddings provided
+
+        Note:
+            If both variant_embeddings and gene_embeddings are provided,
+            variant_embeddings takes precedence.
         """
         # Compute classification loss
         # Handle both 2D [batch_size, 1] and 1D [batch_size] logits
@@ -87,16 +94,25 @@ class SIEVELoss(nn.Module):
 
         # Add attribution sparsity if requested
         if self.lambda_attr > 0:
-            if variant_embeddings is None or mask is None:
+            # Prefer variant-level if available, fall back to gene-level
+            if variant_embeddings is not None and mask is not None:
+                # Variant-level sparsity (normal mode)
+                attr_loss = attribution_sparsity_loss(
+                    variant_embeddings=variant_embeddings,
+                    logits=logits,
+                    mask=mask,
+                )
+            elif gene_embeddings is not None:
+                # Gene-level sparsity (chunked mode)
+                attr_loss = gene_level_sparsity_loss(
+                    gene_embeddings=gene_embeddings,
+                    logits=logits,
+                )
+            else:
                 raise ValueError(
-                    "variant_embeddings and mask required when lambda_attr > 0"
+                    "Either (variant_embeddings, mask) or gene_embeddings required when lambda_attr > 0"
                 )
 
-            attr_loss = attribution_sparsity_loss(
-                variant_embeddings=variant_embeddings,
-                logits=logits,
-                mask=mask,
-            )
             total_loss = total_loss + self.lambda_attr * attr_loss
 
         return {
@@ -143,6 +159,40 @@ def attribution_sparsity_loss(
     # Normalize by number of valid variants per sample
     num_valid_variants = mask.sum(dim=1).float().clamp(min=1.0)  # Avoid division by zero
     sparsity_per_sample = embedding_magnitudes.sum(dim=1) / num_valid_variants
+
+    # Average across batch
+    return sparsity_per_sample.mean()
+
+
+def gene_level_sparsity_loss(
+    gene_embeddings: Tensor,
+    logits: Tensor,
+) -> Tensor:
+    """
+    Compute sparsity loss at gene level (for chunked processing).
+
+    Encourages the model to rely on a sparse set of genes rather than
+    all genes. This is used when variant-level attribution is not available
+    (e.g., in chunked processing).
+
+    Args:
+        gene_embeddings: Gene embeddings [batch_size, num_genes, latent_dim]
+        logits: Model predictions [batch_size] (unused, for API compatibility)
+
+    Returns:
+        Mean L1 norm of gene embedding magnitudes across batch (scalar)
+
+    Note:
+        This is an approximation for chunked mode where variant-level
+        attribution is not feasible. Encourages sparse gene usage.
+    """
+    # Compute L2 norm of embeddings for each gene
+    # gene_magnitudes shape: [batch_size, num_genes]
+    gene_magnitudes = torch.norm(gene_embeddings, p=2, dim=-1)
+
+    # Compute L1 sparsity penalty (sum of magnitudes)
+    # Genes with zero embeddings (no variants) naturally have magnitude 0
+    sparsity_per_sample = gene_magnitudes.sum(dim=1) / gene_embeddings.shape[1]
 
     # Average across batch
     return sparsity_per_sample.mean()
