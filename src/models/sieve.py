@@ -140,7 +140,8 @@ class SIEVE(nn.Module):
         gene_ids: Tensor,
         mask: Optional[Tensor] = None,
         return_attention: bool = False,
-        return_intermediate: bool = False
+        return_intermediate: bool = False,
+        return_embeddings: bool = False
     ) -> Tuple[Tensor, Optional[Dict]]:
         """
         Forward pass through SIEVE model.
@@ -160,11 +161,14 @@ class SIEVE(nn.Module):
             Whether to return attention weights (for explainability)
         return_intermediate : bool
             Whether to return intermediate representations
+        return_embeddings : bool
+            If True, return gene embeddings instead of logits (for chunked aggregation)
 
         Returns
         -------
-        logits : Tensor
-            Phenotype prediction logits, shape (batch, 1)
+        output : Tensor
+            If return_embeddings=False: Phenotype prediction logits, shape (batch, 1)
+            If return_embeddings=True: Gene embeddings, shape (batch, num_genes, latent_dim)
         intermediates : Optional[Dict]
             Dictionary containing intermediate outputs if requested:
             - 'variant_embeddings': After encoder
@@ -172,11 +176,11 @@ class SIEVE(nn.Module):
             - 'gene_embeddings': After aggregation
             - 'attention_weights': Attention weights from each layer (if return_attention=True)
         """
-        intermediates = {} if (return_attention or return_intermediate) else None
+        intermediates = {} if (return_attention or return_intermediate or return_embeddings) else None
 
         # 1. Encode variants
         variant_embeddings = self.variant_encoder(variant_features)
-        if return_intermediate:
+        if return_intermediate or return_embeddings:
             intermediates['variant_embeddings'] = variant_embeddings
 
         # 2. Apply attention
@@ -186,7 +190,7 @@ class SIEVE(nn.Module):
             mask,
             return_attention=return_attention
         )
-        if return_intermediate:
+        if return_intermediate or return_embeddings:
             intermediates['attended_embeddings'] = attended_embeddings
         if return_attention:
             intermediates['attention_weights'] = attention_weights
@@ -197,13 +201,15 @@ class SIEVE(nn.Module):
             gene_ids,
             mask
         )
-        if return_intermediate:
+        if return_intermediate or return_embeddings:
             intermediates['gene_embeddings'] = gene_embeddings
 
-        # 4. Classify
-        logits = self.classifier(gene_embeddings)
-
-        return logits, intermediates
+        # 4. Return embeddings or classify
+        if return_embeddings:
+            return gene_embeddings, intermediates
+        else:
+            logits = self.classifier(gene_embeddings)
+            return logits, intermediates
 
     def get_model_summary(self) -> Dict[str, Any]:
         """
