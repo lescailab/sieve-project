@@ -30,7 +30,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.data import build_sample_variants
 from src.encoding import (
     AnnotationLevel,
-    VariantDataset,
     ChunkedVariantDataset,
     collate_chunks,
     get_feature_dimension
@@ -40,7 +39,6 @@ from src.training import (
     SIEVELoss,
     Trainer,
     create_stratified_folds,
-    get_train_val_loaders,
     print_fold_stats,
 )
 
@@ -234,6 +232,13 @@ def main():
     # Validate arguments
     if args.preprocessed_data is None and (args.vcf is None or args.phenotypes is None):
         raise ValueError("Must provide either --preprocessed-data OR both --vcf and --phenotypes")
+
+    # Warn about unsupported features with chunked processing
+    if args.lambda_attr > 0:
+        print("\nWARNING: Attribution regularization (lambda_attr > 0) is not currently")
+        print("supported with chunked processing. Setting lambda_attr=0.0")
+        print("See ChunkedSIEVEModel.train_step() docstring for details.")
+        args.lambda_attr = 0.0
 
     # Create experiment name
     if args.experiment_name is None:
