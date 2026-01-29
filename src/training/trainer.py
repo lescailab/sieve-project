@@ -139,16 +139,6 @@ class Trainer:
                         chunk_mask = (original_indices == sample_idx)
                         labels_for_metrics[i] = batch_labels[chunk_mask][0]
                     labels = labels_for_metrics
-
-                    # DEBUG: Print batch statistics for first batch only
-                    if batch_idx == 0:
-                        print(f"\n[DEBUG] Batch 0:")
-                        print(f"  Total chunks: {len(original_indices)}, Unique samples: {len(unique_samples)}")
-                        print(f"  Sample indices: {original_indices.cpu().tolist()}")
-                        print(f"  Chunk labels: {batch_labels.cpu().tolist()}")
-                        print(f"  Aggregated sample labels: {labels.cpu().tolist()}")
-                        unique_vals, counts = labels.unique(return_counts=True)
-                        print(f"  Label distribution: {dict(zip(unique_vals.cpu().tolist(), counts.cpu().tolist()))}")
                 else:
                     labels = batch['labels']
             else:
@@ -252,7 +242,7 @@ class Trainer:
         all_preds = []
         all_labels = []
 
-        for batch in val_loader:
+        for batch_idx, batch in enumerate(val_loader):
             # Check if model has train_step (for chunked processing)
             if hasattr(self.model, 'train_step'):
                 # Use model's train_step for chunked processing (works for eval too)
@@ -272,16 +262,6 @@ class Trainer:
                         chunk_mask = (original_indices == sample_idx)
                         labels_for_metrics[i] = batch_labels[chunk_mask][0]
                     labels = labels_for_metrics
-
-                    # DEBUG: Print batch statistics for first batch only
-                    if batch_idx == 0:
-                        print(f"\n[DEBUG] Batch 0:")
-                        print(f"  Total chunks: {len(original_indices)}, Unique samples: {len(unique_samples)}")
-                        print(f"  Sample indices: {original_indices.cpu().tolist()}")
-                        print(f"  Chunk labels: {batch_labels.cpu().tolist()}")
-                        print(f"  Aggregated sample labels: {labels.cpu().tolist()}")
-                        unique_vals, counts = labels.unique(return_counts=True)
-                        print(f"  Label distribution: {dict(zip(unique_vals.cpu().tolist(), counts.cpu().tolist()))}")
                 else:
                     labels = batch['labels']
             else:
