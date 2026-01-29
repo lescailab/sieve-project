@@ -216,7 +216,7 @@ class ChunkedSIEVEModel(nn.Module):
         predictions = self.forward(
             features, positions, gene_ids, mask,
             chunk_indices, total_chunks, original_sample_indices
-        ).squeeze()
+        ).view(-1)  # Ensure 1D tensor, not scalar
 
         # Compute loss at sample level
         loss_output = criterion(predictions, sample_labels.float())
