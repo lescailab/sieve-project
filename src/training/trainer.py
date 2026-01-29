@@ -129,13 +129,15 @@ class Trainer:
                 # Get sample labels for metrics
                 if 'original_sample_indices' in batch:
                     # Chunked: labels are per-sample, need to aggregate from chunks
-                    original_indices = batch['original_sample_indices']
+                    # CRITICAL: Move to device BEFORE processing
+                    original_indices = batch['original_sample_indices'].to(self.device)
+                    batch_labels = batch['labels'].to(self.device)
                     # CRITICAL: Must use sorted=True to match train_step's prediction ordering
                     unique_samples = original_indices.unique(sorted=True)
-                    labels_for_metrics = torch.zeros(len(unique_samples), dtype=torch.long)
+                    labels_for_metrics = torch.zeros(len(unique_samples), dtype=torch.long, device=self.device)
                     for i, sample_idx in enumerate(unique_samples):
                         chunk_mask = (original_indices == sample_idx)
-                        labels_for_metrics[i] = batch['labels'][chunk_mask][0]
+                        labels_for_metrics[i] = batch_labels[chunk_mask][0]
                     labels = labels_for_metrics
                 else:
                     labels = batch['labels']
@@ -250,13 +252,15 @@ class Trainer:
                 # Get sample labels for metrics
                 if 'original_sample_indices' in batch:
                     # Chunked: labels are per-sample, need to aggregate from chunks
-                    original_indices = batch['original_sample_indices']
+                    # CRITICAL: Move to device BEFORE processing
+                    original_indices = batch['original_sample_indices'].to(self.device)
+                    batch_labels = batch['labels'].to(self.device)
                     # CRITICAL: Must use sorted=True to match train_step's prediction ordering
                     unique_samples = original_indices.unique(sorted=True)
-                    labels_for_metrics = torch.zeros(len(unique_samples), dtype=torch.long)
+                    labels_for_metrics = torch.zeros(len(unique_samples), dtype=torch.long, device=self.device)
                     for i, sample_idx in enumerate(unique_samples):
                         chunk_mask = (original_indices == sample_idx)
-                        labels_for_metrics[i] = batch['labels'][chunk_mask][0]
+                        labels_for_metrics[i] = batch_labels[chunk_mask][0]
                     labels = labels_for_metrics
                 else:
                     labels = batch['labels']
