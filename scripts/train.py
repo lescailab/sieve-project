@@ -329,8 +329,13 @@ def main():
             # Convert sample indices to chunk indices
             # CRITICAL: train_idx/val_idx are sample-level indices
             # but dataset is indexed by chunks. Must convert!
-            train_chunk_idx = [i for i, info in enumerate(dataset.chunk_info) if info['sample_idx'] in train_idx]
-            val_chunk_idx = [i for i, info in enumerate(dataset.chunk_info) if info['sample_idx'] in val_idx]
+            train_chunk_idx = []
+            for sample_idx in train_idx:
+                train_chunk_idx.extend(dataset.get_chunks_for_sample(int(sample_idx)))
+
+            val_chunk_idx = []
+            for sample_idx in val_idx:
+                val_chunk_idx.extend(dataset.get_chunks_for_sample(int(sample_idx)))
 
             print(f"\nChunk-level split:")
             print(f"  Train: {len(train_chunk_idx)} chunks from {len(train_idx)} samples")
