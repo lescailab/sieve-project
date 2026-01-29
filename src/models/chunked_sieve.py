@@ -223,6 +223,12 @@ class ChunkedSIEVEModel(nn.Module):
         ).squeeze()
 
         # Compute loss at sample level
-        loss = criterion(predictions, sample_labels.float())
+        loss_output = criterion(predictions, sample_labels.float())
+
+        # Handle both dict (SIEVELoss) and scalar (BCEWithLogitsLoss) returns
+        if isinstance(loss_output, dict):
+            loss = loss_output['total']
+        else:
+            loss = loss_output
 
         return loss, predictions
