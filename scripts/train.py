@@ -233,13 +233,6 @@ def main():
     if args.preprocessed_data is None and (args.vcf is None or args.phenotypes is None):
         raise ValueError("Must provide either --preprocessed-data OR both --vcf and --phenotypes")
 
-    # Warn about unsupported features with chunked processing
-    if args.lambda_attr > 0:
-        print("\nWARNING: Attribution regularization (lambda_attr > 0) is not currently")
-        print("supported with chunked processing. Setting lambda_attr=0.0")
-        print("See ChunkedSIEVEModel.train_step() docstring for details.")
-        args.lambda_attr = 0.0
-
     # Create experiment name
     if args.experiment_name is None:
         args.experiment_name = f"{args.level}_run"
