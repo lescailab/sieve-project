@@ -38,9 +38,7 @@ from torch.utils.data import DataLoader
 import numpy as np
 
 from src.encoding import (
-    VariantDataset,
     ChunkedVariantDataset,
-    collate_samples,
     collate_chunks,
     get_feature_dimension,
     AnnotationLevel
