@@ -25,23 +25,68 @@ from src.training.loss import SIEVELoss
 class MockSIEVEModel(nn.Module):
     """Mock SIEVE model for testing."""
 
-    def __init__(self, input_dim: int, num_genes: int):
+    def __init__(self, input_dim: int, num_genes: int, latent_dim: int = None):
         super().__init__()
         self.input_dim = input_dim
         self.num_genes = num_genes
-        # Simple linear classifier for testing
-        self.classifier = nn.Linear(input_dim, 1)
+        self.latent_dim = latent_dim or input_dim  # For simplicity in mock
+        # Simple classifier that mimics PhenotypeClassifier
+        # Input: [batch, num_genes, latent_dim] -> output: [batch, 1]
+        self.classifier = nn.Sequential(
+            nn.Flatten(start_dim=1),  # [batch, num_genes, latent_dim] -> [batch, num_genes * latent_dim]
+            nn.Linear(num_genes * self.latent_dim, 1)
+        )
 
-    def forward(self, features, positions, gene_ids, mask, return_intermediate=False):
-        """Mock forward pass."""
+    def forward(
+        self,
+        features,
+        positions,
+        gene_ids,
+        mask,
+        return_intermediate=False,
+        return_attention=False,
+        return_embeddings=False
+    ):
+        """
+        Mock forward pass that mimics real SIEVE behavior.
+
+        When return_embeddings=True, returns gene embeddings.
+        Otherwise returns logits.
+        """
         batch_size = features.shape[0]
-        # Simple aggregation: mean over variant dimension
-        aggregated = (features * mask.unsqueeze(-1)).sum(dim=1) / mask.sum(dim=1, keepdim=True).clamp(min=1)
-        logits = self.classifier(aggregated)
+        feature_dim = features.shape[2]
 
-        if return_intermediate:
-            return logits, {'variant_embeddings': features}
-        return logits, None
+        # Simple mock gene embeddings: create fake gene-level representations
+        # In reality, this would involve proper aggregation by gene_ids
+        # For testing, just create a tensor of the right shape
+        gene_embeddings = torch.zeros(batch_size, self.num_genes, self.latent_dim, device=features.device)
+
+        # Mock: assign variant features to genes (very simplified)
+        for b in range(batch_size):
+            for v in range(features.shape[1]):
+                if mask[b, v] > 0:
+                    gene_id = gene_ids[b, v].item()
+                    if gene_id < self.num_genes:
+                        gene_embeddings[b, gene_id] = features[b, v]
+
+        # Prepare intermediates if requested
+        intermediates = None
+        if return_intermediate or return_attention or return_embeddings:
+            intermediates = {
+                'variant_embeddings': features,
+                'gene_embeddings': gene_embeddings
+            }
+            if return_attention:
+                # Mock attention weights
+                intermediates['attention_weights'] = []
+
+        # Return embeddings or logits based on flag
+        if return_embeddings:
+            return gene_embeddings, intermediates
+        else:
+            # Classify from gene embeddings
+            logits = self.classifier(gene_embeddings)
+            return logits, intermediates
 
 
 class TestChunkedSIEVEModel:
@@ -150,7 +195,7 @@ class TestChunkedSIEVEModel:
 
         with torch.no_grad():
             # Forward pass with chunking
-            predictions = chunked_model.forward(
+            predictions, intermediates = chunked_model.forward(
                 features=sample_batch['features'],
                 positions=sample_batch['positions'],
                 gene_ids=sample_batch['gene_ids'],
@@ -218,7 +263,7 @@ class TestChunkedSIEVEModel:
         mask = torch.randint(0, 2, (batch_size, num_variants)).float().to(device)
 
         with torch.no_grad():
-            predictions = chunked_model.forward(
+            predictions, intermediates = chunked_model.forward(
                 features=features,
                 positions=positions,
                 gene_ids=gene_ids,
@@ -232,8 +277,8 @@ class TestChunkedSIEVEModel:
             print(f"✓ Forward without chunking: {batch_size} predictions")
 
     def test_different_aggregation_methods(self, base_model, device):
-        """Test that unsupported aggregation methods raise NotImplementedError."""
-        # Test 'max' aggregation
+        """Test different aggregation methods: max works, attention raises NotImplementedError."""
+        # Test 'max' aggregation (should work)
         chunked_model_max = ChunkedSIEVEModel(base_model, aggregation_method='max')
         chunked_model_max.to(device)
 
@@ -249,8 +294,9 @@ class TestChunkedSIEVEModel:
         total_chunks = torch.tensor([2, 2]).to(device)
         original_sample_indices = torch.tensor([0, 0]).to(device)
 
-        with pytest.raises(NotImplementedError, match="not yet implemented"):
-            chunked_model_max.forward(
+        # Max aggregation should work
+        with torch.no_grad():
+            predictions, intermediates = chunked_model_max.forward(
                 features=features,
                 positions=positions,
                 gene_ids=gene_ids,
@@ -259,8 +305,12 @@ class TestChunkedSIEVEModel:
                 total_chunks=total_chunks,
                 original_sample_indices=original_sample_indices
             )
+            # Should aggregate to 1 unique sample
+            assert predictions.shape[0] == 1, f"Expected 1 sample, got {predictions.shape[0]}"
 
-        # Test 'attention' aggregation
+        print(f"✓ Max aggregation works correctly")
+
+        # Test 'attention' aggregation (should raise NotImplementedError)
         chunked_model_attention = ChunkedSIEVEModel(
             base_model,
             aggregation_method='attention',
