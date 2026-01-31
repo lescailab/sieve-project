@@ -470,6 +470,16 @@ def main():
         print("Analyzing Attention Patterns")
         print("="*60)
 
+        # Create dataloader for attention analysis
+        dataloader = DataLoader(
+            dataset,
+            batch_size=args.batch_size,
+            shuffle=False,
+            collate_fn=collate_chunks,
+            num_workers=0
+        )
+        print(f"Created dataloader with {len(dataloader)} batches")
+
         analyzer = AttentionAnalyzer(
             model=model,
             device=args.device,
@@ -480,20 +490,26 @@ def main():
 
         print("Extracting attention weights...")
         for batch_idx, batch in enumerate(dataloader):
+            # Move batch to device
+            features = batch['features'].to(args.device)
+            positions = batch['positions'].to(args.device)
+            gene_ids = batch['gene_ids'].to(args.device)
+            mask = batch['mask'].to(args.device)
+
             # Extract attention
             attention_weights = analyzer.extract_attention_weights(
-                variant_features=batch['features'],
-                positions=batch['positions'],
-                gene_ids=batch['gene_ids'],
-                mask=batch['mask']
+                variant_features=features,
+                positions=positions,
+                gene_ids=gene_ids,
+                mask=mask
             )
 
             # Find interactions
             interactions = analyzer.find_top_interactions(
                 attention_weights=attention_weights,
-                positions=batch['positions'],
-                gene_ids=batch['gene_ids'],
-                mask=batch['mask'],
+                positions=positions,
+                gene_ids=gene_ids,
+                mask=mask,
                 top_k=args.top_k_interactions,
                 aggregate_layers='mean',
                 aggregate_heads='mean'
