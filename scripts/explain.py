@@ -83,6 +83,8 @@ def parse_args():
                         help='Batch size for dataloader (samples processed individually during IG to avoid OOM)')
     parser.add_argument('--skip-attention', action='store_true',
                         help='Skip attention analysis (faster)')
+    parser.add_argument('--skip-ig', action='store_true',
+                        help='Skip Integrated Gradients computation (use if you only need attention analysis)')
     parser.add_argument('--top-k-variants', type=int, default=100,
                         help='Number of top variants to extract')
     parser.add_argument('--top-k-interactions', type=int, default=100,
@@ -230,239 +232,247 @@ def main():
         print("  Using model directly for Integrated Gradients")
 
     # === INTEGRATED GRADIENTS (CHUNKED) ===
-    print("\n" + "="*60)
-    print("Computing Integrated Gradients Attributions (CHUNKED)")
-    print("="*60)
-
-    explainer = IntegratedGradientsExplainer(
-        model=ig_model,
-        device=args.device,
-        n_steps=args.n_steps,
-        max_variants=chunk_size  # Process full chunks (no truncation within chunks)
-    )
-
-    print(f"IG Configuration:")
-    print(f"  Integration steps: {args.n_steps}")
-    print(f"  Chunk size: {chunk_size}")
-    print(f"  Processing ALL chunks per sample for FULL GENOME coverage")
-
-    # Process each sample's chunks and combine attributions
-    all_attributions = []
-    all_variant_scores = []
-    all_metadata = []
-
-    num_samples = len(all_samples)
-    print(f"\nProcessing {num_samples} samples (chunk-by-chunk)...")
-
-    for sample_idx in range(num_samples):
-        if (sample_idx + 1) % 10 == 0 or (sample_idx + 1) == num_samples:
-            print(f"  Sample {sample_idx + 1}/{num_samples}...")
-
-        # Get all chunks for this sample
-        chunk_indices = dataset.get_chunks_for_sample(sample_idx)
-
-        # Process each chunk
-        chunk_attributions = []
-        chunk_positions = []
-        chunk_gene_ids = []
-
-        for chunk_idx in chunk_indices:
-            chunk = dataset[chunk_idx]
-
-            # Move to device
-            features = chunk['features'].unsqueeze(0).to(args.device)
-            positions = chunk['positions'].unsqueeze(0).to(args.device)
-            gene_ids = chunk['gene_ids'].unsqueeze(0).to(args.device)
-            mask = chunk['mask'].unsqueeze(0).to(args.device)
-
-            # Compute attributions for this chunk
-            attr = explainer.attribute(features, positions, gene_ids, mask)
-
-            # Extract valid variants (non-padded)
-            valid_mask = mask[0].cpu().numpy()
-            attr_valid = attr[0][valid_mask].cpu().numpy()
-
-            chunk_attributions.append(attr_valid)
-            chunk_positions.append(positions[0][valid_mask].cpu().numpy())
-            chunk_gene_ids.append(gene_ids[0][valid_mask].cpu().numpy())
-
-        # Combine all chunks for this sample
-        sample_attributions = np.concatenate(chunk_attributions, axis=0)
-        sample_positions = np.concatenate(chunk_positions, axis=0)
-        sample_gene_ids = np.concatenate(chunk_gene_ids, axis=0)
-
-        # Aggregate to variant scores (L2 norm across features)
-        if sample_attributions.ndim > 1:
-            sample_variant_scores = np.linalg.norm(sample_attributions, ord=2, axis=1)
-        else:
-            sample_variant_scores = np.abs(sample_attributions)
-
-        # Store for this sample
-        all_attributions.append(sample_attributions)
-        all_variant_scores.append(sample_variant_scores)
-        all_metadata.append({
-            'positions': sample_positions,
-            'gene_ids': sample_gene_ids,
-            'sample_idx': sample_idx,
-            'sample_id': all_samples[sample_idx].sample_id,
-            'label': all_samples[sample_idx].label
-        })
-
-    attributions = all_attributions
-    variant_scores = all_variant_scores
-    metadata = all_metadata
-
-    print(f"\nComputed attributions for {len(attributions)} samples")
-    print(f"CRITICAL: All chunks processed - FULL GENOME coverage achieved!")
-
-    # Diagnostic: Check what variants are in the metadata
-    print(f"\nDiagnostic: Checking metadata variant distribution...")
-    metadata_variant_count = sum(len(m['positions']) for m in metadata)
-    print(f"  Total variants in metadata across all samples: {metadata_variant_count:,}")
-
-    # Check chromosome distribution in metadata
-    from collections import Counter
-    all_chroms = []
-    for sample in all_samples:
-        for variant in sample.variants:
-            all_chroms.append(variant.chrom)
-
-    chrom_dist = Counter(all_chroms)
-    print(f"  Chromosomes in original data: {len(chrom_dist)}")
-    for chrom in sorted(chrom_dist.keys(), key=lambda x: (not x.isdigit(), int(x) if x.isdigit() else 999, x))[:10]:
-        print(f"    Chr {chrom}: {chrom_dist[chrom]:,} variants")
-    if len(chrom_dist) > 10:
-        print(f"    ... and {len(chrom_dist) - 10} more chromosomes")
-
-    # Check a sample of positions and genes from metadata
-    if len(metadata) > 0 and len(metadata[0]['positions']) > 0:
-        sample_meta = metadata[0]
-        print(f"\n  First sample has {len(sample_meta['positions']):,} variants in attributions")
-        print(f"  First 5 positions: {sample_meta['positions'][:5].tolist()}")
-        print(f"  First 5 gene_ids: {sample_meta['gene_ids'][:5].tolist()}")
-
-    # Save raw attributions
-    attributions_path = output_dir / 'attributions.npz'
-    np.savez(
-        attributions_path,
-        attributions=np.array(attributions, dtype=object),
-        variant_scores=np.array(variant_scores, dtype=object),
-        metadata=np.array(metadata, dtype=object)
-    )
-    print(f"Saved attributions to {attributions_path}")
-
-    # === BUILD VARIANT INFO MAP ===
-    # Map (position, gene_id) -> {chromosome, gene_name} for annotation
-    # CRITICAL: Use the same gene_index as the dataset to ensure consistency
-    print("\nBuilding variant info map...")
-
-    # Use the dataset's gene_index (not a new one!)
-    gene_index = dataset.gene_index
-
-    variant_info_map = {}
-    for sample in all_samples:
-        for variant in sample.variants:
-            pos = variant.pos
-            gene_symbol = variant.gene
-            chrom = variant.chrom
-
-            # Skip genes not in dataset's gene_index (shouldn't happen but be safe)
-            if gene_symbol not in gene_index:
-                print(f"WARNING: Gene {gene_symbol} not in dataset gene_index!")
-                continue
-
-            gene_id = gene_index[gene_symbol]
-
-            key = (pos, gene_id)
-            if key not in variant_info_map:
-                variant_info_map[key] = {
-                    'chromosome': chrom,
-                    'gene_name': gene_symbol
-                }
-
-    print(f"Mapped {len(variant_info_map)} unique (position, gene_id) combinations")
-
-    # Diagnostic: Check chromosome distribution in variant_info_map
-    chrom_counts = {}
-    for info in variant_info_map.values():
-        chrom = info['chromosome']
-        chrom_counts[chrom] = chrom_counts.get(chrom, 0) + 1
-
-    print(f"Variant info map chromosome distribution:")
-    for chrom in sorted(chrom_counts.keys(), key=lambda x: (x.isdigit() and int(x) or 999, x))[:10]:
-        print(f"  Chr {chrom}: {chrom_counts[chrom]} unique variants")
-    if len(chrom_counts) > 10:
-        print(f"  ... and {len(chrom_counts) - 10} more chromosomes")
-
-    # === VARIANT RANKING ===
-    print("\n" + "="*60)
-    print("Ranking Variants")
-    print("="*60)
-
-    ranker = VariantRanker(aggregation='rank_average', variant_info_map=variant_info_map)
-
-    # Separate cases and controls
-    case_indices = [i for i, m in enumerate(metadata) if m.get('label') == 1]
-    control_indices = [i for i, m in enumerate(metadata) if m.get('label') == 0]
-
-    print(f"Cases: {len(case_indices)}, Controls: {len(control_indices)}")
-
-    # Rank variants
-    variant_rankings = ranker.rank_variants(
-        attributions=variant_scores,
-        metadata=metadata,
-        case_indices=case_indices,
-        control_indices=control_indices
-    )
-
-    print(f"Ranked {len(variant_rankings)} unique variants")
-
-    # Diagnostic: Check chromosome distribution in variant rankings
-    if 'chromosome' in variant_rankings.columns:
-        ranking_chrom_counts = variant_rankings['chromosome'].value_counts()
-        print(f"\nDiagnostic: Variant rankings chromosome distribution:")
-        print(f"  Unique chromosomes: {len(ranking_chrom_counts)}")
-        for chrom in sorted(ranking_chrom_counts.index, key=lambda x: (not x.isdigit(), int(x) if x.isdigit() else 999, x))[:10]:
-            print(f"  Chr {chrom}: {ranking_chrom_counts[chrom]} variants")
-        if len(ranking_chrom_counts) > 10:
-            print(f"  ... and {len(ranking_chrom_counts) - 10} more chromosomes")
-
-        if len(ranking_chrom_counts) == 1:
-            print(f"  ❌ CRITICAL: Only 1 chromosome in rankings! This is the bug we're looking for.")
-    else:
-        print("  ⚠️ WARNING: No chromosome column in variant rankings!")
-
-    # Rank genes
-    gene_rankings = ranker.rank_genes(
-        variant_rankings=variant_rankings,
-        aggregation='max'
-    )
-
-    print(f"Ranked {len(gene_rankings)} genes")
-
-    # Get case-enriched variants
-    if case_indices and control_indices:
-        try:
-            case_enriched = ranker.get_case_enriched_variants(
-                variant_rankings=variant_rankings,
-                min_case_samples=min(5, len(case_indices) // 4),
-                min_diff=0.05,
-                top_k=args.top_k_variants
-            )
-            print(f"Identified {len(case_enriched)} case-enriched variants")
-        except (ValueError, KeyError):
-            print("Not enough data for case-enriched analysis")
-            case_enriched = None
-    else:
+    if args.skip_ig:
+        print("\n" + "="*60)
+        print("Skipping Integrated Gradients (--skip-ig specified)")
+        print("="*60)
+        variant_rankings = None
+        gene_rankings = None
         case_enriched = None
+    else:
+        print("\n" + "="*60)
+        print("Computing Integrated Gradients Attributions (CHUNKED)")
+        print("="*60)
 
-    # Export rankings
-    ranker.export_rankings(
-        variant_rankings=variant_rankings,
-        gene_rankings=gene_rankings,
-        output_dir=str(output_dir),
-        prefix='sieve'
-    )
+        explainer = IntegratedGradientsExplainer(
+            model=ig_model,
+            device=args.device,
+            n_steps=args.n_steps,
+            max_variants=chunk_size  # Process full chunks (no truncation within chunks)
+        )
+
+        print(f"IG Configuration:")
+        print(f"  Integration steps: {args.n_steps}")
+        print(f"  Chunk size: {chunk_size}")
+        print(f"  Processing ALL chunks per sample for FULL GENOME coverage")
+
+        # Process each sample's chunks and combine attributions
+        all_attributions = []
+        all_variant_scores = []
+        all_metadata = []
+
+        num_samples = len(all_samples)
+        print(f"\nProcessing {num_samples} samples (chunk-by-chunk)...")
+
+        for sample_idx in range(num_samples):
+            if (sample_idx + 1) % 10 == 0 or (sample_idx + 1) == num_samples:
+                print(f"  Sample {sample_idx + 1}/{num_samples}...")
+
+            # Get all chunks for this sample
+            chunk_indices = dataset.get_chunks_for_sample(sample_idx)
+
+            # Process each chunk
+            chunk_attributions = []
+            chunk_positions = []
+            chunk_gene_ids = []
+
+            for chunk_idx in chunk_indices:
+                chunk = dataset[chunk_idx]
+
+                # Move to device
+                features = chunk['features'].unsqueeze(0).to(args.device)
+                positions = chunk['positions'].unsqueeze(0).to(args.device)
+                gene_ids = chunk['gene_ids'].unsqueeze(0).to(args.device)
+                mask = chunk['mask'].unsqueeze(0).to(args.device)
+
+                # Compute attributions for this chunk
+                attr = explainer.attribute(features, positions, gene_ids, mask)
+
+                # Extract valid variants (non-padded)
+                valid_mask = mask[0].cpu().numpy()
+                attr_valid = attr[0][valid_mask].cpu().numpy()
+
+                chunk_attributions.append(attr_valid)
+                chunk_positions.append(positions[0][valid_mask].cpu().numpy())
+                chunk_gene_ids.append(gene_ids[0][valid_mask].cpu().numpy())
+
+            # Combine all chunks for this sample
+            sample_attributions = np.concatenate(chunk_attributions, axis=0)
+            sample_positions = np.concatenate(chunk_positions, axis=0)
+            sample_gene_ids = np.concatenate(chunk_gene_ids, axis=0)
+
+            # Aggregate to variant scores (L2 norm across features)
+            if sample_attributions.ndim > 1:
+                sample_variant_scores = np.linalg.norm(sample_attributions, ord=2, axis=1)
+            else:
+                sample_variant_scores = np.abs(sample_attributions)
+
+            # Store for this sample
+            all_attributions.append(sample_attributions)
+            all_variant_scores.append(sample_variant_scores)
+            all_metadata.append({
+                'positions': sample_positions,
+                'gene_ids': sample_gene_ids,
+                'sample_idx': sample_idx,
+                'sample_id': all_samples[sample_idx].sample_id,
+                    'label': all_samples[sample_idx].label
+            })
+
+        attributions = all_attributions
+        variant_scores = all_variant_scores
+        metadata = all_metadata
+
+        print(f"\nComputed attributions for {len(attributions)} samples")
+        print(f"CRITICAL: All chunks processed - FULL GENOME coverage achieved!")
+
+        # Diagnostic: Check what variants are in the metadata
+        print(f"\nDiagnostic: Checking metadata variant distribution...")
+        metadata_variant_count = sum(len(m['positions']) for m in metadata)
+        print(f"  Total variants in metadata across all samples: {metadata_variant_count:,}")
+
+        # Check chromosome distribution in metadata
+        from collections import Counter
+        all_chroms = []
+        for sample in all_samples:
+            for variant in sample.variants:
+                all_chroms.append(variant.chrom)
+
+        chrom_dist = Counter(all_chroms)
+        print(f"  Chromosomes in original data: {len(chrom_dist)}")
+        for chrom in sorted(chrom_dist.keys(), key=lambda x: (not x.isdigit(), int(x) if x.isdigit() else 999, x))[:10]:
+            print(f"    Chr {chrom}: {chrom_dist[chrom]:,} variants")
+        if len(chrom_dist) > 10:
+            print(f"    ... and {len(chrom_dist) - 10} more chromosomes")
+
+        # Check a sample of positions and genes from metadata
+        if len(metadata) > 0 and len(metadata[0]['positions']) > 0:
+            sample_meta = metadata[0]
+            print(f"\n  First sample has {len(sample_meta['positions']):,} variants in attributions")
+            print(f"  First 5 positions: {sample_meta['positions'][:5].tolist()}")
+            print(f"  First 5 gene_ids: {sample_meta['gene_ids'][:5].tolist()}")
+
+        # Save raw attributions
+        attributions_path = output_dir / 'attributions.npz'
+        np.savez(
+            attributions_path,
+            attributions=np.array(attributions, dtype=object),
+            variant_scores=np.array(variant_scores, dtype=object),
+            metadata=np.array(metadata, dtype=object)
+        )
+        print(f"Saved attributions to {attributions_path}")
+
+        # === BUILD VARIANT INFO MAP ===
+        # Map (position, gene_id) -> {chromosome, gene_name} for annotation
+        # CRITICAL: Use the same gene_index as the dataset to ensure consistency
+        print("\nBuilding variant info map...")
+
+        # Use the dataset's gene_index (not a new one!)
+        gene_index = dataset.gene_index
+
+        variant_info_map = {}
+        for sample in all_samples:
+            for variant in sample.variants:
+                pos = variant.pos
+                gene_symbol = variant.gene
+                chrom = variant.chrom
+
+                # Skip genes not in dataset's gene_index (shouldn't happen but be safe)
+                if gene_symbol not in gene_index:
+                    print(f"WARNING: Gene {gene_symbol} not in dataset gene_index!")
+                    continue
+
+                gene_id = gene_index[gene_symbol]
+
+                key = (pos, gene_id)
+                if key not in variant_info_map:
+                    variant_info_map[key] = {
+                        'chromosome': chrom,
+                        'gene_name': gene_symbol
+                    }
+
+        print(f"Mapped {len(variant_info_map)} unique (position, gene_id) combinations")
+
+        # Diagnostic: Check chromosome distribution in variant_info_map
+        chrom_counts = {}
+        for info in variant_info_map.values():
+            chrom = info['chromosome']
+            chrom_counts[chrom] = chrom_counts.get(chrom, 0) + 1
+
+        print(f"Variant info map chromosome distribution:")
+        for chrom in sorted(chrom_counts.keys(), key=lambda x: (x.isdigit() and int(x) or 999, x))[:10]:
+            print(f"  Chr {chrom}: {chrom_counts[chrom]} unique variants")
+        if len(chrom_counts) > 10:
+            print(f"  ... and {len(chrom_counts) - 10} more chromosomes")
+
+        # === VARIANT RANKING ===
+        print("\n" + "="*60)
+        print("Ranking Variants")
+        print("="*60)
+
+        ranker = VariantRanker(aggregation='rank_average', variant_info_map=variant_info_map)
+
+        # Separate cases and controls
+        case_indices = [i for i, m in enumerate(metadata) if m.get('label') == 1]
+        control_indices = [i for i, m in enumerate(metadata) if m.get('label') == 0]
+
+        print(f"Cases: {len(case_indices)}, Controls: {len(control_indices)}")
+
+        # Rank variants
+        variant_rankings = ranker.rank_variants(
+            attributions=variant_scores,
+            metadata=metadata,
+            case_indices=case_indices,
+            control_indices=control_indices
+        )
+
+        print(f"Ranked {len(variant_rankings)} unique variants")
+
+        # Diagnostic: Check chromosome distribution in variant rankings
+        if 'chromosome' in variant_rankings.columns:
+            ranking_chrom_counts = variant_rankings['chromosome'].value_counts()
+            print(f"\nDiagnostic: Variant rankings chromosome distribution:")
+            print(f"  Unique chromosomes: {len(ranking_chrom_counts)}")
+            for chrom in sorted(ranking_chrom_counts.index, key=lambda x: (not x.isdigit(), int(x) if x.isdigit() else 999, x))[:10]:
+                print(f"  Chr {chrom}: {ranking_chrom_counts[chrom]} variants")
+            if len(ranking_chrom_counts) > 10:
+                print(f"  ... and {len(ranking_chrom_counts) - 10} more chromosomes")
+
+            if len(ranking_chrom_counts) == 1:
+                print(f"  ❌ CRITICAL: Only 1 chromosome in rankings! This is the bug we're looking for.")
+        else:
+            print("  ⚠️ WARNING: No chromosome column in variant rankings!")
+
+        # Rank genes
+        gene_rankings = ranker.rank_genes(
+            variant_rankings=variant_rankings,
+            aggregation='max'
+        )
+
+        print(f"Ranked {len(gene_rankings)} genes")
+
+        # Get case-enriched variants
+        if case_indices and control_indices:
+            try:
+                case_enriched = ranker.get_case_enriched_variants(
+                    variant_rankings=variant_rankings,
+                    min_case_samples=min(5, len(case_indices) // 4),
+                    min_diff=0.05,
+                    top_k=args.top_k_variants
+                )
+                print(f"Identified {len(case_enriched)} case-enriched variants")
+            except (ValueError, KeyError):
+                print("Not enough data for case-enriched analysis")
+                case_enriched = None
+        else:
+            case_enriched = None
+
+        # Export rankings
+        ranker.export_rankings(
+            variant_rankings=variant_rankings,
+            gene_rankings=gene_rankings,
+            output_dir=str(output_dir),
+            prefix='sieve'
+        )
 
     # === ATTENTION ANALYSIS ===
     if not args.skip_attention:
@@ -542,17 +552,20 @@ def main():
     print("Summary")
     print("="*60)
 
-    print(f"\nTop 10 Variants by Attribution:")
-    print(variant_rankings.head(10)[['position', 'gene_id', 'mean_attribution', 'num_samples']])
+    if variant_rankings is not None:
+        print(f"\nTop 10 Variants by Attribution:")
+        print(variant_rankings.head(10)[['position', 'gene_id', 'mean_attribution', 'num_samples']])
 
-    print(f"\nTop 10 Genes:")
-    print(gene_rankings.head(10)[['gene_id', 'num_variants', 'gene_score', 'top_variant_pos']])
+        print(f"\nTop 10 Genes:")
+        print(gene_rankings.head(10)[['gene_id', 'num_variants', 'gene_score', 'top_variant_pos']])
 
-    if case_enriched is not None and len(case_enriched) > 0:
-        print(f"\nTop 10 Case-Enriched Variants:")
-        print(case_enriched.head(10)[[
-            'position', 'gene_id', 'case_attribution', 'control_attribution', 'case_control_diff'
-        ]])
+        if case_enriched is not None and len(case_enriched) > 0:
+            print(f"\nTop 10 Case-Enriched Variants:")
+            print(case_enriched.head(10)[[
+                'position', 'gene_id', 'case_attribution', 'control_attribution', 'case_control_diff'
+            ]])
+    else:
+        print("\n(Integrated Gradients skipped - no variant rankings to display)")
 
     print(f"\nResults saved to {output_dir}")
     print("="*60)
