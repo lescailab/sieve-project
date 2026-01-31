@@ -280,7 +280,7 @@ def main():
 
             # Extract valid variants (non-padded)
             valid_mask = mask[0].cpu().numpy()
-            attr_valid = attr[0][valid_mask]
+            attr_valid = attr[0][valid_mask].cpu().numpy()
 
             chunk_attributions.append(attr_valid)
             chunk_positions.append(positions[0][valid_mask].cpu().numpy())
