@@ -315,7 +315,7 @@ def main():
                 'gene_ids': sample_gene_ids,
                 'sample_idx': sample_idx,
                 'sample_id': all_samples[sample_idx].sample_id,
-                    'label': all_samples[sample_idx].label
+                'label': all_samples[sample_idx].label
             })
 
         attributions = all_attributions
