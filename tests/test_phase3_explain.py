@@ -163,7 +163,7 @@ class TestVariantRanking:
         """Test variant ranking."""
         ranker = VariantRanker()
 
-        # Create dummy attribution data
+        # Create dummy attribution data (chromosomes now required)
         all_scores = [
             np.array([0.5, 0.3, 0.8]),
             np.array([0.2, 0.9]),
@@ -172,11 +172,13 @@ class TestVariantRanking:
             {
                 'positions': np.array([100, 200, 300]),
                 'gene_ids': np.array([0, 1, 0]),
+                'chromosomes': np.array(['1', '1', '1']),
                 'label': 1
             },
             {
                 'positions': np.array([100, 400]),
                 'gene_ids': np.array([0, 2]),
+                'chromosomes': np.array(['1', '2']),
                 'label': 0
             }
         ]
@@ -188,12 +190,66 @@ class TestVariantRanking:
         assert 'gene_id' in rankings.columns
         assert 'mean_attribution' in rankings.columns
         assert 'num_samples' in rankings.columns
+        assert 'chromosome' in rankings.columns
 
-        # Check we got all unique positions
-        unique_positions = set()
+        # Check we got all unique (chrom, pos, gene) combinations
+        unique_keys = set()
         for meta in all_meta:
-            unique_positions.update(meta['positions'])
-        assert len(rankings) == len(unique_positions)
+            for chrom, pos, gene in zip(meta['chromosomes'], meta['positions'], meta['gene_ids']):
+                unique_keys.add((chrom, pos, gene))
+        assert len(rankings) == len(unique_keys)
+
+    def test_rank_variants_chromosome_collision_prevention(self):
+        """Test that same position on different chromosomes creates separate entries."""
+        ranker = VariantRanker()
+
+        # Create data where position 100 with gene 0 exists on BOTH chr1 and chrX
+        # This would have caused a collision with the old (pos, gene) key
+        all_scores = [
+            np.array([0.9, 0.1]),  # High score for chr1:100, low for chrX:100
+        ]
+        all_meta = [
+            {
+                'positions': np.array([100, 100]),  # Same position!
+                'gene_ids': np.array([0, 0]),        # Same gene!
+                'chromosomes': np.array(['1', 'X']), # Different chromosomes
+                'label': 1
+            },
+        ]
+
+        rankings = ranker.rank_variants(all_scores, all_meta)
+
+        # CRITICAL: We should get TWO rows, not one
+        assert len(rankings) == 2, (
+            f"Expected 2 rows for same pos/gene on different chromosomes, got {len(rankings)}"
+        )
+
+        # Verify both chromosomes are present
+        chroms = set(rankings['chromosome'].tolist())
+        assert chroms == {'1', 'X'}, f"Expected chromosomes {{'1', 'X'}}, got {chroms}"
+
+        # Verify the attribution scores are correct (not merged)
+        chr1_row = rankings[rankings['chromosome'] == '1'].iloc[0]
+        chrX_row = rankings[rankings['chromosome'] == 'X'].iloc[0]
+        assert abs(chr1_row['mean_attribution'] - 0.9) < 0.01, "Chr1 attribution should be 0.9"
+        assert abs(chrX_row['mean_attribution'] - 0.1) < 0.01, "ChrX attribution should be 0.1"
+
+    def test_rank_variants_missing_chromosomes_raises_error(self):
+        """Test that missing chromosomes in metadata raises ValueError."""
+        ranker = VariantRanker()
+
+        all_scores = [np.array([0.5])]
+        all_meta = [
+            {
+                'positions': np.array([100]),
+                'gene_ids': np.array([0]),
+                # NO 'chromosomes' key - should raise error
+                'label': 1
+            },
+        ]
+
+        with pytest.raises(ValueError, match="chromosomes"):
+            ranker.rank_variants(all_scores, all_meta)
 
     def test_rank_genes(self):
         """Test gene ranking."""
