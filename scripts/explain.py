@@ -407,9 +407,9 @@ def main():
         print(f"Mapped {len(variant_info_map)} unique (chrom, position, gene_id) combinations")
 
         # Diagnostic: Check chromosome distribution in variant_info_map
+        # Chromosome is now part of the KEY (chrom, pos, gene_id), not the value
         chrom_counts = {}
-        for info in variant_info_map.values():
-            chrom = info['chromosome']
+        for (chrom, pos, gene_id) in variant_info_map.keys():
             chrom_counts[chrom] = chrom_counts.get(chrom, 0) + 1
 
         print(f"Variant info map chromosome distribution:")
