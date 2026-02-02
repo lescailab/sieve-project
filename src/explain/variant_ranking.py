@@ -91,8 +91,15 @@ class VariantRanker:
         for sample_idx, (attr, meta) in enumerate(zip(attributions, metadata)):
             positions = meta['positions']
             genes = meta['gene_ids']
-            # Get chromosomes from metadata (NEW - prevents position collisions)
+            # Get chromosomes from metadata (required to prevent position collisions)
             chromosomes = meta.get('chromosomes', None)
+
+            if chromosomes is None:
+                raise ValueError(
+                    "Metadata must include 'chromosomes' to prevent position collisions. "
+                    "Variants on different chromosomes can have the same numerical position. "
+                    "Please ensure explain.py extracts chromosome info during IG computation."
+                )
 
             # Get absolute attribution scores
             abs_attr = np.abs(attr)
@@ -103,9 +110,8 @@ class VariantRanker:
 
             # Store per-variant scores
             for i, (pos, gene) in enumerate(zip(positions, genes)):
-                # Get chromosome if available, otherwise use 'unknown'
-                chrom = chromosomes[i] if chromosomes is not None else 'unknown'
-                # FIXED: Include chromosome in key to prevent collisions
+                chrom = chromosomes[i]
+                # Key includes chromosome to prevent position collisions across chromosomes
                 key = (str(chrom), int(pos), int(gene))
                 score = float(abs_attr[i])
 
