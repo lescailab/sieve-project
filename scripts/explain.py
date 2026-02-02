@@ -275,9 +275,16 @@ def main():
             chunk_attributions = []
             chunk_positions = []
             chunk_gene_ids = []
+            chunk_chromosomes = []  # NEW: Track chromosomes for each variant
 
             for chunk_idx in chunk_indices:
                 chunk = dataset[chunk_idx]
+
+                # Get chunk info to map back to original variants
+                chunk_info = dataset.chunk_info[chunk_idx]
+                start_idx = chunk_info['start_idx']
+                end_idx = chunk_info['end_idx']
+                original_variants = all_samples[sample_idx].variants[start_idx:end_idx]
 
                 # Move to device
                 features = chunk['features'].unsqueeze(0).to(args.device)
@@ -292,14 +299,19 @@ def main():
                 valid_mask = mask[0].cpu().numpy()
                 attr_valid = attr[0][valid_mask].cpu().numpy()
 
+                # Get chromosomes from original variants (matching valid positions)
+                valid_chroms = np.array([v.chrom for v in original_variants])[valid_mask]
+
                 chunk_attributions.append(attr_valid)
                 chunk_positions.append(positions[0][valid_mask].cpu().numpy())
                 chunk_gene_ids.append(gene_ids[0][valid_mask].cpu().numpy())
+                chunk_chromosomes.append(valid_chroms)
 
             # Combine all chunks for this sample
             sample_attributions = np.concatenate(chunk_attributions, axis=0)
             sample_positions = np.concatenate(chunk_positions, axis=0)
             sample_gene_ids = np.concatenate(chunk_gene_ids, axis=0)
+            sample_chromosomes = np.concatenate(chunk_chromosomes, axis=0)  # NEW
 
             # Aggregate to variant scores (L2 norm across features)
             if sample_attributions.ndim > 1:
@@ -313,6 +325,7 @@ def main():
             all_metadata.append({
                 'positions': sample_positions,
                 'gene_ids': sample_gene_ids,
+                'chromosomes': sample_chromosomes,  # NEW: Include chromosomes
                 'sample_idx': sample_idx,
                 'sample_id': all_samples[sample_idx].sample_id,
                 'label': all_samples[sample_idx].label
@@ -362,8 +375,9 @@ def main():
         print(f"Saved attributions to {attributions_path}")
 
         # === BUILD VARIANT INFO MAP ===
-        # Map (position, gene_id) -> {chromosome, gene_name} for annotation
-        # CRITICAL: Use the same gene_index as the dataset to ensure consistency
+        # Map (chrom, position, gene_id) -> {gene_name} for annotation
+        # CRITICAL: Include chromosome in key to prevent position collisions!
+        # Same position number can exist on different chromosomes.
         print("\nBuilding variant info map...")
 
         # Use the dataset's gene_index (not a new one!)
@@ -383,19 +397,19 @@ def main():
 
                 gene_id = gene_index[gene_symbol]
 
-                key = (pos, gene_id)
+                # FIXED: Include chromosome in key to prevent collisions
+                key = (chrom, pos, gene_id)
                 if key not in variant_info_map:
                     variant_info_map[key] = {
-                        'chromosome': chrom,
                         'gene_name': gene_symbol
                     }
 
-        print(f"Mapped {len(variant_info_map)} unique (position, gene_id) combinations")
+        print(f"Mapped {len(variant_info_map)} unique (chrom, position, gene_id) combinations")
 
         # Diagnostic: Check chromosome distribution in variant_info_map
+        # Chromosome is now part of the KEY (chrom, pos, gene_id), not the value
         chrom_counts = {}
-        for info in variant_info_map.values():
-            chrom = info['chromosome']
+        for (chrom, pos, gene_id) in variant_info_map.keys():
             chrom_counts[chrom] = chrom_counts.get(chrom, 0) + 1
 
         print(f"Variant info map chromosome distribution:")
