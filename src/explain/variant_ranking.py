@@ -80,6 +80,7 @@ class VariantRanker:
             - rank: final rank (1 = most important)
         """
         # Collect variant scores
+        # Key is now (chrom, pos, gene_id) to prevent position collisions
         variant_scores = defaultdict(lambda: {
             'attributions': [],
             'case_attributions': [],
@@ -90,6 +91,15 @@ class VariantRanker:
         for sample_idx, (attr, meta) in enumerate(zip(attributions, metadata)):
             positions = meta['positions']
             genes = meta['gene_ids']
+            # Get chromosomes from metadata (required to prevent position collisions)
+            chromosomes = meta.get('chromosomes', None)
+
+            if chromosomes is None:
+                raise ValueError(
+                    "Metadata must include 'chromosomes' to prevent position collisions. "
+                    "Variants on different chromosomes can have the same numerical position. "
+                    "Please ensure explain.py extracts chromosome info during IG computation."
+                )
 
             # Get absolute attribution scores
             abs_attr = np.abs(attr)
@@ -100,7 +110,9 @@ class VariantRanker:
 
             # Store per-variant scores
             for i, (pos, gene) in enumerate(zip(positions, genes)):
-                key = (int(pos), int(gene))
+                chrom = chromosomes[i]
+                # Key includes chromosome to prevent position collisions across chromosomes
+                key = (str(chrom), int(pos), int(gene))
                 score = float(abs_attr[i])
 
                 variant_scores[key]['attributions'].append(score)
@@ -114,12 +126,11 @@ class VariantRanker:
 
         # Build DataFrame
         records = []
-        for (pos, gene), scores in variant_scores.items():
+        for (chrom, pos, gene), scores in variant_scores.items():
             attrs = np.array(scores['attributions'])
 
-            # Get chromosome and gene_name from variant_info_map
-            variant_info = self.variant_info_map.get((pos, gene), {})
-            chrom = variant_info.get('chromosome', 'unknown')
+            # Get gene_name from variant_info_map (chromosome is now in key)
+            variant_info = self.variant_info_map.get((chrom, pos, gene), {})
             gene_name = variant_info.get('gene_name', f'GENE_{gene}')
 
             record = {
