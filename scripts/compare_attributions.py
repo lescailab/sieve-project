@@ -24,7 +24,7 @@ Author: Lescai Lab
 
 import argparse
 from pathlib import Path
-from typing import List, Optional, Dict, Any
+from typing import Optional, Dict, Any
 
 import numpy as np
 import pandas as pd
@@ -214,9 +214,9 @@ def generate_comparison_plots(
         Output directory for plots
     """
     try:
-        import matplotlib.pyplot as plt
         import matplotlib
         matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
     except ImportError:
         print("Warning: matplotlib not available, skipping plots")
         return
@@ -254,30 +254,63 @@ def generate_comparison_plots(
 
     # 3. Top variants comparison
     ax3 = axes[1, 0]
-    top_n = min(100, len(real_df), len(null_df))
-    real_top = real_df.nlargest(top_n, 'mean_attribution')['mean_attribution'].values
-    null_top = null_df.groupby('permutation').apply(
-        lambda x: x.nlargest(top_n, 'mean_attribution')['mean_attribution'].values
-    )
 
-    # Plot null as range
-    if len(null_top) > 1:
-        null_matrix = np.vstack(null_top.values)
-        null_mean = null_matrix.mean(axis=0)
-        null_std = null_matrix.std(axis=0)
-        ax3.fill_between(range(1, top_n+1), null_mean - null_std, null_mean + null_std,
-                        alpha=0.3, color='grey', label='Null ± 1 std')
-        ax3.plot(range(1, top_n+1), null_mean, color='grey', label='Null mean')
+    # Use the minimum number of variants available per permutation (or overall)
+    if 'permutation' in null_df.columns:
+        group_sizes = null_df.groupby('permutation').size()
+        min_group_size = int(group_sizes.min()) if not group_sizes.empty else 0
     else:
-        ax3.plot(range(1, top_n+1), null_top.values[0], color='grey',
-                label='Null', marker='.', markersize=3)
+        min_group_size = len(null_df)
 
-    ax3.plot(range(1, top_n+1), real_top, color='steelblue',
-            label='Real', marker='.', markersize=3)
-    ax3.set_xlabel('Rank')
-    ax3.set_ylabel('Mean Attribution')
-    ax3.set_title(f'Top {top_n} Variants by Attribution')
-    ax3.legend()
+    top_n = min(100, len(real_df), min_group_size)
+
+    # If there are no variants to compare, skip this panel
+    if top_n == 0:
+        ax3.set_title('Top variants comparison (no data)')
+        ax3.set_xlabel('Rank')
+        ax3.set_ylabel('Mean Attribution')
+    else:
+        real_top = real_df.nlargest(top_n, 'mean_attribution')['mean_attribution'].values
+        null_top = null_df.groupby('permutation').apply(
+            lambda x: x.nlargest(top_n, 'mean_attribution')['mean_attribution'].values
+        )
+
+        # Plot null as range
+        if len(null_top) > 1:
+            null_matrix = np.vstack(null_top.values)
+            null_mean = null_matrix.mean(axis=0)
+            null_std = null_matrix.std(axis=0)
+            ax3.fill_between(
+                range(1, top_n + 1),
+                null_mean - null_std,
+                null_mean + null_std,
+                alpha=0.3,
+                color='grey',
+                label='Null ± 1 std'
+            )
+            ax3.plot(range(1, top_n + 1), null_mean, color='grey', label='Null mean')
+        else:
+            ax3.plot(
+                range(1, top_n + 1),
+                null_top.values[0],
+                color='grey',
+                label='Null',
+                marker='.',
+                markersize=3
+            )
+
+        ax3.plot(
+            range(1, top_n + 1),
+            real_top,
+            color='steelblue',
+            label='Real',
+            marker='.',
+            markersize=3
+        )
+        ax3.set_xlabel('Rank')
+        ax3.set_ylabel('Mean Attribution')
+        ax3.set_title(f'Top {top_n} Variants by Attribution')
+        ax3.legend()
 
     # 4. Enrichment bar plot
     ax4 = axes[1, 1]
