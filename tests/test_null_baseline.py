@@ -6,7 +6,6 @@ Tests for null baseline functionality.
 import tempfile
 from pathlib import Path
 
-import numpy as np
 import torch
 import pytest
 
@@ -106,7 +105,7 @@ def test_permutation_metadata_is_saved():
         mock_data = {'labels': labels}
         torch.save(mock_data, input_path)
 
-        stats = create_single_permutation(str(input_path), str(output_path), seed=999)
+        create_single_permutation(str(input_path), str(output_path), seed=999)
 
         # Load and check metadata
         permuted = torch.load(output_path, weights_only=False)
@@ -138,7 +137,7 @@ def test_permutation_works_with_sample_objects():
         mock_data = {'samples': samples}
         torch.save(mock_data, input_path)
 
-        stats = create_single_permutation(str(input_path), str(output_path), seed=42)
+        create_single_permutation(str(input_path), str(output_path), seed=42)
 
         # Load and check
         permuted = torch.load(output_path, weights_only=False)
