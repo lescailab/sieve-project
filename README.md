@@ -51,12 +51,20 @@ Loss = Classification_Loss + λ × Attribution_Sparsity_Loss
 
 This encourages the model to achieve good classification while relying on a small number of variants, producing more stable and meaningful attributions.
 
+### 4. Null Baseline Attribution Analysis
+
+To distinguish genuine signal from noise, SIEVE includes a null baseline analysis pipeline:
+- Trains identical models on permuted case/control labels
+- Establishes null distribution of attribution scores
+- Computes significance thresholds (p < 0.05, 0.01, 0.001)
+- Identifies variants with attributions exceeding chance expectations
+
 ## Installation
 
 ```bash
 # Clone repository
-git clone https://github.com/lescailab/dl-exome-img.git
-cd dl-exome-img
+git clone https://github.com/lescailab/sieve-project.git
+cd sieve-project
 
 # Create environment
 conda create -n sieve python=3.10
@@ -75,6 +83,7 @@ pip install -e ".[dev]"
 - PyTorch 2.0+
 - cyvcf2 or pysam for VCF parsing
 - CUDA-capable GPU recommended (8GB+ VRAM)
+- scipy, pandas, pyyaml, matplotlib (for analysis)
 
 ## Quick Start
 
@@ -98,68 +107,170 @@ SAMPLE002    0
 python scripts/preprocess.py \
     --vcf data/cohort.vcf.gz \
     --phenotypes data/phenotypes.tsv \
-    --output data/processed/
+    --output data/preprocessed.pt
 ```
 
 ### 3. Train Model
 
 ```bash
-# Train at annotation level L2 (minimal annotations)
+# Train at annotation level L3 (SIFT + PolyPhen)
 python scripts/train.py \
-    --config configs/experiments/level_L2.yaml \
-    --data data/processed/ \
-    --output models/level_L2/
-
-# Run annotation ablation (all levels)
-python scripts/train.py \
-    --config configs/experiments/ablation.yaml \
-    --data data/processed/ \
-    --output models/ablation/
+    --preprocessed-data data/preprocessed.pt \
+    --level L3 \
+    --val-split 0.2 \
+    --lr 0.00001 \
+    --lambda-attr 0.1 \
+    --epochs 100 \
+    --batch-size 16 \
+    --chunk-size 3000 \
+    --output-dir experiments \
+    --experiment-name my_model \
+    --device cuda
 ```
 
 ### 4. Run Explainability Analysis
 
 ```bash
 python scripts/explain.py \
-    --checkpoint models/level_L2/best.pt \
-    --data data/processed/ \
-    --output results/
+    --experiment-dir experiments/my_model \
+    --preprocessed-data data/preprocessed.pt \
+    --output-dir results/explainability \
+    --device cuda
 ```
 
-### 5. Compare Annotation Levels
+This produces:
+- `sieve_variant_rankings.csv` - All variants ranked by attribution
+- `sieve_gene_rankings.csv` - Gene-level aggregated scores
+- `sieve_interactions.csv` - High-attention variant pairs
+
+### 5. Null Baseline Analysis (Statistical Validation)
+
+To establish statistical significance:
 
 ```bash
-python scripts/compare_levels.py \
-    --models models/ablation/ \
-    --output results/ablation_comparison/
+# Option 1: Use the complete pipeline wrapper
+export INPUT_DATA=data/preprocessed.pt
+export REAL_EXPERIMENT=experiments/my_model
+export OUTPUT_BASE=experiments
+bash scripts/run_null_baseline_analysis.sh
+
+# Option 2: Run steps manually
+# Step 1: Create permuted dataset
+python scripts/create_null_baseline.py \
+    --input data/preprocessed.pt \
+    --output data/preprocessed_NULL.pt \
+    --seed 42
+
+# Step 2: Train null model (same params as real)
+python scripts/train.py \
+    --preprocessed-data data/preprocessed_NULL.pt \
+    --level L3 \
+    --experiment-name null_baseline \
+    [... same parameters as real model ...]
+
+# Step 3: Run explainability on null
+python scripts/explain.py \
+    --experiment-dir experiments/null_baseline \
+    --preprocessed-data data/preprocessed_NULL.pt \
+    --output-dir results/null_attributions \
+    --is-null-baseline
+
+# Step 4: Compare real vs null
+python scripts/compare_attributions.py \
+    --real results/explainability/sieve_variant_rankings.csv \
+    --null results/null_attributions/sieve_variant_rankings.csv \
+    --output-dir results/comparison
 ```
 
-## Output
+The comparison produces:
+- `comparison_summary.yaml` - Statistical tests and thresholds
+- `significant_variants_p01.csv` - Variants exceeding p<0.01 threshold
+- `variant_rankings_with_significance.csv` - All variants annotated with significance flags
+- `real_vs_null_comparison.png` - Visualization comparing distributions
 
-SIEVE produces:
+### 6. Annotation Ablation (Compare Levels)
 
-1. **Variant rankings** at each annotation level with attribution scores
-2. **Annotation ablation analysis** identifying level-specific discoveries
-3. **Attention patterns** showing which variant pairs are considered together
-4. **Epistasis candidates** with counterfactual validation scores
-5. **Publication-ready figures** (via R scripts in `src/visualization/`)
+```bash
+# Train models at multiple annotation levels
+for level in L0 L1 L2 L3 L4; do
+    python scripts/train.py \
+        --preprocessed-data data/preprocessed.pt \
+        --level $level \
+        --experiment-name ablation_$level \
+        --output-dir experiments
+done
+
+# Compare discoveries across levels
+python scripts/compare_levels.py \
+    --experiments experiments/ablation_* \
+    --output-dir results/ablation_comparison
+```
+
+## Complete Workflow
+
+The recommended SIEVE workflow:
+
+```
+1. Preprocess VCF → preprocessed.pt
+2. Train real model → experiments/real_model/
+3. Run explainability → results/explainability/
+4. Create null baseline → preprocessed_NULL.pt
+5. Train null model → experiments/null_baseline/
+6. Run null explainability → results/null_attributions/
+7. Compare real vs null → results/comparison/
+   ↓ Review significant_variants_p01.csv
+8. Biological validation (experiments)
+```
+
+## Output Files
+
+### Core Outputs
+
+**From Training:**
+- `best_model.pt` - Model checkpoint
+- `training_history.yaml` - Loss curves and metrics
+- `config.yaml` - Full configuration for reproducibility
+
+**From Explainability:**
+- `sieve_variant_rankings.csv` - Variant-level attributions
+  - Columns: position, chromosome, gene_id, mean_attribution, max_attribution, num_samples
+- `sieve_gene_rankings.csv` - Gene-level scores
+  - Columns: gene_id, num_variants, gene_score, top_variant_pos
+- `sieve_interactions.csv` - Variant pairs with high attention
+  - Columns: pos1, pos2, gene1, gene2, mean_attention, frequency
+
+**From Null Comparison:**
+- `comparison_summary.yaml` - Statistical summary
+  - Thresholds at p<0.10, 0.05, 0.01, 0.001
+  - KS and Mann-Whitney test results
+  - Enrichment factors
+- `significant_variants_p01.csv` - Statistically significant discoveries
+- `variant_rankings_with_significance.csv` - All variants with significance flags
 
 ## Project Structure
 
 ```
-sieve/
+sieve-project/
 ├── CLAUDE.md              # Development context (for AI assistants)
 ├── ARCHITECTURE.md        # Technical model specification
 ├── EXPERIMENTS.md         # Experimental protocol
+├── INSTRUCTIONS.md        # Development workflow guide
+├── README.md              # This file
 ├── src/
 │   ├── data/              # VCF parsing and dataset construction
 │   ├── encoding/          # Multi-level feature encoding
 │   ├── models/            # SIEVE architecture components
 │   ├── training/          # Training with attribution regularization
-│   ├── explain/           # Explainability methods
+│   ├── explain/           # Explainability methods (IG, attention, epistasis)
 │   └── visualization/     # R scripts for figures
 ├── configs/               # Experiment configurations
 ├── scripts/               # Entry point scripts
+│   ├── preprocess.py      # VCF preprocessing
+│   ├── train.py           # Model training
+│   ├── explain.py         # Attribution analysis
+│   ├── create_null_baseline.py   # Permute labels
+│   ├── compare_attributions.py   # Real vs null comparison
+│   └── run_null_baseline_analysis.sh  # Full pipeline
 └── tests/                 # Unit tests
 ```
 
@@ -172,18 +283,45 @@ sieve/
 | Position-aware | ✓ | ✗ | ✗ | ✗ |
 | Built-in interpretability | ✓ | ✗ | Partial | ✗ |
 | Epistasis validation | ✓ | ✗ | ✗ | ✓ |
+| Null baseline calibration | ✓ | ✗ | ✗ | ✗ |
 | Common + rare variants | ✓ | Rare only | All | Common |
+
+## Troubleshooting
+
+### Memory Issues
+
+If you encounter OOM errors:
+- Reduce `--chunk-size` (e.g., 2000 → 1000)
+- Reduce `--batch-size` (e.g., 16 → 8)
+- Use `--gradient-accumulation-steps 8` for effective larger batch
+- Process chromosomes separately with `--chromosomes 1,2,3`
+
+### Slow Training
+
+If training is too slow:
+- Increase `--chunk-size` (more variants per batch)
+- Increase `--batch-size` if GPU memory allows
+- Reduce `--n-steps` for integrated gradients (e.g., 50 → 25)
+- Use `--skip-attention` in explain.py if only need variant rankings
+
+### Model Not Learning
+
+If validation AUC stays near 0.5:
+- Check that phenotypes are loaded correctly (cases/controls balanced?)
+- Reduce learning rate: `--lr 0.000001`
+- Increase `--lambda-attr` if model is too sparse
+- Check for data leakage in preprocessing
 
 ## Citation
 
 If you use SIEVE in your research, please cite:
 
 ```bibtex
-@software{sieve2025,
+@software{sieve2026,
   title = {SIEVE: Sparse Interpretable Exome Variant Explainer},
   author = {Lescai Lab},
-  year = {2025},
-  url = {https://github.com/lescailab/dl-exome-img}
+  year = {2026},
+  url = {https://github.com/lescailab/sieve-project}
 }
 ```
 
@@ -193,7 +331,13 @@ MIT License. See [LICENSE](LICENSE) for details.
 
 ## Contributing
 
-We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+We welcome contributions! Key areas for improvement:
+- Additional annotation levels or feature encodings
+- Alternative aggregation methods (beyond max pooling)
+- Visualization improvements
+- Performance optimization
+
+Please open an issue to discuss major changes before submitting PRs.
 
 ## Acknowledgments
 
@@ -202,3 +346,13 @@ This project builds on insights from:
 - GenNet (van Hilten et al., 2021, Communications Biology)
 - GWAS_NN (Cui et al., 2022, Communications Biology)
 - DeepCOMBI (Mieth et al., 2021, NAR Genomics and Bioinformatics)
+
+## Support
+
+- **Issues**: https://github.com/lescailab/sieve-project/issues
+- **Documentation**: See CLAUDE.md, ARCHITECTURE.md, EXPERIMENTS.md
+- **Questions**: Open a GitHub discussion
+
+---
+
+**Note**: SIEVE is research software. Results should be validated experimentally before making clinical or biological claims.
