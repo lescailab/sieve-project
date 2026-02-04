@@ -91,6 +91,8 @@ def parse_args():
                         help='Number of top interactions to extract')
     parser.add_argument('--attention-threshold', type=float, default=0.1,
                         help='Minimum attention weight for interactions')
+    parser.add_argument('--is-null-baseline', action='store_true',
+                        help='Flag indicating this is a null baseline analysis (for metadata)')
 
     # Device
     parser.add_argument('--device', type=str, default='cuda',
@@ -560,6 +562,27 @@ def main():
         interactions_path = output_dir / 'sieve_interactions.csv'
         interactions_df.to_csv(interactions_path, index=False)
         print(f"Saved interactions to {interactions_path}")
+
+    # === SAVE ANALYSIS METADATA ===
+    analysis_metadata = {
+        'is_null_baseline': args.is_null_baseline,
+        'experiment_dir': str(args.experiment_dir) if args.experiment_dir else str(args.checkpoint),
+        'n_samples': len(all_samples),
+        'annotation_level': config['level'],
+        'n_integration_steps': args.n_steps,
+        'max_variants_per_sample': args.max_variants,
+        'skip_attention': args.skip_attention,
+        'skip_ig': args.skip_ig,
+    }
+
+    if variant_rankings is not None:
+        analysis_metadata['n_ranked_variants'] = len(variant_rankings)
+        analysis_metadata['n_ranked_genes'] = len(gene_rankings)
+
+    metadata_path = output_dir / 'analysis_metadata.yaml'
+    with open(metadata_path, 'w') as f:
+        yaml.dump(analysis_metadata, f, default_flow_style=False, sort_keys=False)
+    print(f"Analysis metadata saved to {metadata_path}")
 
     # === SUMMARY ===
     print("\n" + "="*60)
