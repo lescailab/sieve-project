@@ -71,6 +71,7 @@ python scripts/train.py \
     --preprocessed-data preprocessed.pt \
     --level L3 \
     --experiment-name my_model \
+    --output-dir experiments \
     --device cuda
 
 # 4. Explain
@@ -80,6 +81,10 @@ python scripts/explain.py \
     --output-dir results/explainability
 
 # 5. Validate (null baseline)
+# Set required environment variables first
+export INPUT_DATA="preprocessed.pt"
+export REAL_EXPERIMENT="experiments/my_model"
+export OUTPUT_BASE="experiments"
 bash scripts/run_null_baseline_analysis.sh
 ```
 
@@ -141,7 +146,7 @@ python test_model_architecture.py
 python test_training_pipeline.py
 ```
 
-All tests should pass with ✓ symbols.
+All tests should complete without errors. You can also run `pytest` for a more detailed test report.
 
 ### Dependencies Installed
 
@@ -619,30 +624,31 @@ python scripts/train.py --lambda-attr 0.5 ...
 For more robust null baseline estimation:
 
 ```bash
-# Create 5 null permutations
+# Create 5 null permutations (stored under results/null_permutations)
 python scripts/create_null_baseline.py \
     --input preprocessed.pt \
-    --output-dir null_permutations \
+    --output-dir results/null_permutations \
     --n-permutations 5
 
 # Train each (can parallelise)
 for i in {0..4}; do
     python scripts/train.py \
-        --preprocessed-data null_permutations/preprocessed_NULL_perm${i}.pt \
+        --preprocessed-data results/null_permutations/preprocessed_NULL_perm${i}.pt \
         --level L3 \
-        --experiment-name null_perm${i}
+        --experiment-name null_perm${i} \
+        --output-dir experiments
 
     python scripts/explain.py \
         --experiment-dir experiments/null_perm${i} \
-        --preprocessed-data null_permutations/preprocessed_NULL_perm${i}.pt \
-        --output-dir results/null_perm${i} \
+        --preprocessed-data results/null_permutations/preprocessed_NULL_perm${i}.pt \
+        --output-dir results/null_permutations/perm${i} \
         --is-null-baseline
 done
 
-# Compare using all permutations
+# Compare using all permutations (null_dir restricted to null outputs only)
 python scripts/compare_attributions.py \
     --real results/explainability/sieve_variant_rankings.csv \
-    --null-dir results \
+    --null-dir results/null_permutations \
     --output-dir results/comparison_robust
 ```
 
@@ -666,6 +672,8 @@ python scripts/preprocess.py [OPTIONS]
 | `--vcf` | path | required | VCF file path (.vcf.gz) |
 | `--phenotypes` | path | required | Phenotype TSV file |
 | `--output` | path | required | Output .pt file |
+| `--max-variants-per-sample` | int | None | Maximum variants per sample (for debugging/testing) |
+| `--min-gq` | int | 20 | Minimum genotype quality threshold |
 
 **Example**:
 ```bash
@@ -696,23 +704,24 @@ python scripts/train.py [OPTIONS]
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `--batch-size` | int | 16 | Batch size |
+| `--batch-size` | int | 32 | Batch size |
 | `--chunk-size` | int | 3000 | Max variants per chunk |
-| `--gradient-accumulation-steps` | int | 4 | Gradient accumulation |
+| `--chunk-overlap` | int | 0 | Overlap between consecutive chunks |
+| `--gradient-accumulation-steps` | int | 1 | Gradient accumulation |
 | `--epochs` | int | 100 | Maximum epochs |
-| `--lr` | float | 0.00001 | Learning rate |
-| `--lambda-attr` | float | 0.1 | Attribution regularisation |
-| `--early-stopping` | int | 15 | Early stopping patience |
-| `--gradient-clip` | float | 1.0 | Gradient clipping value |
+| `--lr` | float | 0.001 | Learning rate |
+| `--lambda-attr` | float | 0.0 | Attribution regularisation |
+| `--early-stopping` | int | 10 | Early stopping patience |
+| `--gradient-clip` | float | None | Gradient clipping value |
 
 #### Model Options
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `--latent-dim` | int | 32 | Embedding dimension |
-| `--hidden-dim` | int | 64 | Hidden layer dimension |
-| `--num-attention-layers` | int | 1 | Number of attention layers |
-| `--aggregation-method` | str | mean | Gene aggregation [mean, max] |
+| `--latent-dim` | int | 64 | Embedding dimension |
+| `--hidden-dim` | int | 128 | Hidden layer dimension |
+| `--num-attention-layers` | int | 2 | Number of attention layers |
+| `--aggregation-method` | str | mean | Chunk aggregation method [mean, max, attention, logit_mean] |
 
 #### Cross-Validation Options
 
@@ -725,7 +734,7 @@ python scripts/train.py [OPTIONS]
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `--output-dir` | path | experiments | Output directory |
+| `--output-dir` | path | outputs | Output directory |
 | `--experiment-name` | str | - | Experiment name |
 | `--device` | str | cuda | Device [cuda, cpu] |
 | `--seed` | int | 42 | Random seed |
