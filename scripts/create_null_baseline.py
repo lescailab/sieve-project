@@ -24,7 +24,6 @@ Author: Lescai Lab
 
 import argparse
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 import torch
@@ -72,9 +71,9 @@ def create_single_permutation(
 
     print(f"Original data: {n_samples} samples ({n_cases} cases, {n_controls} controls)")
 
-    # Permute labels
-    np.random.seed(seed)
-    permuted_indices = np.random.permutation(n_samples)
+    # Permute labels using a local RNG to avoid mutating global NumPy state
+    rng = np.random.default_rng(seed)
+    permuted_indices = rng.permutation(n_samples)
 
     if isinstance(labels, torch.Tensor):
         permuted_labels = labels[permuted_indices].clone()
