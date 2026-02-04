@@ -40,7 +40,7 @@ Never skip testing. Create tests if they don't exist.
 ### 2. Code Quality Standards
 
 **Imports**:
-- Remove unused imports (ruff/flake8 will flag)
+- Remove unused imports (ruff will flag)
 - Order: stdlib, third-party, local
 
 **Random Number Generation**:
