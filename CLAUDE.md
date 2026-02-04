@@ -109,10 +109,10 @@ The attribution sparsity term encourages the model to rely on a small number of 
 
 ```
 dl-exome-img/
-├── CLAUDE.md                 # This file
-├── ARCHITECTURE.md           # Detailed model architecture
-├── EXPERIMENTS.md            # Experimental protocol
-├── README.md                 # User-facing documentation
+├── CLAUDE.md                 # This file - full project context
+├── USER_GUIDE.md             # Comprehensive end-user documentation (includes architecture & experiments as appendices)
+├── INSTRUCTIONS.md           # Claude Code session guide
+├── README.md                 # Project overview
 ├── pyproject.toml            # Project dependencies
 ├── src/
 │   ├── __init__.py
