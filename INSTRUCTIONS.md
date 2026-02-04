@@ -2,165 +2,265 @@
 
 ## Quick Start for Claude Code
 
-When starting a Claude Code session on this project, read CLAUDE.md first for full context. This file provides specific task instructions.
+When starting a Claude Code session on this project, read CLAUDE.md first for full context. This file provides specific task instructions and workflow guidance.
 
-## Current Project State
+## Repository Information
+
+- **Repository**: https://github.com/lescailab/sieve-project
+- **Branch naming**: Use `claude/<descriptive-name>-<session-id>` for feature branches
+- **Main branch**: Check gitStatus for current main branch name
+
+## Current Project State (Updated 2026-02-04)
 
 **Completed**:
-- Project documentation (CLAUDE.md, ARCHITECTURE.md, EXPERIMENTS.md)
-- Theoretical framework for SIEVE architecture
-- Experimental protocol design
+- ✅ Phase 1A: Data pipeline (VCF parsing, feature extraction, datasets)
+- ✅ Phase 1B: Model architecture (attention, aggregation, SIEVE model)
+- ✅ Phase 1C: Training pipeline (loss functions, trainer, cross-validation)
+- ✅ Phase 1D: Explainability (integrated gradients, attention analysis, variant ranking)
+- ✅ Phase 2: Chunked processing for whole-genome coverage
+- ✅ Phase 3: Null baseline attribution analysis pipeline
 
 **In Progress**:
-- None yet - implementation begins now
+- Validation on real datasets
+- Performance optimization
+- Additional visualization tools
 
 **Next Priority**:
-- Phase 1A: Data pipeline implementation
+- Biological validation of discoveries
+- Annotation ablation experiments (L0-L4 comparison)
+- Publication-ready figure generation
 
-## Development Phases
+## Critical Workflow: Null Baseline Analysis
 
-### Phase 1A: Data Pipeline (START HERE)
+The null baseline is essential for validating discoveries. **Always** run null baseline analysis after training and explainability to establish statistical significance.
 
-**Goal**: Create robust VCF parsing and feature extraction.
+### Quick Reference
 
-**Tasks**:
+```bash
+# 1. Permute labels
+python scripts/create_null_baseline.py \
+    --input data/preprocessed.pt \
+    --output data/preprocessed_NULL.pt
 
-1. Create `src/data/vcf_parser.py`:
-   - Parse multi-sample VCF using cyvcf2
-   - Implement CSQ field parsing with sanitization fix
-   - Handle contig harmonization (remove 'chr' prefix)
-   - Extract per-sample genotypes efficiently
+# 2. Train null model (same params as real!)
+python scripts/train.py \
+    --preprocessed-data data/preprocessed_NULL.pt \
+    [... exact same parameters as real model ...]
 
-2. Create `src/data/annotation.py`:
-   - Extract VEP annotations: consequence, SIFT, PolyPhen, gene symbol
-   - Map consequences to ordinal severity scores
-   - Handle missing annotation values gracefully
+# 3. Run explainability on null
+python scripts/explain.py \
+    --experiment-dir experiments/null_baseline \
+    --preprocessed-data data/preprocessed_NULL.pt \
+    --output-dir results/null_attributions \
+    --is-null-baseline
 
-3. Create `src/encoding/levels.py`:
-   - Define AnnotationLevel enum (L0 through L4)
-   - Implement feature vector construction for each level
-   - Document which features are included at each level
-
-4. Create `src/data/dataset.py`:
-   - PyTorch Dataset class for sample iteration
-   - Handle variable number of variants per sample
-   - Implement collate function for batching with padding
-
-**Acceptance Criteria**:
-- Can load a VCF and iterate over samples
-- Each sample produces correct feature tensors
-- Unit tests pass for known edge cases
-
-**Key Code Pattern for VCF Parsing**:
-```python
-import cyvcf2
-
-def parse_vcf(vcf_path, phenotype_map):
-    """
-    Parse VCF and yield per-sample variant data.
-    
-    Args:
-        vcf_path: Path to VEP-annotated multi-sample VCF
-        phenotype_map: Dict mapping sample_id -> label (0 or 1)
-    
-    Yields:
-        sample_id, label, variants_df
-    """
-    vcf = cyvcf2.VCF(vcf_path)
-    samples = vcf.samples
-    
-    # Build variant-sample genotype matrix in chunks to manage memory
-    # Implementation details in vcf_parser.py
+# 4. Compare
+python scripts/compare_attributions.py \
+    --real results/real/sieve_variant_rankings.csv \
+    --null results/null/sieve_variant_rankings.csv \
+    --output-dir results/comparison
 ```
 
-### Phase 1B: Model Implementation
+### Or use the wrapper:
 
-**Goal**: Implement SIEVE architecture components.
+```bash
+export INPUT_DATA=data/preprocessed.pt
+export REAL_EXPERIMENT=experiments/real_model
+bash scripts/run_null_baseline_analysis.sh
+```
 
-**Tasks**:
+## Complete SIEVE Workflow
 
-1. Create `src/encoding/positional.py`:
-   - Sinusoidal positional encoding for genomic positions
-   - Relative position bucketing for attention bias
+### 1. Preprocessing
 
-2. Create `src/models/attention.py`:
-   - PositionAwareSparseAttention class
-   - Follow specification in ARCHITECTURE.md exactly
-   - Include attention weight output for interpretability
+```bash
+python scripts/preprocess.py \
+    --vcf data/cohort.vcf.gz \
+    --phenotypes data/phenotypes.tsv \
+    --output data/preprocessed.pt
+```
 
-3. Create `src/models/aggregation.py`:
-   - GeneAggregator with max pooling
-   - Handle variable variants per gene via scatter operations
+**Validates**:
+- VCF is VEP-annotated
+- Phenotypes match VCF samples
+- Chromosome notation is harmonized
 
-4. Create `src/models/sieve.py`:
-   - Full SIEVE model combining components
-   - Forward pass returns logits and attention weights
+### 2. Training
 
-**Acceptance Criteria**:
-- Model instantiates without errors
-- Forward pass produces correct output shapes
-- Gradients flow through all components
+```bash
+python scripts/train.py \
+    --preprocessed-data data/preprocessed.pt \
+    --level L3 \
+    --val-split 0.2 \
+    --lr 0.00001 \
+    --lambda-attr 0.1 \
+    --epochs 100 \
+    --batch-size 16 \
+    --chunk-size 3000 \
+    --aggregation-method mean \
+    --gradient-accumulation-steps 4 \
+    --latent-dim 32 \
+    --hidden-dim 64 \
+    --num-attention-layers 1 \
+    --output-dir experiments \
+    --experiment-name my_experiment \
+    --device cuda
+```
 
-### Phase 1C: Training Pipeline
+**Monitors**:
+- Training/validation loss curves
+- AUC on validation set
+- Early stopping triggers
 
-**Goal**: Implement training loop with attribution regularization.
+**Expected**: Validation AUC > 0.6 indicates model is learning signal
 
-**Tasks**:
+### 3. Explainability Analysis
 
-1. Create `src/training/loss.py`:
-   - Binary cross-entropy loss
-   - Attribution sparsity loss (differentiable)
-   - Combined loss with configurable λ_attr
+```bash
+python scripts/explain.py \
+    --experiment-dir experiments/my_experiment \
+    --preprocessed-data data/preprocessed.pt \
+    --output-dir results/explainability \
+    --n-steps 50 \
+    --device cuda
+```
 
-2. Create `src/training/trainer.py`:
-   - Training loop with early stopping
-   - Logging of losses and metrics
-   - Model checkpointing
+**Produces**:
+- `sieve_variant_rankings.csv` - Variant attributions
+- `sieve_gene_rankings.csv` - Gene-level scores
+- `sieve_interactions.csv` - High-attention pairs
+- `attributions.npz` - Raw attribution arrays
 
-3. Create `src/training/validation.py`:
-   - Nested cross-validation implementation
-   - Metric computation (AUC, etc.)
+**Validates**: Check that chromosome distribution covers all chroms (not just chr1/chr2)
 
-**Acceptance Criteria**:
-- Training completes without errors
-- Loss decreases over epochs
-- Validation metrics are computed correctly
+### 4. Null Baseline (CRITICAL)
 
-### Phase 1D: Explainability
+See "Critical Workflow" section above.
 
-**Goal**: Implement variant attribution and epistasis detection.
+**Expected Results**:
+- Null model validation AUC ≈ 0.50 (chance level)
+- Real attributions show enrichment > 1.5× at p<0.01
+- KS test p-value < 0.001 indicates distributions differ
 
-**Tasks**:
+**Interpretation**:
+- Enrichment < 1.5×: Weak signal, be cautious
+- Enrichment 1.5-2×: Moderate signal, validate carefully
+- Enrichment > 2×: Strong signal, proceed with confidence
 
-1. Create `src/explain/gradients.py`:
-   - Integrated gradients using Captum
-   - Per-variant attribution scores
+### 5. Biological Validation
 
-2. Create `src/explain/attention.py`:
-   - Extract and analyze attention patterns
-   - Identify high-attention variant pairs
+Review `significant_variants_p01.csv` for candidates:
+- Cross-reference with GWAS catalog
+- Check gene function (OMIM, GeneCards)
+- Look for compound heterozygosity patterns
+- Validate in independent cohort if possible
 
-3. Create `src/explain/counterfactual.py`:
-   - Epistasis validation via perturbation
-   - Statistical testing for non-additivity
+## Development Phases (Historical Reference)
 
-**Acceptance Criteria**:
-- Attribution scores computed for all variants
-- Epistasis scores match expected additivity formula
-- Statistical tests produce sensible p-values
+### Phase 1A: Data Pipeline ✅ COMPLETE
+
+**Created**:
+- `src/data/vcf_parser.py` - Multi-sample VCF parsing with cyvcf2
+- `src/data/annotation.py` - VEP annotation extraction
+- `src/encoding/levels.py` - L0-L4 annotation level definitions
+- `src/data/dataset.py` - PyTorch datasets with chunking
+
+**Key Features**:
+- CSQ field sanitization
+- Contig harmonization (removes 'chr' prefix)
+- Memory-efficient chromosome-by-chromosome processing
+
+### Phase 1B: Model Implementation ✅ COMPLETE
+
+**Created**:
+- `src/encoding/positional.py` - Sinusoidal positional encodings
+- `src/models/attention.py` - Position-aware sparse attention
+- `src/models/aggregation.py` - Gene-level aggregation (mean/max)
+- `src/models/sieve.py` - Full SIEVE model
+
+**Key Features**:
+- Sparse attention operates only on variant-present positions
+- Relative position encoding in attention
+- Permutation-invariant gene aggregation
+
+### Phase 1C: Training Pipeline ✅ COMPLETE
+
+**Created**:
+- `src/training/loss.py` - Classification + attribution sparsity loss
+- `src/training/trainer.py` - Training loop with early stopping
+- `src/training/validation.py` - Cross-validation utilities
+- `scripts/train.py` - Training entry point
+
+**Key Features**:
+- Attribution-regularized training (λ controls sparsity)
+- Gradient accumulation for large effective batch sizes
+- Automatic model checkpointing
+
+### Phase 1D: Explainability ✅ COMPLETE
+
+**Created**:
+- `src/explain/gradients.py` - Integrated gradients with Captum
+- `src/explain/attention.py` - Attention weight analysis
+- `src/explain/variant_ranking.py` - Ranking and aggregation
+- `src/explain/epistasis.py` - Non-additivity detection
+- `scripts/explain.py` - Explainability entry point
+
+**Key Features**:
+- Per-variant attributions via integrated gradients
+- Case vs control enrichment analysis
+- Attention-based interaction detection
+- Counterfactual epistasis validation
+
+### Phase 2: Chunked Processing ✅ COMPLETE
+
+**Fixed**:
+- Whole-genome chunked variant processing
+- Position collision bug (chromosome awareness)
+- Memory-efficient batching for large cohorts
+
+**Impact**: Now covers all chromosomes, not just chr1/chr2
+
+### Phase 3: Null Baseline Analysis ✅ COMPLETE
+
+**Created**:
+- `scripts/create_null_baseline.py` - Label permutation
+- `scripts/compare_attributions.py` - Statistical comparison
+- `scripts/run_null_baseline_analysis.sh` - Full pipeline wrapper
+- `tests/test_null_baseline.py` - Comprehensive tests
+
+**Key Features**:
+- Reproducible permutation with local RNG (no global state)
+- Multiple null permutations for robust baseline
+- Statistical tests (KS, Mann-Whitney)
+- Enrichment factors at multiple p-value thresholds
+- Automatic significance annotation
 
 ## Coding Guidelines
 
+### Testing Requirements
+
+**ALWAYS test code before pushing!** Workflow:
+1. Write code
+2. **Run tests** ← MANDATORY
+3. Fix any failures
+4. Commit
+5. Push
+
 ### File Structure Convention
+
 ```python
 # src/module/file.py
 
 """
 Module docstring explaining purpose.
+
+Author: Lescai Lab
 """
 
 import standard_library
 import third_party
+from typing import Type, Optional
+
 import local_modules
 
 # Constants
@@ -168,22 +268,54 @@ CONSTANT_VALUE = 42
 
 # Main classes/functions
 class MainClass:
-    """Class docstring."""
-    
+    """Class docstring in NumPy format."""
+
     def method(self, arg: Type) -> ReturnType:
-        """Method docstring in NumPy format."""
+        """
+        Method docstring.
+
+        Parameters
+        ----------
+        arg : Type
+            Description
+
+        Returns
+        -------
+        ReturnType
+            Description
+        """
         pass
+```
 
-# Helper functions (private)
-def _helper_function():
-    pass
+### Import Order
 
-# Module-level execution (rare)
-if __name__ == "__main__":
-    pass
+1. Standard library (e.g., `argparse`, `pathlib`)
+2. Third-party (e.g., `numpy`, `torch`, `pandas`)
+3. Local modules (e.g., `from src.data import ...`)
+
+### Type Hints
+
+- Use type hints on all public function signatures
+- Use `Optional[T]` for nullable types
+- Use `List[T]`, `Dict[K, V]` for collections
+- Remove unused imports (ruff/pyflakes will flag)
+
+### Random Number Generation
+
+**Always use local RNG, never mutate global state:**
+
+```python
+# ✓ GOOD
+rng = np.random.default_rng(seed)
+permuted = rng.permutation(array)
+
+# ✗ BAD
+np.random.seed(seed)  # Mutates global state!
+permuted = np.random.permutation(array)
 ```
 
 ### Error Handling
+
 ```python
 # Be explicit about expected errors
 try:
@@ -194,30 +326,19 @@ except SpecificError as e:
 # Don't catch broad Exception unless re-raising
 ```
 
-### Testing Pattern
+### matplotlib Backend
+
+**Always set backend before importing pyplot:**
+
 ```python
-# tests/test_module.py
+# ✓ GOOD
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
 
-import pytest
-from src.module import function_to_test
-
-class TestFunctionName:
-    """Tests for function_to_test."""
-    
-    def test_normal_case(self):
-        """Test with typical input."""
-        result = function_to_test(normal_input)
-        assert result == expected_output
-    
-    def test_edge_case(self):
-        """Test with edge case input."""
-        result = function_to_test(edge_input)
-        assert result == expected_edge_output
-    
-    def test_error_case(self):
-        """Test that errors are raised correctly."""
-        with pytest.raises(ExpectedError):
-            function_to_test(bad_input)
+# ✗ BAD
+import matplotlib.pyplot as plt
+matplotlib.use('Agg')  # Too late!
 ```
 
 ## Common Issues and Solutions
@@ -226,86 +347,126 @@ class TestFunctionName:
 
 **Problem**: VCF with millions of variants exhausts memory.
 
-**Solution**: Process chromosomes independently, use generators:
+**Solution**: Process chromosomes independently, use chunking:
+
 ```python
-def iter_variants_by_chrom(vcf_path):
-    for chrom in CHROMOSOMES:
-        for variant in vcf.query(chrom):
-            yield variant
+dataset = ChunkedVariantDataset(
+    samples=all_samples,
+    annotation_level=level,
+    chunk_size=3000,  # Adjust based on available memory
+    overlap=0
+)
 ```
 
 ### Sparse Tensor Construction
 
 **Problem**: Variable number of variants per sample breaks batching.
 
-**Solution**: Pad to max length within batch, use mask tensor:
+**Solution**: Use ChunkedVariantDataset which handles padding automatically:
+
 ```python
-def collate_fn(batch):
-    max_variants = max(len(sample['variants']) for sample in batch)
-    padded = []
-    masks = []
-    for sample in batch:
-        n = len(sample['variants'])
-        padded.append(F.pad(sample['variants'], (0, 0, 0, max_variants - n)))
-        mask = torch.zeros(max_variants)
-        mask[:n] = 1
-        masks.append(mask)
-    return torch.stack(padded), torch.stack(masks)
+def collate_chunks(batch):
+    """Handles variable-length chunks with automatic padding."""
+    # Implementation in src/data/dataset.py
 ```
 
 ### Attention Numerical Stability
 
 **Problem**: Softmax over all-masked positions produces NaN.
 
-**Solution**: Replace -inf with large negative, handle NaN:
+**Solution**: Use large negative (not -inf) and handle NaN:
+
 ```python
 attn = attn.masked_fill(mask == 0, -1e9)  # Not -inf
 attn_weights = F.softmax(attn, dim=-1)
 attn_weights = torch.nan_to_num(attn_weights, 0.0)
 ```
 
-### Gradient Computation for Attribution
+### Model Not Learning (AUC ≈ 0.5)
 
-**Problem**: Captum requires specific input format.
+**Checklist**:
+1. Verify labels are correctly loaded (check metadata in preprocessed file)
+2. Check case/control balance (should not be extremely skewed)
+3. Try lower learning rate (`--lr 0.000001`)
+4. Reduce attribution regularization (`--lambda-attr 0.01`)
+5. Verify data is not all-zeros (check feature distributions)
+6. Check for data leakage in preprocessing
 
-**Solution**: Wrap model to match Captum interface:
+### Position Collision Bug
+
+**Fixed in Phase 2**: Variants on different chromosomes can have the same numerical position. Solution: Always include chromosome in variant keys.
+
 ```python
-class ModelWrapper(nn.Module):
-    def __init__(self, model, positions, gene_assignments, mask):
-        super().__init__()
-        self.model = model
-        self.positions = positions
-        self.gene_assignments = gene_assignments
-        self.mask = mask
-    
-    def forward(self, variant_features):
-        logits, _ = self.model(variant_features, self.positions, 
-                               self.gene_assignments, self.mask)
-        return logits
+# ✓ GOOD
+variant_key = (chrom, pos, gene_id)
+
+# ✗ BAD
+variant_key = (pos, gene_id)  # Will collide across chroms!
 ```
 
-## Testing with Synthetic Data
+## Testing Patterns
 
-For development, create synthetic data that mimics real VCF structure:
+### Unit Tests
+
+```python
+# tests/test_module.py
+
+import pytest
+from src.module import function_to_test
+
+class TestFunctionName:
+    """Tests for function_to_test."""
+
+    def test_normal_case(self):
+        """Test with typical input."""
+        result = function_to_test(normal_input)
+        assert result == expected_output
+
+    def test_edge_case(self):
+        """Test with edge case input."""
+        result = function_to_test(edge_input)
+        assert result == expected_edge_output
+
+    def test_error_case(self):
+        """Test that errors are raised correctly."""
+        with pytest.raises(ExpectedError):
+            function_to_test(bad_input)
+```
+
+### Integration Tests
+
+Create end-to-end tests with mock data:
+
+```python
+def test_full_pipeline():
+    """Test complete workflow with synthetic data."""
+    # 1. Create mock data
+    # 2. Run preprocessing
+    # 3. Train model
+    # 4. Run explainability
+    # 5. Validate outputs
+```
+
+### Testing with Synthetic Data
 
 ```python
 def create_synthetic_dataset(n_samples=100, n_variants=1000, n_genes=50):
     """Create synthetic data for testing."""
     # Genotypes: mostly 0, some 1, few 2
-    genotypes = np.random.choice([0, 1, 2], size=(n_samples, n_variants), 
+    genotypes = np.random.choice([0, 1, 2], size=(n_samples, n_variants),
                                   p=[0.95, 0.04, 0.01])
-    
+
     # Positions: sorted within chromosome
     positions = np.sort(np.random.randint(0, 10_000_000, size=n_variants))
-    
+
     # Gene assignments: random but contiguous
     gene_assignments = np.repeat(np.arange(n_genes), n_variants // n_genes + 1)[:n_variants]
-    
+
     # Labels: binary with some variants associated
     causal_variants = np.random.choice(n_variants, size=10, replace=False)
     risk_scores = genotypes[:, causal_variants].sum(axis=1)
     labels = (risk_scores > np.median(risk_scores)).astype(int)
-    
+
     return {
         'genotypes': genotypes,
         'positions': positions,
@@ -313,6 +474,25 @@ def create_synthetic_dataset(n_samples=100, n_variants=1000, n_genes=50):
         'labels': labels,
         'causal_variants': causal_variants  # For validation
     }
+```
+
+## Commit Guidelines
+
+Use semantic commit messages:
+- `feat:` new feature
+- `fix:` bug fix
+- `docs:` documentation only
+- `test:` adding tests
+- `refactor:` code change that doesn't add feature or fix bug
+
+Always include session URL in commit message:
+```
+feat: implement null baseline attribution analysis
+
+Adds complete pipeline for statistical validation of variant
+discoveries by comparing against null distribution from permuted labels.
+
+https://claude.ai/code/session_<SESSION_ID>
 ```
 
 ## Questions to Ask Before Coding
@@ -324,22 +504,61 @@ Before implementing a component, verify:
 3. **Gradients**: Does this operation need to be differentiable?
 4. **Memory**: Will this fit in GPU memory for expected data sizes?
 5. **Interpretability**: Can we extract meaningful information afterward?
-
-## Commit Guidelines
-
-Use semantic commit messages:
-- `feat:` new feature
-- `fix:` bug fix
-- `docs:` documentation only
-- `test:` adding tests
-- `refactor:` code change that doesn't add feature or fix bug
-
-Example: `feat: implement VCF parser with CSQ field handling`
+6. **Testing**: How will I test this before pushing?
 
 ## When Stuck
 
 1. **Check ARCHITECTURE.md** for mathematical specifications
 2. **Check EXPERIMENTS.md** for expected behaviors
-3. **Run existing tests** to verify what works
-4. **Create minimal reproduction** of the issue
-5. **Search literature** for how others solved similar problems
+3. **Check CLAUDE.md** for project context
+4. **Run existing tests** to verify what works
+5. **Create minimal reproduction** of the issue
+6. **Search literature** for how others solved similar problems
+
+## Performance Optimization Tips
+
+### Memory Optimization
+
+- Use `chunk_size` to control memory usage
+- Process chromosomes independently if needed
+- Use gradient checkpointing for very deep models
+- Clear CUDA cache between large operations: `torch.cuda.empty_cache()`
+
+### Speed Optimization
+
+- Increase `chunk_size` if memory allows
+- Use larger `batch_size` with gradient accumulation
+- Profile with `torch.profiler` to find bottlenecks
+- Consider mixed precision training (fp16) for faster training
+
+### Debugging Performance
+
+```python
+import time
+
+start = time.time()
+result = expensive_operation()
+print(f"Operation took {time.time() - start:.2f}s")
+```
+
+## Code Review Checklist
+
+Before pushing code, verify:
+
+- [ ] All tests pass
+- [ ] No unused imports (check with `ruff` or `flake8`)
+- [ ] Type hints on public functions
+- [ ] Docstrings in NumPy format
+- [ ] No global RNG state mutation
+- [ ] matplotlib backend set correctly (if using plots)
+- [ ] No hard-coded paths (use arguments or env vars)
+- [ ] Session URL in commit message
+
+## Resources
+
+- **CLAUDE.md**: Full project context
+- **ARCHITECTURE.md**: Model specifications
+- **EXPERIMENTS.md**: Experimental protocol
+- **README.md**: User documentation
+- **tests/**: Unit and integration tests
+- **GitHub Issues**: https://github.com/lescailab/sieve-project/issues

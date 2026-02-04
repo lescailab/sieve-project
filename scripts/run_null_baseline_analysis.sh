@@ -31,6 +31,19 @@ echo "Real experiment: $REAL_EXPERIMENT"
 echo "Output base: $OUTPUT_BASE"
 echo ""
 
+# Validate that required paths exist
+if [ ! -f "$INPUT_DATA" ]; then
+    echo "ERROR: Input data not found at: $INPUT_DATA"
+    echo "Please set INPUT_DATA environment variable or provide the correct path."
+    exit 1
+fi
+
+if [ ! -d "$REAL_EXPERIMENT" ]; then
+    echo "WARNING: Real experiment directory not found at: $REAL_EXPERIMENT"
+    echo "This is only needed for comparison in Step 4."
+    echo "Continuing with null model training..."
+fi
+
 # Step 1: Create permuted dataset
 echo "[Step 1/4] Creating permuted dataset..."
 NULL_DATA="${OUTPUT_BASE}/preprocessed_ottawa_NULL.pt"
