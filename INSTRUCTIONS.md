@@ -70,11 +70,10 @@ matplotlib.use('Agg')  # Too late!
 
 ```
 sieve-project/
-├── USER_GUIDE.md          # Comprehensive end-user manual
+├── USER_GUIDE.md          # Comprehensive end-user manual (includes architecture & experiments)
 ├── README.md              # Project overview
 ├── CLAUDE.md              # Project context for AI
-├── ARCHITECTURE.md        # Technical specifications
-├── EXPERIMENTS.md         # Scientific protocol
+├── INSTRUCTIONS.md        # This file - Claude Code session guide
 ├── src/                   # Source code
 │   ├── data/              # VCF parsing, datasets
 │   ├── encoding/          # Feature engineering
@@ -95,7 +94,7 @@ sieve-project/
 
 ### Adding a New Feature
 
-1. Read relevant documentation (CLAUDE.md, ARCHITECTURE.md)
+1. Read relevant documentation (CLAUDE.md, USER_GUIDE.md appendices)
 2. Implement with proper type hints and docstrings
 3. **Write tests**
 4. Run tests locally
@@ -112,8 +111,8 @@ sieve-project/
 
 ### Updating Documentation
 
-- **End-user docs**: Update USER_GUIDE.md
-- **Developer docs**: Update CLAUDE.md or ARCHITECTURE.md
+- **End-user docs**: Update USER_GUIDE.md (includes architecture & experiments appendices)
+- **Developer docs**: Update CLAUDE.md
 - **API changes**: Update docstrings
 
 ## Critical Known Issues
@@ -172,11 +171,10 @@ Always include session URL.
 
 ## When Stuck
 
-1. Check USER_GUIDE.md for end-user perspective
+1. Check USER_GUIDE.md for end-user perspective and technical details (appendices)
 2. Check CLAUDE.md for project context
-3. Check ARCHITECTURE.md for technical specs
-4. Run existing tests
-5. Create minimal reproduction
+3. Run existing tests
+4. Create minimal reproduction
 
 ## Key Reminders
 
@@ -189,8 +187,6 @@ Always include session URL.
 
 ## Resources
 
-- USER_GUIDE.md: Complete end-user documentation
+- USER_GUIDE.md: Complete end-user documentation (includes architecture & experiments appendices)
 - CLAUDE.md: Full project context
-- ARCHITECTURE.md: Model specifications
-- EXPERIMENTS.md: Scientific protocol
 - GitHub: https://github.com/lescailab/sieve-project
