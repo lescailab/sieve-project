@@ -37,7 +37,7 @@ Unlike existing methods:
 
 1. **Can deep learning discover variants that annotations miss?** → Annotation ablation experiments (L0-L4)
 2. **Do spatial relationships between variants matter?** → Position-aware sparse attention
-3. **Can we make models interpretable by design?** → Attribution-regularized training
+3. **Can we make models interpretable by design?** → Attribution-regularised training
 4. **Are discoveries statistically significant?** → Null baseline analysis
 
 ### Key Capabilities
@@ -151,7 +151,7 @@ Core packages:
 - **cyvcf2/pysam** (VCF parsing)
 - **captum** (integrated gradients)
 - **scikit-learn** (metrics, preprocessing)
-- **matplotlib** (visualization)
+- **matplotlib** (visualisation)
 - **PyYAML** (configuration)
 
 See `pyproject.toml` for complete list.
@@ -226,7 +226,7 @@ python scripts/preprocess.py \
 
 **Theory**: SIEVE uses position-aware sparse attention to learn relationships between variants. Training includes:
 - Classification loss: Binary cross-entropy on case/control prediction
-- Attribution regularization (optional): Encourages model to rely on fewer variants
+- Attribution regularisation (optional): Encourages model to rely on fewer variants
 
 **Annotation Levels**:
 - **L0**: Genotype dosage only (0, 1, 2) - tests annotation-free discovery
@@ -578,7 +578,7 @@ Standard training:
 Loss = Classification_Loss
 ```
 
-Attribution-regularized training:
+Attribution-regularised training:
 ```
 Loss = Classification_Loss + λ × Attribution_Sparsity_Loss
 ```
@@ -586,21 +586,21 @@ Loss = Classification_Loss + λ × Attribution_Sparsity_Loss
 The sparsity term encourages the model to:
 - Rely on fewer variants (better interpretability)
 - Produce more stable attributions across CV folds
-- Potentially improve generalization
+- Potentially improve generalisation
 
 #### Usage
 
 ```bash
-# No regularization (default)
+# No regularisation (default)
 python scripts/train.py --lambda-attr 0.0 ...
 
-# Light regularization
+# Light regularisation
 python scripts/train.py --lambda-attr 0.01 ...
 
-# Medium regularization (recommended)
+# Medium regularisation (recommended)
 python scripts/train.py --lambda-attr 0.1 ...
 
-# Strong regularization
+# Strong regularisation
 python scripts/train.py --lambda-attr 0.5 ...
 ```
 
@@ -625,7 +625,7 @@ python scripts/create_null_baseline.py \
     --output-dir null_permutations \
     --n-permutations 5
 
-# Train each (can parallelize)
+# Train each (can parallelise)
 for i in {0..4}; do
     python scripts/train.py \
         --preprocessed-data null_permutations/preprocessed_NULL_perm${i}.pt \
@@ -701,7 +701,7 @@ python scripts/train.py [OPTIONS]
 | `--gradient-accumulation-steps` | int | 4 | Gradient accumulation |
 | `--epochs` | int | 100 | Maximum epochs |
 | `--lr` | float | 0.00001 | Learning rate |
-| `--lambda-attr` | float | 0.1 | Attribution regularization |
+| `--lambda-attr` | float | 0.1 | Attribution regularisation |
 | `--early-stopping` | int | 15 | Early stopping patience |
 | `--gradient-clip` | float | 1.0 | Gradient clipping value |
 
@@ -1279,7 +1279,7 @@ If using `--experiment-dir`, check that `best_model.pt` or `fold_*/best_model.pt
 
 **Possible causes**:
 - Model has low confidence (AUC close to 0.5)
-- Attribution regularization too strong (reduce `--lambda-attr`)
+- Attribution regularisation too strong (reduce `--lambda-attr`)
 - Integration steps too low (increase `--n-steps`)
 
 **Solution**:
@@ -1396,7 +1396,7 @@ A: This occasionally happens by chance (especially with small datasets). Solutio
 A: High variance across folds suggests:
 - Small sample size → Increase if possible
 - Label imbalance → Check case/control ratio
-- Overfitting → Try simpler model or more regularization
+- Overfitting → Try simpler model or more regularisation
 - Population stratification → Check for batch effects
 
 ---
