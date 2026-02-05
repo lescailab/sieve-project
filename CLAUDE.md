@@ -280,4 +280,4 @@ Key papers informing this work:
 
 ## Contact
 
-This project is part of the lescailab/dl-exome-img repository.
+This project is part of the lescailab/sieve-project repository.
