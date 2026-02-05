@@ -22,6 +22,7 @@ SIEVE addresses three scientific questions:
 ### 1. Annotation-Ablation Discovery Protocol
 
 SIEVE trains models at five annotation levels:
+
 - **L0**: Genotype dosage only (0, 1, 2)
 - **L1**: L0 + genomic position
 - **L2**: L1 + consequence class (missense/synonymous/LoF)
@@ -29,12 +30,14 @@ SIEVE trains models at five annotation levels:
 - **L4**: Full functional annotations
 
 By comparing variant rankings across levels, we identify:
+
 - *L0-specific variants*: Associations found without any annotations—potential novel discoveries
 - *L4-specific variants*: Associations that require annotation context—validating that annotations add value
 
 ### 2. Position-Aware Sparse Attention
 
 Standard approaches treat variants as unordered sets (permutation-invariant). SIEVE preserves positional information through:
+
 - Sinusoidal positional encodings for genomic coordinates
 - Relative position bias in attention computation
 - Sparse attention that operates only on variant-present positions
@@ -45,7 +48,7 @@ This enables learning that nearby variants (compound heterozygosity) or specific
 
 Instead of training purely for classification and explaining afterward, SIEVE incorporates interpretability into the loss function:
 
-```
+```text
 Loss = Classification_Loss + λ × Attribution_Sparsity_Loss
 ```
 
@@ -54,6 +57,7 @@ This encourages the model to achieve good classification while relying on a smal
 ### 4. Null Baseline Attribution Analysis
 
 To distinguish genuine signal from noise, SIEVE includes a null baseline analysis pipeline:
+
 - Trains identical models on permuted case/control labels
 - Establishes null distribution of attribution scores
 - Computes significance thresholds (p < 0.05, 0.01, 0.001)
@@ -90,6 +94,7 @@ pip install -e ".[dev]"
 ### 1. Prepare Input Data
 
 SIEVE requires:
+
 - Multi-sample VCF file annotated with VEP (`.vcf.gz` with index)
 - Phenotype file mapping samples to case/control labels
 
@@ -139,6 +144,7 @@ python scripts/explain.py \
 ```
 
 This produces:
+
 - `sieve_variant_rankings.csv` - All variants ranked by attribution
 - `sieve_gene_rankings.csv` - Gene-level aggregated scores
 - `sieve_interactions.csv` - High-attention variant pairs
@@ -183,6 +189,7 @@ python scripts/compare_attributions.py \
 ```
 
 The comparison produces:
+
 - `comparison_summary.yaml` - Statistical tests and thresholds
 - `significant_variants_p01.csv` - Variants exceeding p<0.01 threshold
 - `variant_rankings_with_significance.csv` - All variants annotated with significance flags
@@ -210,7 +217,7 @@ python scripts/compare_levels.py \
 
 The recommended SIEVE workflow:
 
-```
+```text
 1. Preprocess VCF → preprocessed.pt
 2. Train real model → experiments/real_model/
 3. Run explainability → results/explainability/
@@ -227,11 +234,13 @@ The recommended SIEVE workflow:
 ### Core Outputs
 
 **From Training:**
+
 - `best_model.pt` - Model checkpoint
 - `training_history.yaml` - Loss curves and metrics
 - `config.yaml` - Full configuration for reproducibility
 
 **From Explainability:**
+
 - `sieve_variant_rankings.csv` - Variant-level attributions
   - Columns: position, chromosome, gene_id, mean_attribution, max_attribution, num_samples
 - `sieve_gene_rankings.csv` - Gene-level scores
@@ -240,6 +249,7 @@ The recommended SIEVE workflow:
   - Columns: pos1, pos2, gene1, gene2, mean_attention, frequency
 
 **From Null Comparison:**
+
 - `comparison_summary.yaml` - Statistical summary
   - Thresholds at p<0.10, 0.05, 0.01, 0.001
   - KS and Mann-Whitney test results
@@ -249,7 +259,7 @@ The recommended SIEVE workflow:
 
 ## Project Structure
 
-```
+```text
 sieve-project/
 ├── CLAUDE.md              # Development context (for AI assistants)
 ├── ARCHITECTURE.md        # Technical model specification
@@ -276,21 +286,22 @@ sieve-project/
 
 ## Comparison with Existing Methods
 
-| Feature | SIEVE | DeepRVAT | GenNet | GWAS_NN |
-|---------|-------|----------|--------|---------|
-| Direct VCF input | ✓ | ✗ | ✗ | ✗ |
-| Annotation-free discovery | ✓ | ✗ | ✗ | ✗ |
-| Position-aware | ✓ | ✗ | ✗ | ✗ |
-| Built-in interpretability | ✓ | ✗ | Partial | ✗ |
-| Epistasis validation | ✓ | ✗ | ✗ | ✓ |
-| Null baseline calibration | ✓ | ✗ | ✗ | ✗ |
-| Common + rare variants | ✓ | Rare only | All | Common |
+| Feature                       | SIEVE | DeepRVAT | GenNet  | GWAS_NN |
+|-------------------------------|-------|----------|---------|---------|
+| Direct VCF input              | ✓     | ✗        | ✗       | ✗       |
+| Annotation-free discovery     | ✓     | ✗        | ✗       | ✗       |
+| Position-aware                | ✓     | ✗        | ✗       | ✗       |
+| Built-in interpretability     | ✓     | ✗        | Partial | ✗       |
+| Epistasis validation          | ✓     | ✗        | ✗       | ✓       |
+| Null baseline calibration     | ✓     | ✗        | ✗       | ✗       |
+| Common + rare variants        | ✓     | Rare only| All     | Common  |
 
 ## Troubleshooting
 
 ### Memory Issues
 
 If you encounter OOM errors:
+
 - Reduce `--chunk-size` (e.g., 2000 → 1000)
 - Reduce `--batch-size` (e.g., 16 → 8)
 - Use `--gradient-accumulation-steps 8` for effective larger batch
@@ -299,6 +310,7 @@ If you encounter OOM errors:
 ### Slow Training
 
 If training is too slow:
+
 - Increase `--chunk-size` (more variants per batch)
 - Increase `--batch-size` if GPU memory allows
 - Reduce `--n-steps` for integrated gradients (e.g., 50 → 25)
@@ -307,6 +319,7 @@ If training is too slow:
 ### Model Not Learning
 
 If validation AUC stays near 0.5:
+
 - Check that phenotypes are loaded correctly (cases/controls balanced?)
 - Reduce learning rate: `--lr 0.000001`
 - Increase `--lambda-attr` if model is too sparse
@@ -319,7 +332,7 @@ If you use SIEVE in your research, please cite:
 ```bibtex
 @software{sieve2026,
   title = {SIEVE: Sparse Interpretable Exome Variant Explainer},
-  author = {Lescai Lab},
+  author = {Lescai, Francesco},
   year = {2026},
   url = {https://github.com/lescailab/sieve-project}
 }
@@ -332,6 +345,7 @@ MIT License. See [LICENSE](LICENSE) for details.
 ## Contributing
 
 We welcome contributions! Key areas for improvement:
+
 - Additional annotation levels or feature encodings
 - Alternative aggregation methods (beyond max pooling)
 - Visualization improvements
@@ -342,6 +356,7 @@ Please open an issue to discuss major changes before submitting PRs.
 ## Acknowledgments
 
 This project builds on insights from:
+
 - DeepRVAT (Clarke et al., 2024, Nature Genetics)
 - GenNet (van Hilten et al., 2021, Communications Biology)
 - GWAS_NN (Cui et al., 2022, Communications Biology)
@@ -349,7 +364,7 @@ This project builds on insights from:
 
 ## Support
 
-- **Issues**: https://github.com/lescailab/sieve-project/issues
+- **Issues**: [GitHub Issues](https://github.com/lescailab/sieve-project/issues)
 - **Documentation**: See CLAUDE.md, ARCHITECTURE.md, EXPERIMENTS.md
 - **Questions**: Open a GitHub discussion
 
