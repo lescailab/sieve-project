@@ -6,7 +6,7 @@
 
 - **Repository**: https://github.com/lescailab/sieve-project
 - **User Documentation**: USER_GUIDE.md (comprehensive end-user manual)
-- **Branch naming**: `claude/<description>-<session-id>`
+- **Branch naming**: `devel/<description>-<session-id>`
 
 ## Project Status (2026-02-04)
 
