@@ -11,7 +11,7 @@
 set -e  # Exit on error
 
 # Default parameters (override with environment variables)
-INPUT_DATA="${INPUT_DATA:-/home/shared/sieve-testing/preprocessed_ottawa.pt}"
+INPUT_DATA="${INPUT_DATA:-/home/shared/sieve-testing/preprocessed.pt}"
 REAL_EXPERIMENT="${REAL_EXPERIMENT:-/home/shared/sieve-testing/experiments/CONFIG_G_FINAL}"
 OUTPUT_BASE="${OUTPUT_BASE:-/home/shared/sieve-testing}"
 DEVICE="${DEVICE:-cuda}"
