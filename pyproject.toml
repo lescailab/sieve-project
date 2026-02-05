@@ -10,7 +10,10 @@ readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.10"
 authors = [
-    {name = "Lescai Lab"}
+    {name = "Francesco Lescai", email = "francesco.lescai@unipv.it"}
+]
+maintainers = [
+    {name = "Francesco Lescai", email = "francesco.lescai@unipv.it"}
 ]
 keywords = [
     "deep-learning",
