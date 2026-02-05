@@ -168,6 +168,14 @@ def test_pipeline():
 Types: feat, fix, docs, test, refactor
 
 Always include session URL.
+Always commit using the following parameters:
+
+```
+export GIT_AUTHOR_NAME="lescai"
+export GIT_AUTHOR_EMAIL="francesco.lescai@unipv.it"
+export GIT_COMMITTER_NAME="lescai"
+export GIT_COMMITTER_EMAIL="francesco.lescai@unipv.it"
+```
 
 ## When Stuck
 
