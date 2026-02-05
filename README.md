@@ -262,9 +262,8 @@ The recommended SIEVE workflow:
 ```text
 sieve-project/
 ├── CLAUDE.md              # Development context (for AI assistants)
-├── ARCHITECTURE.md        # Technical model specification
-├── EXPERIMENTS.md         # Experimental protocol
 ├── INSTRUCTIONS.md        # Development workflow guide
+├── USER_GUIDE.md          # Comprehensive user documentation
 ├── README.md              # This file
 ├── src/
 │   ├── data/              # VCF parsing and dataset construction
@@ -365,7 +364,7 @@ This project builds on insights from:
 ## Support
 
 - **Issues**: [GitHub Issues](https://github.com/lescailab/sieve-project/issues)
-- **Documentation**: See CLAUDE.md, ARCHITECTURE.md, EXPERIMENTS.md
+- **Documentation**: See CLAUDE.md, USER_GUIDE.md, INSTRUCTIONS.md
 - **Questions**: Open a GitHub discussion
 
 ---
