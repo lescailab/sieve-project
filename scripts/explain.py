@@ -504,7 +504,9 @@ def main():
             collate_fn=collate_chunks,
             num_workers=0
         )
-        print(f"Created dataloader with {len(dataloader)} batches")
+        total_chunks = len(dataset)
+        num_samples = len(all_samples)
+        print(f"Created dataloader with {len(dataloader)} batches ({total_chunks} chunks from {num_samples} samples)")
 
         analyzer = AttentionAnalyzer(
             model=model,
@@ -544,7 +546,8 @@ def main():
             all_interactions.extend(interactions)
 
             if (batch_idx + 1) % 10 == 0:
-                print(f"  Processed {(batch_idx + 1) * args.batch_size} samples")
+                chunks_done = min((batch_idx + 1) * args.batch_size, total_chunks)
+                print(f"  Processed {chunks_done}/{total_chunks} chunks ({num_samples} samples)")
 
         print(f"Extracted {len(all_interactions)} interactions")
 
