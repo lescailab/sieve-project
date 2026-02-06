@@ -13,10 +13,11 @@ Author: Lescai Lab
 """
 
 import argparse
+from datetime import datetime, timezone
 import sys
 import time
 from pathlib import Path
-from typing import Dict
+from typing import Dict, List
 
 import numpy as np
 import torch
@@ -161,6 +162,132 @@ def create_model(
     )
 
     return model
+
+
+def save_fold_config(
+    fold_dir: Path,
+    fold_idx: int,
+    args,
+) -> None:
+    """
+    Save fold-specific config.yaml with architecture and training parameters.
+
+    This config can be used standalone with explain.py, without needing
+    the parent experiment config.
+
+    Parameters
+    ----------
+    fold_dir : Path
+        Directory for the fold (e.g., experiment_dir/fold_0).
+    fold_idx : int
+        Index of the fold (0-based).
+    args : argparse.Namespace
+        Command-line arguments containing all config values.
+    """
+    fold_config = {
+        'fold_index': fold_idx,
+        'experiment_name': args.experiment_name,
+        # Architecture parameters
+        'level': args.level,
+        'latent_dim': args.latent_dim,
+        'hidden_dim': args.hidden_dim,
+        'num_attention_layers': args.num_attention_layers,
+        'num_heads': args.num_heads,
+        'chunk_size': args.chunk_size,
+        'chunk_overlap': args.chunk_overlap,
+        'aggregation_method': args.aggregation_method,
+        # Training parameters
+        'lr': args.lr,
+        'lambda_attr': args.lambda_attr,
+        'batch_size': args.batch_size,
+        'gradient_accumulation_steps': args.gradient_accumulation_steps,
+        'gradient_clip': args.gradient_clip,
+        'early_stopping': args.early_stopping,
+        'epochs': args.epochs,
+        'seed': args.seed,
+        # Data reference
+        'preprocessed_data': str(args.preprocessed_data) if args.preprocessed_data else None,
+        'vcf': str(args.vcf) if args.vcf else None,
+        'phenotypes': str(args.phenotypes) if args.phenotypes else None,
+        # Reference to parent config
+        'parent_config': '../config.yaml',
+    }
+
+    with open(fold_dir / 'config.yaml', 'w') as f:
+        yaml.dump(fold_config, f, default_flow_style=False, sort_keys=False)
+
+
+def save_fold_info(
+    fold_dir: Path,
+    fold_idx: int,
+    n_folds: int,
+    seed: int,
+    train_indices: List[int],
+    val_indices: List[int],
+    labels: np.ndarray,
+    fold_metrics: Dict[str, float],
+    training_started: datetime,
+    training_completed: datetime,
+) -> None:
+    """
+    Save fold_info.yaml with fold-specific metadata for reproducibility.
+
+    This includes sample split indices (critical for null baseline generation),
+    class distributions, and training outcome.
+
+    Parameters
+    ----------
+    fold_dir : Path
+        Directory for the fold.
+    fold_idx : int
+        Index of the fold (0-based).
+    n_folds : int
+        Total number of CV folds.
+    seed : int
+        Random seed used for splitting.
+    train_indices : list of int
+        Sample-level indices used for training.
+    val_indices : list of int
+        Sample-level indices used for validation.
+    labels : np.ndarray
+        Full label array for the dataset.
+    fold_metrics : dict
+        Metrics returned by train_single_fold.
+    training_started : datetime
+        Timestamp when fold training started.
+    training_completed : datetime
+        Timestamp when fold training completed.
+    """
+    train_labels = labels[train_indices]
+    val_labels = labels[val_indices]
+
+    fold_info = {
+        'fold_index': fold_idx,
+        'n_folds': n_folds,
+        'random_seed': seed,
+        # Sample split information
+        'n_train_samples': len(train_indices),
+        'n_val_samples': len(val_indices),
+        'train_sample_indices': [int(i) for i in train_indices],
+        'val_sample_indices': [int(i) for i in val_indices],
+        # Class distribution
+        'train_cases': int(train_labels.sum()),
+        'train_controls': int(len(train_labels) - train_labels.sum()),
+        'val_cases': int(val_labels.sum()),
+        'val_controls': int(len(val_labels) - val_labels.sum()),
+        # Training outcome
+        'best_epoch': fold_metrics.get('best_epoch'),
+        'best_val_auc': float(fold_metrics['auc']),
+        'best_val_accuracy': float(fold_metrics['accuracy']),
+        'epochs_trained': fold_metrics.get('epochs_trained'),
+        # Timestamps
+        'training_started': training_started.isoformat(),
+        'training_completed': training_completed.isoformat(),
+        'training_time_seconds': fold_metrics.get('training_time_seconds'),
+    }
+
+    with open(fold_dir / 'fold_info.yaml', 'w') as f:
+        yaml.dump(fold_info, f, default_flow_style=False, sort_keys=False)
 
 
 def train_single_fold(
@@ -372,6 +499,7 @@ def main():
             fold_dir = output_dir / f'fold_{fold_idx}'
 
             # Train
+            training_started = datetime.now(timezone.utc)
             fold_metrics = train_single_fold(
                 train_loader=train_loader,
                 val_loader=val_loader,
@@ -379,8 +507,25 @@ def main():
                 args=args,
                 checkpoint_dir=fold_dir,
             )
+            training_completed = datetime.now(timezone.utc)
 
             cv_results.append(fold_metrics)
+
+            # Save fold-specific config and metadata
+            save_fold_config(fold_dir, fold_idx, args)
+            save_fold_info(
+                fold_dir=fold_dir,
+                fold_idx=fold_idx,
+                n_folds=args.cv,
+                seed=args.seed,
+                train_indices=train_idx.tolist(),
+                val_indices=val_idx.tolist(),
+                labels=labels,
+                fold_metrics=fold_metrics,
+                training_started=training_started,
+                training_completed=training_completed,
+            )
+            print(f"\nFold {fold_idx + 1} config and metadata saved to {fold_dir}")
 
             print(f"\nFold {fold_idx + 1} Results:")
             print(f"  Val AUC: {fold_metrics['auc']:.4f}")
