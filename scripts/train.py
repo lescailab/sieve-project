@@ -525,7 +525,7 @@ def main():
                 training_started=training_started,
                 training_completed=training_completed,
             )
-            print(f"\nFold {fold_idx} config and metadata saved to {fold_dir}")
+            print(f"\nFold {fold_idx + 1} config and metadata saved to {fold_dir}")
 
             print(f"\nFold {fold_idx + 1} Results:")
             print(f"  Val AUC: {fold_metrics['auc']:.4f}")
