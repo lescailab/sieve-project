@@ -10,6 +10,13 @@
 
 set -e  # Exit on error
 
+# Find Python interpreter
+PYTHON="${PYTHON:-$(command -v python3 || command -v python)}"
+if [ -z "$PYTHON" ]; then
+    echo "ERROR: No python3 or python found in PATH"
+    exit 1
+fi
+
 # Default parameters (override with environment variables)
 INPUT_DATA="${INPUT_DATA:-/home/shared/sieve-testing/preprocessed.pt}"
 REAL_EXPERIMENT="${REAL_EXPERIMENT:-/home/shared/sieve-testing/experiments/CONFIG_G_FINAL}"
@@ -48,7 +55,7 @@ fi
 echo "[Step 1/4] Creating permuted dataset..."
 NULL_DATA="${OUTPUT_BASE}/preprocessed_ottawa_NULL.pt"
 
-python scripts/create_null_baseline.py \
+$PYTHON scripts/create_null_baseline.py \
     --input "$INPUT_DATA" \
     --output "$NULL_DATA" \
     --seed 42
@@ -59,7 +66,7 @@ echo ""
 echo "[Step 2/4] Training null model..."
 NULL_EXPERIMENT="${OUTPUT_BASE}/experiments/NULL_BASELINE"
 
-python scripts/train.py \
+$PYTHON scripts/train.py \
     --preprocessed-data "$NULL_DATA" \
     --level L3 \
     --val-split 0.2 \
@@ -85,7 +92,7 @@ echo ""
 echo "[Step 3/4] Running explainability on null model..."
 NULL_EXPLAIN_DIR="${OUTPUT_BASE}/results/null_attributions"
 
-python scripts/explain.py \
+$PYTHON scripts/explain.py \
     --experiment-dir "$NULL_EXPERIMENT" \
     --preprocessed-data "$NULL_DATA" \
     --output-dir "$NULL_EXPLAIN_DIR" \
@@ -120,7 +127,7 @@ if [ ! -f "$REAL_RANKINGS" ]; then
     done
 fi
 
-python scripts/compare_attributions.py \
+$PYTHON scripts/compare_attributions.py \
     --real "$REAL_RANKINGS" \
     --null "$NULL_RANKINGS" \
     --output-dir "$COMPARISON_DIR" \
