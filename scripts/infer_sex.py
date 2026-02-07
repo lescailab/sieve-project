@@ -178,7 +178,9 @@ def infer_sex_from_vcf(
         genotypes = variant.genotypes
         gq_values = variant.gt_quals
 
-        # Compute allele frequency and missingness from the data
+        # Compute allele frequency and missingness from the data.
+        # On chrX non-PAR, males have haploid calls where cyvcf2 returns
+        # a2 = -1.  We treat these as called with one allele (not missing).
         n_ref = 0
         n_alt = 0
         n_missing_var = 0
@@ -186,14 +188,20 @@ def infer_sex_from_vcf(
         for sample_idx in range(n_samples):
             gt = genotypes[sample_idx]
             a1, a2 = gt[0], gt[1]
-            if a1 < 0 or a2 < 0:
+            # Truly missing: both alleles unknown
+            if a1 < 0:
                 n_missing_var += 1
                 continue
             if gq_values is not None and gq_values[sample_idx] < min_gq:
                 n_missing_var += 1
                 continue
-            n_ref += (a1 == 0) + (a2 == 0)
-            n_alt += (a1 > 0) + (a2 > 0)
+            # Count allele 1
+            n_ref += (a1 == 0)
+            n_alt += (a1 > 0)
+            # Count allele 2 only if present (not haploid)
+            if a2 >= 0:
+                n_ref += (a2 == 0)
+                n_alt += (a2 > 0)
 
         total_alleles = n_ref + n_alt
         if total_alleles == 0:
@@ -213,13 +221,16 @@ def infer_sex_from_vcf(
 
         used_count += 1
 
-        # Accumulate per-sample stats
+        # Accumulate per-sample stats.
+        # Haploid calls (a2 = -1) are counted as called but never
+        # heterozygous, which is the correct behaviour: males on chrX
+        # are hemizygous so their F-statistic should trend toward 1.0.
         for sample_idx in range(n_samples):
             gt = genotypes[sample_idx]
             a1, a2 = gt[0], gt[1]
 
-            # Skip missing or low-quality
-            if a1 < 0 or a2 < 0:
+            # Skip truly missing (a1 unknown)
+            if a1 < 0:
                 continue
             if gq_values is not None and gq_values[sample_idx] < min_gq:
                 continue
@@ -227,8 +238,8 @@ def infer_sex_from_vcf(
             n_called[sample_idx] += 1
             sum_expected_het[sample_idx] += exp_het_variant
 
-            # Check heterozygous
-            if a1 != a2:
+            # Heterozygous only if diploid and alleles differ
+            if a2 >= 0 and a1 != a2:
                 n_het[sample_idx] += 1
 
     print(f"  Processed {variant_count} chrX variants, {used_count} passed filters")

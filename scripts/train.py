@@ -209,6 +209,7 @@ def save_fold_config(
         'early_stopping': args.early_stopping,
         'epochs': args.epochs,
         'seed': args.seed,
+        'genome_build': args.genome_build,
         # Data reference
         'preprocessed_data': str(args.preprocessed_data) if args.preprocessed_data else None,
         'vcf': str(args.vcf) if args.vcf else None,
