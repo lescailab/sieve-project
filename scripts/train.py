@@ -121,6 +121,14 @@ def parse_args():
     parser.add_argument('--genome-build', type=str, default='GRCh37',
                         help='Reference genome build (GRCh37 or GRCh38)')
 
+    # Covariate arguments
+    parser.add_argument('--sex-map', type=str, default=None,
+                        help='Path to sample_sex.tsv from infer_sex.py. '
+                             'When provided, sex is used both for ploidy-aware '
+                             'dosage encoding AND as a covariate in the '
+                             'classifier head to adjust for sex imbalance '
+                             'between cases and controls.')
+
     return parser.parse_args()
 
 
@@ -141,6 +149,7 @@ def create_model(
     num_attention_layers: int,
     hidden_dim: int,
     aggregation_method: str = 'mean',
+    num_covariates: int = 0,
 ) -> ChunkedSIEVEModel:
     """
     Create Chunked SIEVE model for whole-genome processing.
@@ -156,6 +165,7 @@ def create_model(
         num_attention_layers=num_attention_layers,
         num_heads=num_heads,
         hidden_dim=hidden_dim,
+        num_covariates=num_covariates,
     )
 
     # Wrap in chunked model for whole-genome coverage
@@ -210,6 +220,9 @@ def save_fold_config(
         'epochs': args.epochs,
         'seed': args.seed,
         'genome_build': args.genome_build,
+        # Covariate parameters
+        'sex_map': str(args.sex_map) if args.sex_map else None,
+        'num_covariates': num_covariates if hasattr(args, '_num_covariates') else (1 if args.sex_map else 0),
         # Data reference
         'preprocessed_data': str(args.preprocessed_data) if args.preprocessed_data else None,
         'vcf': str(args.vcf) if args.vcf else None,
@@ -379,6 +392,20 @@ def main():
         yaml.dump(vars(args), f)
     print(f"Config saved to {config_path}")
 
+    # Load sex map if provided
+    sex_map = None
+    num_covariates = 0
+    if args.sex_map is not None:
+        import pandas as pd
+        print(f"\nLoading sex map from {args.sex_map}...")
+        sex_df = pd.read_csv(args.sex_map, sep='\t')
+        sex_map = dict(zip(sex_df['sample_id'], sex_df['inferred_sex']))
+        # Filter to M/F only
+        sex_map = {k: v for k, v in sex_map.items() if v in ('M', 'F')}
+        print(f"  {len(sex_map)} samples with definitive sex (M or F)")
+        num_covariates = 1  # sex is 1 covariate
+        print(f"  Sex will be used as a covariate in the classifier head")
+
     # Load data
     if args.preprocessed_data is not None:
         # Load from preprocessed file
@@ -395,6 +422,15 @@ def main():
             print(f"  Original VCF: {metadata.get('vcf_path', 'unknown')}")
             print(f"  Cases: {metadata.get('num_cases', 'unknown')}")
             print(f"  Controls: {metadata.get('num_controls', 'unknown')}")
+
+        # If sex_map provided, update samples with sex information
+        if sex_map:
+            n_updated = 0
+            for sample in all_samples:
+                if sample.sample_id in sex_map:
+                    sample.sex = sex_map[sample.sample_id]
+                    n_updated += 1
+            print(f"  Updated {n_updated}/{len(all_samples)} samples with sex info")
     else:
         # Load from VCF
         print(f"\nLoading data from {args.vcf}...")
@@ -402,6 +438,7 @@ def main():
         all_samples = build_sample_variants(
             vcf_path=args.vcf,
             phenotype_file=args.phenotypes,
+            sex_map=sex_map,
         )
         load_time = time.time() - start_time
         print(f"Loaded {len(all_samples)} samples in {load_time:.1f} seconds")
@@ -431,6 +468,18 @@ def main():
     n_cases = labels.sum()
     n_controls = len(labels) - n_cases
     print(f"Cases: {n_cases}, Controls: {n_controls} ({n_cases/len(labels):.1%} case rate)")
+
+    # Report sex covariate summary
+    if num_covariates > 0:
+        n_with_sex = sum(1 for s in all_samples if s.sex is not None)
+        n_male = sum(1 for s in all_samples if s.sex == 'M')
+        n_female = sum(1 for s in all_samples if s.sex == 'F')
+        print(f"\nSex covariate enabled:")
+        print(f"  Samples with sex: {n_with_sex}/{len(all_samples)}")
+        print(f"  Male: {n_male}, Female: {n_female}")
+        male_cases = sum(1 for s in all_samples if s.sex == 'M' and s.label == 1)
+        female_cases = sum(1 for s in all_samples if s.sex == 'F' and s.label == 1)
+        print(f"  Male cases: {male_cases}, Female cases: {female_cases}")
 
     if args.cv is not None:
         # Cross-validation
@@ -498,6 +547,7 @@ def main():
                 num_attention_layers=args.num_attention_layers,
                 hidden_dim=args.hidden_dim,
                 aggregation_method=args.aggregation_method,
+                num_covariates=num_covariates,
             )
 
             # Create fold checkpoint directory
