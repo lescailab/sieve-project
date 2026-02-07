@@ -475,7 +475,6 @@ def parse_vcf_cyvcf2(
     - Variants without CSQ annotation are skipped with a warning
     """
     from src.data.genome import (
-        GenomeBuild as _GenomeBuild,
         get_genome_build,
         is_in_par,
         normalise_chrom,

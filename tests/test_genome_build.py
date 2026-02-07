@@ -17,7 +17,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.data.genome import (
     GRCH37,
     GRCH38,
-    GenomeBuild,
     get_genome_build,
     is_autosomal,
     is_in_par,
