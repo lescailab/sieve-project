@@ -8,7 +8,7 @@
 - **User Documentation**: USER_GUIDE.md (comprehensive end-user manual)
 - **Branch naming**: `devel/<description>-<session-id>`
 
-## Project Status (2026-02-04)
+## Project Status (2026-02-06)
 
 **Completed Phases**:
 - ✅ Phase 1A-D: Data pipeline, model architecture, training, basic explainability
@@ -21,6 +21,9 @@
 - Integrated gradients attribution
 - Attention analysis for epistasis
 - Null baseline statistical validation
+- Sex-aware preprocessing with ploidy-aware dosage encoding
+- Genetic sex inference from chrX heterozygosity
+- chrX ploidy bias correction for attribution rankings
 - Biological validation (ClinVar, GWAS, GO)
 
 ## Critical Development Rules
@@ -86,6 +89,9 @@ sieve-project/
 │   ├── explain.py
 │   ├── create_null_baseline.py
 │   ├── compare_attributions.py
+│   ├── infer_sex.py
+│   ├── check_sex_balance.py
+│   ├── correct_chrx_bias.py
 │   └── run_null_baseline_analysis.sh
 └── tests/                 # Unit tests
 ```
@@ -135,6 +141,13 @@ For large datasets use:
 
 Chunked processing ensures ALL chromosomes are analyzed (not just chr1/chr2).
 Verify with diagnostic output.
+
+### chrX Ploidy Bias (Mitigated)
+
+When sex information is missing, chrX hemizygosity can inflate attributions.
+Mitigation steps:
+- Use `scripts/infer_sex.py` → `scripts/preprocess.py --sex-map` for ploidy-aware encoding
+- Optionally run `scripts/correct_chrx_bias.py` on attribution rankings
 
 ## Testing Patterns
 
