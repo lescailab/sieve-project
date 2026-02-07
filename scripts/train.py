@@ -117,6 +117,10 @@ def parse_args():
     parser.add_argument('--seed', type=int, default=42,
                         help='Random seed for reproducibility')
 
+    # Genome build
+    parser.add_argument('--genome-build', type=str, default='GRCh37',
+                        help='Reference genome build (GRCh37 or GRCh38)')
+
     return parser.parse_args()
 
 
