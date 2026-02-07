@@ -5,6 +5,10 @@
 # Data Configuration
 # =============================================================================
 data:
+  # Genome reference build (GRCh37 or GRCh38)
+  # Controls PAR coordinates, contig normalisation, and database lookups
+  genome_build: "GRCh37"
+
   # Annotation level: L0 (genotype only) through L4 (full annotations)
   annotation_level: "L2"
   
