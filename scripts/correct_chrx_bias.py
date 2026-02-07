@@ -89,8 +89,10 @@ def compute_chromosome_zscores(
 
     chrom_stats = df.groupby('chromosome')['mean_attribution'].agg(['mean', 'std'])
     chrom_stats.columns = ['chromosome_mean', 'chromosome_std']
-    # Replace zero std with 1 to avoid division by zero
-    chrom_stats['chromosome_std'] = chrom_stats['chromosome_std'].replace(0, 1.0)
+    # Replace zero/NaN std with 1 to avoid division by zero.
+    # groupby().std() returns NaN for chromosomes with a single variant.
+    chrom_stats['chromosome_std'] = chrom_stats['chromosome_std'].replace(0, 1.0).fillna(1.0)
+    chrom_stats['chromosome_mean'] = chrom_stats['chromosome_mean'].fillna(0.0)
 
     df = df.merge(chrom_stats, left_on='chromosome', right_index=True, how='left')
 
@@ -100,7 +102,9 @@ def compute_chromosome_zscores(
 
     df['is_sex_chrom'] = df['chromosome'].apply(lambda c: is_sex_chrom(str(c), build))
 
-    df['corrected_rank'] = df['z_attribution'].rank(ascending=False, method='min').astype(int)
+    df['corrected_rank'] = df['z_attribution'].rank(
+        ascending=False, method='min', na_option='bottom',
+    ).astype(int)
 
     return df
 
