@@ -50,6 +50,8 @@ def sample_args():
         early_stopping=15,
         epochs=100,
         seed=42,
+        genome_build="GRCh37",
+        sex_map=None,
         preprocessed_data="/data/preprocessed.pt",
         vcf=None,
         phenotypes=None,
