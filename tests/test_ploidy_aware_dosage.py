@@ -10,19 +10,14 @@ Verifies:
 6. Build parameter changes PAR boundaries correctly
 """
 
-import pytest
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock, patch
-from dataclasses import dataclass
-from typing import List
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.data.genome import (
     GRCH37,
     GRCH38,
-    get_genome_build,
     is_in_par,
     normalise_chrom,
 )
