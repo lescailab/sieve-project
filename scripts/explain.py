@@ -99,6 +99,10 @@ def parse_args():
                         choices=['cuda', 'cpu'],
                         help='Device to use')
 
+    # Genome build
+    parser.add_argument('--genome-build', type=str, default='GRCh37',
+                        help='Reference genome build (GRCh37 or GRCh38)')
+
     return parser.parse_args()
 
 
@@ -570,6 +574,7 @@ def main():
     analysis_metadata = {
         'is_null_baseline': args.is_null_baseline,
         'experiment_dir': str(args.experiment_dir) if args.experiment_dir else str(args.checkpoint),
+        'genome_build': args.genome_build,
         'n_samples': len(all_samples),
         'annotation_level': config['level'],
         'n_integration_steps': args.n_steps,
