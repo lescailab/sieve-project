@@ -117,6 +117,10 @@ def parse_args():
     parser.add_argument('--seed', type=int, default=42,
                         help='Random seed for reproducibility')
 
+    # Genome build
+    parser.add_argument('--genome-build', type=str, default='GRCh37',
+                        help='Reference genome build (GRCh37 or GRCh38)')
+
     return parser.parse_args()
 
 
@@ -205,6 +209,7 @@ def save_fold_config(
         'early_stopping': args.early_stopping,
         'epochs': args.epochs,
         'seed': args.seed,
+        'genome_build': args.genome_build,
         # Data reference
         'preprocessed_data': str(args.preprocessed_data) if args.preprocessed_data else None,
         'vcf': str(args.vcf) if args.vcf else None,
