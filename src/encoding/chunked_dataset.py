@@ -21,6 +21,26 @@ from src.encoding.levels import AnnotationLevel
 from src.encoding.sparse_tensor import build_variant_tensor, build_gene_index
 
 
+def _encode_sex(sex: 'Optional[str]') -> float:
+    """Encode sex as a float for use as a model covariate.
+
+    Parameters
+    ----------
+    sex : str or None
+        'M', 'F', or None.
+
+    Returns
+    -------
+    float
+        0.0 for female, 1.0 for male, -1.0 for unknown/missing.
+    """
+    if sex == 'M':
+        return 1.0
+    elif sex == 'F':
+        return 0.0
+    return -1.0
+
+
 class ChunkedVariantDataset(Dataset):
     """
     Dataset that splits each sample into chunks for memory-efficient processing.
@@ -93,6 +113,9 @@ class ChunkedVariantDataset(Dataset):
         for sample_idx, sample in enumerate(samples):
             n_variants = len(sample.variants)
 
+            # Encode sex as float for covariate use
+            sex_code = _encode_sex(sample.sex)
+
             if n_variants == 0:
                 # Empty sample - create one empty chunk
                 self.chunk_info.append({
@@ -102,7 +125,8 @@ class ChunkedVariantDataset(Dataset):
                     'end_idx': 0,
                     'total_chunks': 1,
                     'sample_id': sample.sample_id,
-                    'label': sample.label
+                    'label': sample.label,
+                    'sex': sex_code,
                 })
             else:
                 # Calculate chunks with overlap
@@ -120,7 +144,8 @@ class ChunkedVariantDataset(Dataset):
                         'end_idx': end_idx,
                         'total_chunks': total_chunks,
                         'sample_id': sample.sample_id,
-                        'label': sample.label
+                        'label': sample.label,
+                        'sex': sex_code,
                     })
 
         print(f"ChunkedVariantDataset created:")
@@ -161,6 +186,7 @@ class ChunkedVariantDataset(Dataset):
         chunk_tensor['chunk_idx'] = info['chunk_idx']
         chunk_tensor['total_chunks'] = info['total_chunks']
         chunk_tensor['original_sample_idx'] = info['sample_idx']
+        chunk_tensor['sex'] = info['sex']
 
         return chunk_tensor
 
@@ -200,6 +226,7 @@ def collate_chunks(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
             'gene_ids': torch.zeros((batch_size, 0), dtype=torch.long),
             'mask': torch.zeros((batch_size, 0), dtype=torch.bool),
             'labels': torch.tensor([s['label'] for s in batch], dtype=torch.long),
+            'sex': torch.tensor([s['sex'] for s in batch], dtype=torch.float32),
             'sample_ids': [s['sample_id'] for s in batch],
             'chunk_indices': torch.tensor([s['chunk_idx'] for s in batch], dtype=torch.long),
             'total_chunks': torch.tensor([s['total_chunks'] for s in batch], dtype=torch.long),
@@ -214,6 +241,7 @@ def collate_chunks(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
     gene_ids_padded = torch.zeros((batch_size, max_variants), dtype=torch.long)
     mask_padded = torch.zeros((batch_size, max_variants), dtype=torch.bool)
     labels = torch.zeros(batch_size, dtype=torch.long)
+    sex = torch.zeros(batch_size, dtype=torch.float32)
     sample_ids = []
     chunk_indices = torch.zeros(batch_size, dtype=torch.long)
     total_chunks = torch.zeros(batch_size, dtype=torch.long)
@@ -230,6 +258,7 @@ def collate_chunks(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
             mask_padded[i, :n_variants] = sample['mask']
 
         labels[i] = sample['label']
+        sex[i] = sample['sex']
         sample_ids.append(sample['sample_id'])
         chunk_indices[i] = sample['chunk_idx']
         total_chunks[i] = sample['total_chunks']
@@ -241,6 +270,7 @@ def collate_chunks(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
         'gene_ids': gene_ids_padded,
         'mask': mask_padded,
         'labels': labels,
+        'sex': sex,
         'sample_ids': sample_ids,
         'chunk_indices': chunk_indices,
         'total_chunks': total_chunks,
