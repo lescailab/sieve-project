@@ -57,6 +57,10 @@ def parse_args():
                         choices=['cuda', 'cpu'],
                         help='Device to use')
 
+    # Genome build
+    parser.add_argument('--genome-build', type=str, default='GRCh37',
+                        help='Reference genome build (GRCh37 or GRCh38)')
+
     return parser.parse_args()
 
 
@@ -266,6 +270,7 @@ def main():
 
     # Summary statistics
     summary = {
+        'genome_build': args.genome_build,
         'total_interactions_tested': len(results_df),
         'n_significant': len(significant),
         'n_synergistic': len(synergistic),
