@@ -5,6 +5,17 @@ Data processing module for SIEVE.
 This module handles VCF parsing, annotation extraction, and dataset construction.
 """
 
+from .genome import (
+    GenomeBuild,
+    get_genome_build,
+    is_in_par,
+    is_sex_chrom,
+    is_autosomal,
+    normalise_chrom,
+    GRCH37,
+    GRCH38,
+)
+
 from .vcf_parser import (
     VariantRecord,
     SampleVariants,
@@ -28,6 +39,16 @@ from .annotation import (
 )
 
 __all__ = [
+    # Genome build
+    'GenomeBuild',
+    'get_genome_build',
+    'is_in_par',
+    'is_sex_chrom',
+    'is_autosomal',
+    'normalise_chrom',
+    'GRCH37',
+    'GRCH38',
+
     # VCF Parser
     'VariantRecord',
     'SampleVariants',

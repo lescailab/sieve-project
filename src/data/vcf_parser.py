@@ -90,8 +90,9 @@ def harmonize_contig(contig: str) -> str:
     """
     Harmonize chromosome notation by removing 'chr' prefix.
 
-    Handles both UCSC (chr1) and Ensembl (1) notation. Always returns
-    the Ensembl format without 'chr' prefix for consistency with GRCh37.
+    .. deprecated::
+        Use :func:`src.data.genome.normalise_chrom` instead, which also
+        handles numeric sex chromosome aliases (23 -> X, 24 -> Y).
 
     Parameters
     ----------
@@ -112,9 +113,8 @@ def harmonize_contig(contig: str) -> str:
     >>> harmonize_contig('chrX')
     'X'
     """
-    if contig.startswith('chr'):
-        return contig[3:]
-    return contig
+    from src.data.genome import normalise_chrom, get_genome_build
+    return normalise_chrom(contig, get_genome_build('GRCh37'))
 
 
 def parse_csq_field(csq_string: str, alt_allele: str) -> List[Dict[str, str]]:
@@ -424,6 +424,8 @@ def load_phenotypes(phenotype_file: Path) -> Dict[str, int]:
 def parse_vcf_cyvcf2(
     vcf_path: Path,
     phenotypes: Dict[str, int],
+    genome_build: Optional['GenomeBuild'] = None,
+    sex_map: Optional[Dict[str, str]] = None,
     max_variants_per_sample: Optional[int] = None,
     min_gq: int = 20,
 ) -> Iterator[SampleVariants]:
@@ -439,6 +441,13 @@ def parse_vcf_cyvcf2(
         Path to VCF file (can be .vcf.gz)
     phenotypes : Dict[str, int]
         Mapping from sample_id to phenotype label (0=control, 1=case)
+    genome_build : GenomeBuild, optional
+        Genome build for contig normalisation and PAR coordinates.
+        Defaults to GRCh37 if not provided.
+    sex_map : Dict[str, str], optional
+        Mapping from sample_id to sex ('M' or 'F'). When provided,
+        enables ploidy-aware dosage encoding on sex chromosomes:
+        hemizygous males on chrX (non-PAR) get dosage doubled (0/2).
     max_variants_per_sample : Optional[int]
         If specified, limit number of variants per sample (for debugging)
     min_gq : int
@@ -456,12 +465,24 @@ def parse_vcf_cyvcf2(
     - Only includes non-reference genotypes (GT != 0/0)
     - Handles multi-allelic sites correctly
     - Selects canonical transcript annotation per variant
+    - When sex_map is provided, applies ploidy correction:
+      - Male chrX non-PAR: dosage * 2 (hemizygous alt -> 2)
+      - Female chrY: variant skipped (data quality issue)
 
     Warnings
     --------
     - Samples in VCF but not in phenotypes are skipped with a warning
     - Variants without CSQ annotation are skipped with a warning
     """
+    from src.data.genome import (
+        get_genome_build,
+        is_in_par,
+        normalise_chrom,
+    )
+
+    if genome_build is None:
+        genome_build = get_genome_build('GRCh37')
+
     vcf = cyvcf2.VCF(str(vcf_path))
     samples = vcf.samples
 
@@ -471,6 +492,10 @@ def parse_vcf_cyvcf2(
         print(f"Warning: {len(missing_phenotypes)} samples in VCF lack phenotype data")
         print(f"  Missing samples: {missing_phenotypes[:5]}...")
 
+    if sex_map:
+        n_with_sex = sum(1 for s in samples if s in sex_map)
+        print(f"Ploidy-aware mode: {n_with_sex}/{len(samples)} samples have sex info")
+
     # Initialize storage for each sample
     sample_variants: Dict[str, List[VariantRecord]] = {
         sample: [] for sample in samples if sample in phenotypes
@@ -478,13 +503,19 @@ def parse_vcf_cyvcf2(
 
     # Iterate through variants
     variant_count = 0
+    ploidy_corrections = 0
+    skipped_female_y = 0
     for variant in vcf:
         variant_count += 1
 
-        chrom = harmonize_contig(variant.CHROM)
+        chrom = normalise_chrom(variant.CHROM, genome_build)
         pos = variant.POS
         ref = variant.REF
         alts = variant.ALT  # List of alternate alleles
+
+        # Pre-compute sex-chromosome flags for this variant
+        is_non_par_x = (chrom == 'X') and not is_in_par(pos, 'X', genome_build)
+        is_y = (chrom == 'Y')
 
         # Get CSQ field
         try:
@@ -524,6 +555,14 @@ def parse_vcf_cyvcf2(
                 if sample not in phenotypes:
                     continue
 
+                # Get sample sex (default to UNKNOWN if no sex_map)
+                sample_sex = sex_map.get(sample, 'UNKNOWN') if sex_map else 'UNKNOWN'
+
+                # Skip female Y variants (data quality issue)
+                if is_y and sample_sex == 'F':
+                    skipped_female_y += 1
+                    continue
+
                 # Get genotype for this sample
                 gt = genotypes[sample_idx]
                 allele1, allele2, phased = gt[0], gt[1], gt[2]
@@ -538,8 +577,14 @@ def parse_vcf_cyvcf2(
                 dosage = 0
                 if allele1 == target_allele:
                     dosage += 1
-                if allele2 == target_allele:
+                if allele2 >= 0 and allele2 == target_allele:
                     dosage += 1
+
+                # Apply ploidy correction for hemizygous males on chrX
+                if is_non_par_x and sample_sex == 'M':
+                    dosage = dosage * 2
+                    if dosage > 0:
+                        ploidy_corrections += 1
 
                 # Skip reference genotypes
                 if dosage == 0:
@@ -563,6 +608,9 @@ def parse_vcf_cyvcf2(
                 sample_variants[sample].append(var_record)
 
     print(f"Processed {variant_count} variants from VCF")
+    if sex_map:
+        print(f"  Ploidy corrections applied: {ploidy_corrections}")
+        print(f"  Female Y variants skipped: {skipped_female_y}")
 
     # Yield SampleVariants for each sample
     for sample in samples:
@@ -585,6 +633,8 @@ def parse_vcf_cyvcf2(
 def build_sample_variants(
     vcf_path: Path,
     phenotype_file: Path,
+    genome_build: Optional['GenomeBuild'] = None,
+    sex_map: Optional[Dict[str, str]] = None,
     max_variants_per_sample: Optional[int] = None,
     min_gq: int = 20,
 ) -> List[SampleVariants]:
@@ -597,6 +647,11 @@ def build_sample_variants(
         Path to VCF file
     phenotype_file : Path
         Path to phenotype TSV file
+    genome_build : GenomeBuild, optional
+        Genome build for contig normalisation and PAR coordinates.
+        Defaults to GRCh37.
+    sex_map : Dict[str, str], optional
+        Mapping from sample_id to sex ('M' or 'F') for ploidy-aware encoding.
     max_variants_per_sample : Optional[int]
         If specified, limit variants per sample
     min_gq : int
@@ -628,6 +683,8 @@ def build_sample_variants(
         parse_vcf_cyvcf2(
             vcf_path,
             phenotypes,
+            genome_build=genome_build,
+            sex_map=sex_map,
             max_variants_per_sample=max_variants_per_sample,
             min_gq=min_gq,
         )

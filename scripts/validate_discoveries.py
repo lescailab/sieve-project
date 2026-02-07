@@ -58,9 +58,9 @@ def parse_args():
                         help='Number of top genes to validate')
     parser.add_argument('--disease-terms', type=str, nargs='+',
                         help='Disease terms for GWAS filtering (e.g., "diabetes" "obesity")')
-    parser.add_argument('--reference-genome', type=str, default='GRCh37',
-                        choices=['GRCh37', 'GRCh38'],
-                        help='Reference genome build')
+    parser.add_argument('--genome-build', '--reference-genome', type=str,
+                        default='GRCh37', dest='genome_build',
+                        help='Reference genome build (GRCh37 or GRCh38)')
 
     return parser.parse_args()
 
@@ -85,7 +85,7 @@ def main():
     print(f"  Genes: {len(gene_rankings)}")
 
     # Initialize validator
-    validator = BiologicalValidator(reference_genome=args.reference_genome)
+    validator = BiologicalValidator(reference_genome=args.genome_build)
 
     # === CLINVAR VALIDATION ===
     clinvar_validation = None
