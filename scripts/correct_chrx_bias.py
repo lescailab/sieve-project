@@ -43,7 +43,6 @@ def parse_args():
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
         description='Correct chrX ploidy bias in SIEVE variant attributions',
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
 
     parser.add_argument('--rankings', type=str, required=True,
@@ -52,16 +51,18 @@ def parse_args():
                         help='Output directory for corrected files')
     parser.add_argument('--null-rankings', type=str, default=None,
                         help='Path to null model rankings for enrichment recomputation')
-    parser.add_argument('--exclude-sex-chroms', dest='exclude_sex_chroms',
-                        action='store_true', default=True,
-                        help='Exclude chrX and chrY from final rankings (default)')
-    parser.add_argument('--include-sex-chroms', dest='exclude_sex_chroms',
-                        action='store_false',
-                        help='Include sex chromosomes (flagged) in final rankings')
+    parser.set_defaults(exclude_sex_chroms=True)
+    sex_chrom_group = parser.add_mutually_exclusive_group()
+    sex_chrom_group.add_argument('--exclude-sex-chroms', dest='exclude_sex_chroms',
+                                 action='store_true',
+                                 help='Exclude chrX and chrY from final rankings (default)')
+    sex_chrom_group.add_argument('--include-sex-chroms', dest='exclude_sex_chroms',
+                                 action='store_false',
+                                 help='Include sex chromosomes (flagged) in final rankings')
     parser.add_argument('--genome-build', type=str, default='GRCh37',
-                        help='Reference genome build')
+                        help='Reference genome build (default: GRCh37)')
     parser.add_argument('--top-k', type=int, default=100,
-                        help='Number of top variants to annotate in output')
+                        help='Number of top variants to annotate in output (default: 100)')
 
     return parser.parse_args()
 
