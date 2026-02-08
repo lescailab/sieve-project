@@ -16,9 +16,10 @@ Author: Lescai Lab
 """
 
 import argparse
+import inspect
 from pathlib import Path
 import re
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -81,26 +82,44 @@ def load_state_dict(checkpoint_path: Path, allow_unsafe: bool = False) -> Dict[s
     Prefers tensor-only loading (weights_only=True) when supported by the
     installed PyTorch version and falls back to legacy pickle loading when not.
     """
+    supports_weights_only = False
     try:
-        checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
-    except TypeError:
-        checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-    except Exception as exc:
-        safe_globals = getattr(torch.serialization, "safe_globals", None)
-        if safe_globals is None:
-            if allow_unsafe:
-                checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-            else:
-                raise
-        else:
-            try:
-                with safe_globals([np.core.multiarray.scalar]):
-                    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
-            except Exception:
+        supports_weights_only = "weights_only" in inspect.signature(torch.load).parameters
+    except (TypeError, ValueError):
+        supports_weights_only = False
+
+    if supports_weights_only:
+        try:
+            checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+        except Exception as exc:
+            safe_globals = getattr(torch.serialization, "safe_globals", None)
+            if safe_globals is None:
                 if allow_unsafe:
-                    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+                    checkpoint = torch.load(
+                        checkpoint_path, map_location="cpu", weights_only=False
+                    )
                 else:
-                    raise exc
+                    raise
+            else:
+                try:
+                    with safe_globals([np.core.multiarray.scalar, np.dtype]):
+                        checkpoint = torch.load(
+                            checkpoint_path, map_location="cpu", weights_only=True
+                        )
+                except Exception as retry_exc:
+                    if allow_unsafe:
+                        checkpoint = torch.load(
+                            checkpoint_path, map_location="cpu", weights_only=False
+                        )
+                    else:
+                        raise exc.with_traceback(exc.__traceback__) from retry_exc
+    else:
+        if not allow_unsafe:
+            raise RuntimeError(
+                "Installed PyTorch does not support weights_only loading. "
+                "Re-run with --allow-unsafe to permit legacy pickle loading."
+            )
+        checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     if isinstance(checkpoint, dict):
         if "model_state_dict" in checkpoint and isinstance(checkpoint["model_state_dict"], dict):
             return checkpoint["model_state_dict"]
@@ -121,6 +140,17 @@ def find_key_with_suffix(state_dict: Dict[str, torch.Tensor], suffix: str) -> st
     raise KeyError(f"Could not find key ending with '{suffix}' in state dict.")
 
 
+def find_key_with_suffixes(state_dict: Dict[str, torch.Tensor], suffixes: Iterable[str]) -> str:
+    for suffix in suffixes:
+        for key in state_dict:
+            if key.endswith(suffix):
+                return key
+    raise KeyError(
+        "Could not find key ending with any of the expected suffixes: "
+        f"{', '.join(suffixes)}."
+    )
+
+
 def count_params(state_dict: Dict[str, torch.Tensor], prefix: str) -> int:
     return int(
         sum(tensor.numel() for key, tensor in state_dict.items() if key.startswith(prefix))
@@ -128,12 +158,23 @@ def count_params(state_dict: Dict[str, torch.Tensor], prefix: str) -> int:
 
 
 def infer_architecture(state_dict: Dict[str, torch.Tensor]) -> Dict[str, int]:
-    is_chunked = any(key.startswith("base_model.") for key in state_dict)
-    prefix = "base_model." if is_chunked else ""
+    encoder_prefix_key = find_key_with_suffix(
+        state_dict, "variant_encoder.encoder.0.weight"
+    )
+    prefix = encoder_prefix_key.rsplit("variant_encoder.encoder.0.weight", 1)[0]
+    is_chunked = "base_model." in prefix
 
-    encoder_first_key = find_key_with_suffix(state_dict, f"{prefix}variant_encoder.encoder.0.weight")
-    encoder_second_key = find_key_with_suffix(state_dict, f"{prefix}variant_encoder.encoder.4.weight")
-    classifier_first_key = find_key_with_suffix(state_dict, f"{prefix}classifier.classifier.0.weight")
+    encoder_first_key = encoder_prefix_key
+    encoder_second_key = find_key_with_suffix(
+        state_dict, f"{prefix}variant_encoder.encoder.4.weight"
+    )
+    classifier_first_key = find_key_with_suffixes(
+        state_dict,
+        [
+            f"{prefix}classifier.classifier.0.weight",
+            f"{prefix}classifier.0.weight",
+        ],
+    )
 
     input_dim = state_dict[encoder_first_key].shape[1]
     hidden_dim = state_dict[encoder_first_key].shape[0]
@@ -145,8 +186,7 @@ def infer_architecture(state_dict: Dict[str, torch.Tensor]) -> Dict[str, int]:
     num_genes = (classifier_input_dim - num_covariates) // latent_dim
 
     attention_bias_key = find_key_with_suffix(
-        state_dict,
-        f"{prefix}attention.attention_layers.0.position_bias.weight",
+        state_dict, f"{prefix}attention.attention_layers.0.position_bias.weight"
     )
     num_position_buckets = state_dict[attention_bias_key].shape[0]
     num_heads = state_dict[attention_bias_key].shape[1]
