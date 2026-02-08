@@ -14,7 +14,7 @@ Usage:
         --output-dir results/epistasis_validation \
         --top-k 50
 
-Author: Lescai Lab
+Author: Francesco Lescai
 """
 
 import argparse

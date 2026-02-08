@@ -4,7 +4,7 @@ SHAP-based epistasis detection for variant interactions.
 Uses SHAP (SHapley Additive exPlanations) interaction values to quantify
 variant-variant interactions more rigorously than attention weights alone.
 
-Author: Lescai Lab
+Author: Francesco Lescai
 """
 
 from typing import Dict, List, Tuple

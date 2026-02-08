@@ -8,7 +8,7 @@ This module implements the training infrastructure including:
 - Learning rate scheduling
 - Metrics tracking
 
-Author: Lescai Lab
+Author: Francesco Lescai
 """
 
 from pathlib import Path

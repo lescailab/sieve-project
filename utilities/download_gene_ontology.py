@@ -16,7 +16,7 @@ Output format (JSON):
         ...
     }
 
-Author: Lescai Lab
+Author: Francesco Lescai
 """
 
 import argparse

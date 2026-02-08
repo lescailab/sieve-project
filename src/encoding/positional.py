@@ -18,7 +18,7 @@ in the same context:
 - Sinusoidal: Input features (this phase)
 - Bucketing: Attention bias (next phase)
 
-Author: Lescai Lab
+Author: Francesco Lescai
 """
 
 from typing import Optional, Tuple

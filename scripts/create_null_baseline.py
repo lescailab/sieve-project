@@ -19,7 +19,7 @@ Usage:
         --output-dir data/null_permutations \
         --n-permutations 5
 
-Author: Lescai Lab
+Author: Francesco Lescai
 """
 
 import argparse

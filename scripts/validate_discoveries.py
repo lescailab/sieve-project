@@ -15,7 +15,7 @@ Usage:
         --clinvar data/clinvar.tsv \
         --gwas data/gwas_catalog.tsv
 
-Author: Lescai Lab
+Author: Francesco Lescai
 """
 
 import argparse

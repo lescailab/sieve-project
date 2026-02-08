@@ -7,7 +7,7 @@ This module implements the complete SIEVE model that combines:
 3. Gene aggregation (variant → gene level)
 4. Phenotype classification (case vs control)
 
-Author: Lescai Lab
+Author: Francesco Lescai
 """
 
 from typing import Any, Dict, List, Optional, Tuple

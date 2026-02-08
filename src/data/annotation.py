@@ -8,7 +8,7 @@ annotations from VEP-annotated variants, including:
 - Missing value imputation
 - Annotation quality metrics
 
-Author: Lescai Lab
+Author: Francesco Lescai
 """
 
 from typing import Dict, List, Optional, Tuple

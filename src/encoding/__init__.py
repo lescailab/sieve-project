@@ -6,7 +6,7 @@ This module handles:
 2. Positional encoding (sinusoidal for features, bucketing for attention)
 3. Sparse tensor construction and batching
 
-Author: Lescai Lab
+Author: Francesco Lescai
 """
 
 from .levels import (

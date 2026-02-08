@@ -5,7 +5,7 @@ This module implements the variant encoder that projects variant features
 from the input dimension (which varies by annotation level) to a fixed
 latent dimension for processing by the attention layers.
 
-Author: Lescai Lab
+Author: Francesco Lescai
 """
 
 import torch

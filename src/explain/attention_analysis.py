@@ -4,7 +4,7 @@ Attention pattern analysis for epistasis detection.
 Analyzes attention weights from SIEVE's position-aware attention layers
 to identify variant-variant interactions (epistasis).
 
-Author: Lescai Lab
+Author: Francesco Lescai
 """
 
 from typing import Dict, List
