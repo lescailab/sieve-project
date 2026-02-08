@@ -18,7 +18,7 @@ Author: Lescai Lab
 import argparse
 from pathlib import Path
 import re
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import matplotlib.pyplot as plt
 import torch
@@ -66,11 +66,20 @@ def parse_args() -> argparse.Namespace:
 
 
 def load_state_dict(checkpoint_path: Path) -> Dict[str, torch.Tensor]:
-    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    """
+    Load a model state dict from a checkpoint file.
+
+    Prefers tensor-only loading (weights_only=True) when supported by the
+    installed PyTorch version and falls back to legacy pickle loading when not.
+    """
+    try:
+        checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+    except TypeError:
+        checkpoint = torch.load(checkpoint_path, map_location="cpu")
     if isinstance(checkpoint, dict):
-        if "model_state_dict" in checkpoint:
+        if "model_state_dict" in checkpoint and isinstance(checkpoint["model_state_dict"], dict):
             return checkpoint["model_state_dict"]
-        if "state_dict" in checkpoint:
+        if "state_dict" in checkpoint and isinstance(checkpoint["state_dict"], dict):
             return checkpoint["state_dict"]
         if all(isinstance(v, torch.Tensor) for v in checkpoint.values()):
             return checkpoint
@@ -336,10 +345,20 @@ def draw_architecture(
     plt.close(fig)
 
 
-def resolve_output_paths(checkpoint_path: Path, output_arg: str, formats: List[str]) -> List[Path]:
+def resolve_output_paths(
+    checkpoint_path: Path, output_arg: Optional[str], formats: List[str]
+) -> List[Path]:
     if output_arg:
         output_path = Path(output_arg)
         if output_path.suffix:
+            ext = output_path.suffix.lstrip(".")
+            normalized_formats = [fmt.lower() for fmt in formats]
+            if len(normalized_formats) != 1 or normalized_formats[0] != ext.lower():
+                raise ValueError(
+                    "Conflict between --output and --formats: when --output includes a file "
+                    "extension, --formats must contain exactly that single format. "
+                    f"Got --output extension '{ext}' and --formats={formats!r}."
+                )
             return [output_path]
         output_path.parent.mkdir(parents=True, exist_ok=True)
         return [output_path.with_suffix(f".{ext}") for ext in formats]
