@@ -93,12 +93,14 @@ class SIEVE(nn.Module):
         aggregation: str = 'max',
         num_position_buckets: int = 32,
         max_distance: int = 100000,
+        num_covariates: int = 0,
     ):
         super().__init__()
 
         self.input_dim = input_dim
         self.num_genes = num_genes
         self.latent_dim = latent_dim
+        self.num_covariates = num_covariates
 
         # 1. Variant encoder
         self.variant_encoder = VariantEncoder(
@@ -131,6 +133,7 @@ class SIEVE(nn.Module):
             latent_dim=latent_dim,
             hidden_dim=classifier_hidden_dim,
             dropout=dropout,
+            num_covariates=num_covariates,
         )
 
     def forward(
@@ -139,6 +142,7 @@ class SIEVE(nn.Module):
         positions: Tensor,
         gene_ids: Tensor,
         mask: Optional[Tensor] = None,
+        covariates: Optional[Tensor] = None,
         return_attention: bool = False,
         return_intermediate: bool = False,
         return_embeddings: bool = False
@@ -157,6 +161,9 @@ class SIEVE(nn.Module):
         mask : Optional[Tensor]
             Validity mask, shape (batch, num_variants)
             True = real variant, False = padding
+        covariates : Optional[Tensor]
+            Sample-level covariates, shape (batch, num_covariates).
+            When provided, concatenated to gene embeddings in the classifier.
         return_attention : bool
             Whether to return attention weights (for explainability)
         return_intermediate : bool
@@ -208,7 +215,7 @@ class SIEVE(nn.Module):
         if return_embeddings:
             return gene_embeddings, intermediates
         else:
-            logits = self.classifier(gene_embeddings)
+            logits = self.classifier(gene_embeddings, covariates=covariates)
             return logits, intermediates
 
     def get_model_summary(self) -> Dict[str, Any]:
@@ -314,4 +321,5 @@ def create_sieve_model(
         aggregation=config.get('aggregation', 'max'),
         num_position_buckets=config.get('num_position_buckets', 32),
         max_distance=config.get('max_distance', 100000),
+        num_covariates=config.get('num_covariates', 0),
     )

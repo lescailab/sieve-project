@@ -73,16 +73,22 @@ class SampleVariants:
         Phenotype label: 0=control, 1=case
     variants : List[VariantRecord]
         List of variants carried by this sample
+    sex : Optional[str]
+        Biological sex: 'M', 'F', or None if unknown.
+        Used as a covariate in the classifier when sex imbalance
+        exists between cases and controls.
     """
 
     sample_id: str
     label: int
     variants: List[VariantRecord] = field(default_factory=list)
+    sex: Optional[str] = None
 
     def __repr__(self) -> str:
+        sex_str = f", sex={self.sex}" if self.sex else ""
         return (
             f"SampleVariants({self.sample_id}, label={self.label}, "
-            f"n_variants={len(self.variants)})"
+            f"n_variants={len(self.variants)}{sex_str})"
         )
 
 
@@ -623,10 +629,18 @@ def parse_vcf_cyvcf2(
         if max_variants_per_sample is not None:
             variants = variants[:max_variants_per_sample]
 
+        # Propagate sex information if available
+        sample_sex = None
+        if sex_map and sample in sex_map:
+            s = sex_map[sample]
+            if s in ('M', 'F'):
+                sample_sex = s
+
         yield SampleVariants(
             sample_id=sample,
             label=phenotypes[sample],
-            variants=variants
+            variants=variants,
+            sex=sample_sex,
         )
 
 
