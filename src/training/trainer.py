@@ -149,11 +149,20 @@ class Trainer:
                 mask = batch['mask'].to(self.device)
                 labels = batch['labels'].to(self.device)
 
+                # Build covariates if available
+                covariates = None
+                batch_sex = batch.get('sex')
+                if batch_sex is not None:
+                    num_cov = getattr(self.model, 'num_covariates', 0)
+                    if num_cov > 0:
+                        covariates = batch_sex.to(self.device).unsqueeze(1)
+
                 # Forward pass
                 if self.loss_fn.lambda_attr > 0:
                     # Need variant embeddings for attribution loss
                     logits, intermediates = self.model(
                         features, positions, gene_ids, mask,
+                        covariates=covariates,
                         return_intermediate=True
                     )
                     variant_embeddings = intermediates['variant_embeddings']
@@ -165,7 +174,10 @@ class Trainer:
                     )
                 else:
                     # Standard forward pass
-                    logits, _ = self.model(features, positions, gene_ids, mask)
+                    logits, _ = self.model(
+                        features, positions, gene_ids, mask,
+                        covariates=covariates,
+                    )
                     loss_dict = self.loss_fn(logits=logits, labels=labels)
 
                 loss = loss_dict['total']
@@ -272,10 +284,19 @@ class Trainer:
                 mask = batch['mask'].to(self.device)
                 labels = batch['labels'].to(self.device)
 
+                # Build covariates if available
+                covariates = None
+                batch_sex = batch.get('sex')
+                if batch_sex is not None:
+                    num_cov = getattr(self.model, 'num_covariates', 0)
+                    if num_cov > 0:
+                        covariates = batch_sex.to(self.device).unsqueeze(1)
+
                 # Forward pass
                 if self.loss_fn.lambda_attr > 0:
                     logits, intermediates = self.model(
                         features, positions, gene_ids, mask,
+                        covariates=covariates,
                         return_intermediate=True
                     )
                     variant_embeddings = intermediates['variant_embeddings']
@@ -286,7 +307,10 @@ class Trainer:
                         mask=mask,
                     )
                 else:
-                    logits, _ = self.model(features, positions, gene_ids, mask)
+                    logits, _ = self.model(
+                        features, positions, gene_ids, mask,
+                        covariates=covariates,
+                    )
                     loss_dict = self.loss_fn(logits=logits, labels=labels)
 
                 loss = loss_dict['total']
