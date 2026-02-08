@@ -7,7 +7,7 @@ Validates SIEVE discoveries against known biological databases:
 - Gene Ontology: Functional enrichment
 - KEGG/Reactome: Pathway enrichment
 
-Author: Lescai Lab
+Author: Francesco Lescai
 """
 
 from typing import Dict, List, Optional, Set

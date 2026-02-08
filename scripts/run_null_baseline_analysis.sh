@@ -53,7 +53,7 @@ fi
 
 # Step 1: Create permuted dataset
 echo "[Step 1/4] Creating permuted dataset..."
-NULL_DATA="${OUTPUT_BASE}/preprocessed_discovery_NULL.pt"
+NULL_DATA="${OUTPUT_BASE}/preprocessed_NULL.pt"
 
 $PYTHON scripts/create_null_baseline.py \
     --input "$INPUT_DATA" \

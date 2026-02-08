@@ -14,7 +14,7 @@ Usage:
         --genome-build GRCh37 \
         --top-k 100
 
-Author: Lescai Lab
+Author: Francesco Lescai
 """
 
 import argparse

@@ -11,7 +11,7 @@ Key features:
 - Supports gene-level attribution regularization
 - Provides chunk-wise attention patterns for epistasis detection
 
-Author: Lescai Lab
+Author: Francesco Lescai
 """
 
 from typing import Dict, Tuple, Optional, List

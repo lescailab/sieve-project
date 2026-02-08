@@ -8,7 +8,7 @@ This module contains all neural network components for SIEVE:
 - PhenotypeClassifier: Binary classification head
 - SIEVE: Complete end-to-end model
 
-Author: Lescai Lab
+Author: Francesco Lescai
 """
 
 from .encoder import VariantEncoder

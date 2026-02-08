@@ -8,7 +8,7 @@ with Ensembl VEP. It handles:
 - Multi-allelic sites
 - Multiple transcript annotations per variant
 
-Author: Lescai Lab
+Author: Francesco Lescai
 """
 
 from dataclasses import dataclass, field

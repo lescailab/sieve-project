@@ -13,7 +13,7 @@ Usage:
     python scripts/preprocess.py --vcf data.vcf.gz --phenotypes pheno.tsv --output preprocessed.pt \
         --sex-map sex_inference/sample_sex.tsv --genome-build GRCh37
 
-Author: Lescai Lab
+Author: Francesco Lescai
 """
 
 import argparse

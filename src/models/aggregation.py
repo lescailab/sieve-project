@@ -5,7 +5,7 @@ This module implements aggregation of variant-level embeddings to gene-level
 representations. This is crucial for reducing dimensionality from thousands
 of variants to hundreds of genes.
 
-Author: Lescai Lab
+Author: Francesco Lescai
 """
 
 from typing import Literal, Optional

@@ -5,7 +5,7 @@ This module implements the final classification head that predicts phenotype
 (case vs control) from gene-level embeddings, with optional covariate support
 (e.g. sex) to control for confounders.
 
-Author: Lescai Lab
+Author: Francesco Lescai
 """
 
 from typing import Optional

@@ -12,7 +12,7 @@ Annotation Levels:
 - L3: L2 + SIFT + PolyPhen (standard functional scores)
 - L4: L3 + additional annotations (full annotation)
 
-Author: Lescai Lab
+Author: Francesco Lescai
 """
 
 from enum import Enum

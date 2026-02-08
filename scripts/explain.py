@@ -27,7 +27,7 @@ Usage:
         --output-dir results/explainability \
         --skip-attention
 
-Author: Lescai Lab
+Author: Francesco Lescai
 """
 
 import argparse

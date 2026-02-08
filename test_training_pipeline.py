@@ -11,7 +11,7 @@ This script tests the complete training pipeline on real data:
 6. Test validation
 7. Test checkpointing
 
-Author: Lescai Lab
+Author: Francesco Lescai
 """
 
 from pathlib import Path
