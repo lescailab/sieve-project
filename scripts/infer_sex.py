@@ -15,7 +15,7 @@ Usage:
         --f-male 0.8 \
         --f-female 0.2
 
-Author: Lescai Lab
+Author: Francesco Lescai
 """
 
 import argparse

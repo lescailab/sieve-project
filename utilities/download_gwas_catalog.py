@@ -12,7 +12,7 @@ Usage:
 Output format (TSV):
     gene | disease_trait | chr | pos | snp_id | p_value | risk_allele
 
-Author: Lescai Lab
+Author: Francesco Lescai
 """
 
 import argparse

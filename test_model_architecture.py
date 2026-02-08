@@ -10,7 +10,7 @@ This script tests the complete SIEVE model architecture on real data:
 5. Test model summary and parameter counts
 6. Test gradient flow
 
-Author: Lescai Lab
+Author: Francesco Lescai
 """
 
 from pathlib import Path

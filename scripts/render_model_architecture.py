@@ -12,7 +12,7 @@ Usage:
         --checkpoint outputs/L3_run/best_model.pt \
         --output outputs/L3_run/model_architecture.png
 
-Author: Lescai Lab
+Author: Francesco Lescai
 """
 
 import argparse

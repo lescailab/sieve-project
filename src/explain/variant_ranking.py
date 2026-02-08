@@ -4,7 +4,7 @@ Variant ranking and prioritization.
 Combines attribution scores and attention patterns to rank variants
 by their importance for disease prediction.
 
-Author: Lescai Lab
+Author: Francesco Lescai
 """
 
 from typing import Dict, List, Optional

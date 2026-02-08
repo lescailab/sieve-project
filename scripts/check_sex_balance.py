@@ -13,7 +13,7 @@ Usage:
         --genome-build GRCh37 \
         --output-dir /path/to/diagnostics/
 
-Author: Lescai Lab
+Author: Francesco Lescai
 """
 
 import argparse

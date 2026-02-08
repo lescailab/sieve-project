@@ -10,7 +10,7 @@ disease-associated variants through:
 - Biological validation against databases
 - Visualization of discovered variants
 
-Author: Lescai Lab
+Author: Francesco Lescai
 """
 
 from .gradients import IntegratedGradientsExplainer
