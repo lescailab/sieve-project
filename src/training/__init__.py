@@ -9,7 +9,7 @@ Key components:
 - trainer: Training loop with checkpointing and early stopping
 - validation: Cross-validation utilities
 
-Author: Lescai Lab
+Author: Francesco Lescai
 """
 
 from .loss import SIEVELoss, attribution_sparsity_loss, compute_class_weights

@@ -12,7 +12,7 @@ Usage:
     # Cross-validation (all folds)
     python scripts/plot_training_history.py --experiment-dir outputs/experiment --output training_curves_cv.png
 
-Author: Lescai Lab
+Author: Francesco Lescai
 """
 
 import argparse

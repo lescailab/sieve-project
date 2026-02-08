@@ -11,7 +11,7 @@ Key features:
 - Proper masking for variable-length sequences
 - Numerically stable implementation
 
-Author: Lescai Lab
+Author: Francesco Lescai
 """
 
 from typing import Optional, Tuple

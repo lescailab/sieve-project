@@ -9,7 +9,7 @@ The combined loss encourages the model to:
 - Accurately predict phenotype (classification loss)
 - Rely on a sparse set of variants (attribution sparsity)
 
-Author: Lescai Lab
+Author: Francesco Lescai
 """
 
 from typing import Dict, Optional

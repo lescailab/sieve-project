@@ -5,7 +5,7 @@ Uses Captum's IntegratedGradients to compute variant-level importance scores.
 This allows us to identify which variants most strongly influence the model's
 predictions for each sample.
 
-Author: Lescai Lab
+Author: Francesco Lescai
 """
 
 from typing import Dict, List, Optional, Tuple

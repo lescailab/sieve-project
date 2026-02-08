@@ -12,7 +12,7 @@ Key functions:
 - build_gene_index: Create gene symbol → integer mapping
 - VariantDataset: PyTorch Dataset wrapper
 
-Author: Lescai Lab
+Author: Francesco Lescai
 """
 
 from typing import Any, Dict, List, Optional

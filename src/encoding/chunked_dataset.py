@@ -8,7 +8,7 @@ chr1/chr2 due to VCF ordering).
 Key innovation: Split each sample into multiple chunks, process chunks independently,
 then aggregate chunk-level outputs into sample-level predictions.
 
-Author: Lescai Lab
+Author: Francesco Lescai
 """
 
 from typing import List, Dict, Any, Optional

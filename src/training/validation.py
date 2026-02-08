@@ -8,7 +8,7 @@ Key functions:
 - create_stratified_folds: Create stratified k-fold splits
 - get_train_val_loaders: Create train/val DataLoaders from fold indices
 
-Author: Lescai Lab
+Author: Francesco Lescai
 """
 
 from typing import List, Tuple

@@ -19,7 +19,7 @@ Usage:
         --null-dir results/null_permutations \
         --output-dir results/comparison
 
-Author: Lescai Lab
+Author: Francesco Lescai
 """
 
 import argparse

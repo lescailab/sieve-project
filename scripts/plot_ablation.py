@@ -7,7 +7,7 @@ Creates a bar plot showing AUC across annotation levels with error bars.
 Usage:
     python scripts/plot_ablation.py --results-dir experiments/ablation --output ablation_results.png
 
-Author: Lescai Lab
+Author: Francesco Lescai
 """
 
 import argparse

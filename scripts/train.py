@@ -9,7 +9,7 @@ Usage:
     python scripts/train.py --vcf data.vcf.gz --phenotypes phenotypes.tsv --level L3
     python scripts/train.py --vcf data.vcf.gz --phenotypes phenotypes.tsv --level L3 --cv 5
 
-Author: Lescai Lab
+Author: Francesco Lescai
 """
 
 import argparse

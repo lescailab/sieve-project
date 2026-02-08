@@ -9,7 +9,7 @@ This script tests the complete encoding pipeline on real test data:
 4. Verify batching and shapes
 5. Test both positional encodings
 
-Author: Lescai Lab
+Author: Francesco Lescai
 """
 
 from pathlib import Path

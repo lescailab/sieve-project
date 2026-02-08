@@ -12,7 +12,7 @@ Usage:
 Output format (TSV):
     chrom | pos | ref | alt | gene | clinical_significance
 
-Author: Lescai Lab
+Author: Francesco Lescai
 """
 
 import argparse
