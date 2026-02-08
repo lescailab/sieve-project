@@ -335,19 +335,18 @@ class ChunkedSIEVEModel(nn.Module):
             # For each unique sample, find its first occurrence in original_sample_indices
             # and extract the label at that position
             sample_labels = torch.zeros(len(unique_samples), dtype=labels.dtype, device=device)
+            first_chunk_indices = torch.zeros(len(unique_samples), dtype=torch.long, device=device)
             for i, sample_idx in enumerate(unique_samples):
                 # Find first chunk belonging to this sample
                 first_chunk_idx = (original_sample_indices == sample_idx).nonzero(as_tuple=True)[0][0]
                 sample_labels[i] = labels[first_chunk_idx]
+                first_chunk_indices[i] = first_chunk_idx
 
             # Aggregate sex to sample level (same value for all chunks of a sample)
             num_covariates = getattr(self.base_model, 'num_covariates', 0)
             if batch_sex is not None and num_covariates > 0:
                 batch_sex = batch_sex.to(device)
-                sample_sex = torch.zeros(len(unique_samples), dtype=torch.float32, device=device)
-                for i, sample_idx in enumerate(unique_samples):
-                    first_chunk_idx = (original_sample_indices == sample_idx).nonzero(as_tuple=True)[0][0]
-                    sample_sex[i] = batch_sex[first_chunk_idx]
+                sample_sex = batch_sex[first_chunk_indices]
                 sample_covariates = sample_sex.unsqueeze(1)  # [num_samples, 1]
         else:
             sample_labels = labels

@@ -122,12 +122,18 @@ def parse_args():
                         help='Reference genome build (GRCh37 or GRCh38)')
 
     # Covariate arguments
-    parser.add_argument('--sex-map', type=str, default=None,
-                        help='Path to sample_sex.tsv from infer_sex.py. '
-                             'When provided, sex is used both for ploidy-aware '
-                             'dosage encoding AND as a covariate in the '
-                             'classifier head to adjust for sex imbalance '
-                             'between cases and controls.')
+    parser.add_argument(
+        '--sex-map', type=str, default=None,
+        help=(
+            'Path to sample_sex.tsv from infer_sex.py. When training directly '
+            'from VCF, sex is used for ploidy-aware dosage encoding and also as '
+            'a covariate in the classifier head to adjust for sex imbalance '
+            'between cases and controls. When using --preprocessed-data, this '
+            'script cannot change existing dosages and only uses sex as a '
+            'covariate; ensure your preprocessed data were generated with '
+            'sex-aware ploidy encoding if required.'
+        )
+    )
 
     return parser.parse_args()
 
@@ -198,6 +204,7 @@ def save_fold_config(
     args : argparse.Namespace
         Command-line arguments containing all config values.
     """
+    num_covariates = getattr(args, 'num_covariates', 1 if args.sex_map else 0)
     fold_config = {
         'fold_index': fold_idx,
         'experiment_name': args.experiment_name,
@@ -222,7 +229,7 @@ def save_fold_config(
         'genome_build': args.genome_build,
         # Covariate parameters
         'sex_map': str(args.sex_map) if args.sex_map else None,
-        'num_covariates': num_covariates if hasattr(args, '_num_covariates') else (1 if args.sex_map else 0),
+        'num_covariates': num_covariates,
         # Data reference
         'preprocessed_data': str(args.preprocessed_data) if args.preprocessed_data else None,
         'vcf': str(args.vcf) if args.vcf else None,
@@ -386,12 +393,6 @@ def main():
     output_dir = Path(args.output_dir) / args.experiment_name
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Save config
-    config_path = output_dir / 'config.yaml'
-    with open(config_path, 'w') as f:
-        yaml.dump(vars(args), f)
-    print(f"Config saved to {config_path}")
-
     # Load sex map if provided
     sex_map = None
     num_covariates = 0
@@ -405,6 +406,13 @@ def main():
         print(f"  {len(sex_map)} samples with definitive sex (M or F)")
         num_covariates = 1  # sex is 1 covariate
         print(f"  Sex will be used as a covariate in the classifier head")
+    args.num_covariates = num_covariates
+
+    # Save config
+    config_path = output_dir / 'config.yaml'
+    with open(config_path, 'w') as f:
+        yaml.dump(vars(args), f)
+    print(f"Config saved to {config_path}")
 
     # Load data
     if args.preprocessed_data is not None:
@@ -675,6 +683,7 @@ def main():
             num_attention_layers=args.num_attention_layers,
             hidden_dim=args.hidden_dim,
             aggregation_method=args.aggregation_method,
+            num_covariates=num_covariates,
         )
 
         # Train

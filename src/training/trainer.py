@@ -152,10 +152,15 @@ class Trainer:
                 # Build covariates if available
                 covariates = None
                 batch_sex = batch.get('sex')
-                if batch_sex is not None:
-                    num_cov = getattr(self.model, 'num_covariates', 0)
-                    if num_cov > 0:
-                        covariates = batch_sex.to(self.device).unsqueeze(1)
+                num_cov = getattr(self.model, 'num_covariates', 0)
+                if num_cov > 0 and batch_sex is not None:
+                    batch_sex = batch_sex.to(self.device)
+                    batch_size = batch_sex.shape[0]
+                    covariates = torch.zeros(
+                        batch_size, num_cov,
+                        device=self.device, dtype=batch_sex.dtype
+                    )
+                    covariates[:, 0] = batch_sex
 
                 # Forward pass
                 if self.loss_fn.lambda_attr > 0:
@@ -287,10 +292,15 @@ class Trainer:
                 # Build covariates if available
                 covariates = None
                 batch_sex = batch.get('sex')
-                if batch_sex is not None:
-                    num_cov = getattr(self.model, 'num_covariates', 0)
-                    if num_cov > 0:
-                        covariates = batch_sex.to(self.device).unsqueeze(1)
+                num_cov = getattr(self.model, 'num_covariates', 0)
+                if num_cov > 0 and batch_sex is not None:
+                    batch_sex = batch_sex.to(self.device)
+                    batch_size = batch_sex.shape[0]
+                    covariates = torch.zeros(
+                        batch_size, num_cov,
+                        device=self.device, dtype=batch_sex.dtype
+                    )
+                    covariates[:, 0] = batch_sex
 
                 # Forward pass
                 if self.loss_fn.lambda_attr > 0:
