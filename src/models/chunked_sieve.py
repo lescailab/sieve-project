@@ -82,6 +82,7 @@ class ChunkedSIEVEModel(nn.Module):
         chunk_indices: Optional[torch.Tensor] = None,
         total_chunks: Optional[torch.Tensor] = None,
         original_sample_indices: Optional[torch.Tensor] = None,
+        covariates: Optional[torch.Tensor] = None,
         return_attention: bool = False,
         return_intermediate: bool = False
     ) -> Tuple[torch.Tensor, Optional[Dict]]:
@@ -107,6 +108,9 @@ class ChunkedSIEVEModel(nn.Module):
             [batch_size] - total chunks for each sample
         original_sample_indices : Optional[torch.Tensor]
             [batch_size] - which original sample this chunk belongs to
+        covariates : Optional[torch.Tensor]
+            Sample-level covariates [num_samples, num_covariates].
+            Already aggregated to sample level (not per-chunk).
         return_attention : bool
             If True, collect attention weights from chunks
         return_intermediate : bool
@@ -128,10 +132,16 @@ class ChunkedSIEVEModel(nn.Module):
         # NOTE: Delegates directly to base_model. The base model should be on the
         # same device as ChunkedSIEVEModel to ensure output tensors match input device.
         if original_sample_indices is None:
+            # Only pass covariates if the base model supports them
+            kwargs = dict(
+                return_attention=return_attention,
+                return_intermediate=return_intermediate,
+            )
+            if hasattr(self.base_model, 'num_covariates') and self.base_model.num_covariates > 0:
+                kwargs['covariates'] = covariates
             return self.base_model(
                 features, positions, gene_ids, mask,
-                return_attention=return_attention,
-                return_intermediate=return_intermediate
+                **kwargs,
             )
 
         # Process all chunks through base model to get gene embeddings
@@ -237,7 +247,11 @@ class ChunkedSIEVEModel(nn.Module):
         # can operate directly on aggregated gene embeddings of shape
         # [num_samples, num_genes, latent_dim].
         # If using a different base model, it must conform to this interface.
-        logits = self.base_model.classifier(aggregated_embeddings)
+        classifier = self.base_model.classifier
+        if hasattr(classifier, 'num_covariates') and classifier.num_covariates > 0:
+            logits = classifier(aggregated_embeddings, covariates=covariates)
+        else:
+            logits = classifier(aggregated_embeddings)
 
         # Prepare intermediates if requested
         intermediates = None
@@ -303,6 +317,10 @@ class ChunkedSIEVEModel(nn.Module):
         chunk_indices = batch.get('chunk_indices')
         total_chunks = batch.get('total_chunks')
         original_sample_indices = batch.get('original_sample_indices')
+        batch_sex = batch.get('sex')
+
+        # Build sample-level covariates from sex if the base model uses them
+        sample_covariates = None
 
         if chunk_indices is not None:
             chunk_indices = chunk_indices.to(device)
@@ -321,8 +339,21 @@ class ChunkedSIEVEModel(nn.Module):
                 # Find first chunk belonging to this sample
                 first_chunk_idx = (original_sample_indices == sample_idx).nonzero(as_tuple=True)[0][0]
                 sample_labels[i] = labels[first_chunk_idx]
+
+            # Aggregate sex to sample level (same value for all chunks of a sample)
+            num_covariates = getattr(self.base_model, 'num_covariates', 0)
+            if batch_sex is not None and num_covariates > 0:
+                batch_sex = batch_sex.to(device)
+                sample_sex = torch.zeros(len(unique_samples), dtype=torch.float32, device=device)
+                for i, sample_idx in enumerate(unique_samples):
+                    first_chunk_idx = (original_sample_indices == sample_idx).nonzero(as_tuple=True)[0][0]
+                    sample_sex[i] = batch_sex[first_chunk_idx]
+                sample_covariates = sample_sex.unsqueeze(1)  # [num_samples, 1]
         else:
             sample_labels = labels
+            num_covariates = getattr(self.base_model, 'num_covariates', 0)
+            if batch_sex is not None and num_covariates > 0:
+                sample_covariates = batch_sex.to(device).unsqueeze(1)
 
         # Forward pass (aggregates chunks automatically)
         # Get intermediates for attribution regularization if needed
@@ -331,6 +362,7 @@ class ChunkedSIEVEModel(nn.Module):
         predictions, intermediates = self.forward(
             features, positions, gene_ids, mask,
             chunk_indices, total_chunks, original_sample_indices,
+            covariates=sample_covariates,
             return_intermediate=need_embeddings
         )
         # Ensure 1D tensor for loss computation
