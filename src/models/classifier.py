@@ -108,6 +108,20 @@ class PhenotypeClassifier(nn.Module):
         x = self.flatten(gene_embeddings)
         if self.num_covariates > 0:
             if covariates is not None:
+                if covariates.dim() != 2:
+                    raise ValueError(
+                        f"covariates must be 2D (batch, num_covariates), got {covariates.shape}"
+                    )
+                if covariates.shape[0] != x.shape[0]:
+                    raise ValueError(
+                        "covariates batch dimension must match gene_embeddings batch size "
+                        f"({covariates.shape[0]} vs {x.shape[0]})"
+                    )
+                if covariates.shape[1] != self.num_covariates:
+                    raise ValueError(
+                        "covariates feature dimension must match num_covariates "
+                        f"({covariates.shape[1]} vs {self.num_covariates})"
+                    )
                 x = torch.cat([x, covariates], dim=1)
             else:
                 # Pad with zeros when covariates expected but not provided
@@ -214,6 +228,20 @@ class AttentionPoolingClassifier(nn.Module):
         # Concatenate covariates if provided
         if self.num_covariates > 0:
             if covariates is not None:
+                if covariates.dim() != 2:
+                    raise ValueError(
+                        f"covariates must be 2D (batch, num_covariates), got {covariates.shape}"
+                    )
+                if covariates.shape[0] != pooled.shape[0]:
+                    raise ValueError(
+                        "covariates batch dimension must match gene_embeddings batch size "
+                        f"({covariates.shape[0]} vs {pooled.shape[0]})"
+                    )
+                if covariates.shape[1] != self.num_covariates:
+                    raise ValueError(
+                        "covariates feature dimension must match num_covariates "
+                        f"({covariates.shape[1]} vs {self.num_covariates})"
+                    )
                 pooled = torch.cat([pooled, covariates], dim=1)
             else:
                 zeros = torch.zeros(
