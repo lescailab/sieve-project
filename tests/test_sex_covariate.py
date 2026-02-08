@@ -13,7 +13,6 @@ import sys
 from pathlib import Path
 
 import torch
-import torch.nn as nn
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -164,8 +163,15 @@ class TestClassifierCovariates:
 
     def test_covariates_affect_output(self):
         """Verify that different covariate values produce different outputs."""
+        torch.manual_seed(0)
         clf = PhenotypeClassifier(num_genes=10, latent_dim=8, num_covariates=1)
         clf.eval()
+        with torch.no_grad():
+            clf.classifier[0].weight.zero_()
+            clf.classifier[0].bias.zero_()
+            clf.classifier[0].weight[:, -1] = 1.0
+            clf.classifier[3].weight.fill_(1.0)
+            clf.classifier[3].bias.zero_()
         x = torch.randn(1, 10, 8)
         x_dup = x.clone()
         cov_m = torch.tensor([[1.0]])
