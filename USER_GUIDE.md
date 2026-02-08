@@ -1,7 +1,7 @@
 # SIEVE User Guide
 
-**Version**: 1.0
-**Last Updated**: 2026-02-04
+**Version**: 1.1
+**Last Updated**: 2026-02-06
 **For**: SIEVE v0.1.0+
 
 ## Table of Contents
@@ -18,6 +18,7 @@
 10. [Appendices](#appendices)
     - [Appendix A: Model Architecture Details](#appendix-a-model-architecture-details)
     - [Appendix B: Experimental Protocol](#appendix-b-experimental-protocol)
+    - [Appendix C: Method References](#appendix-c-method-references)
 
 ---
 
@@ -63,13 +64,21 @@ git clone https://github.com/lescailab/sieve-project.git
 cd sieve-project
 pip install -e .
 
-# 2. Preprocess (once)
+# 2. (Optional, recommended) Infer genetic sex for ploidy-aware encoding
+python scripts/infer_sex.py \
+    --vcf your_data.vcf.gz \
+    --output-dir results/sex_inference \
+    --genome-build GRCh37
+
+# 3. Preprocess (once)
 python scripts/preprocess.py \
     --vcf your_data.vcf.gz \
     --phenotypes phenotypes.tsv \
-    --output preprocessed.pt
+    --output preprocessed.pt \
+    --sex-map results/sex_inference/sample_sex.tsv \
+    --genome-build GRCh37
 
-# 3. Train
+# 4. Train
 python scripts/train.py \
     --preprocessed-data preprocessed.pt \
     --level L3 \
@@ -77,18 +86,25 @@ python scripts/train.py \
     --output-dir experiments \
     --device cuda
 
-# 4. Explain
+# 5. Explain
 python scripts/explain.py \
     --experiment-dir experiments/my_model \
     --preprocessed-data preprocessed.pt \
     --output-dir results/explainability
 
-# 5. Validate (null baseline)
+# 6. Validate (null baseline)
 # Set required environment variables first
 export INPUT_DATA="preprocessed.pt"
 export REAL_EXPERIMENT="experiments/my_model"
 export OUTPUT_BASE="experiments"
 bash scripts/run_null_baseline_analysis.sh
+
+# 7. (Optional) Correct chrX ploidy bias in rankings
+python scripts/correct_chrx_bias.py \
+    --rankings results/explainability/sieve_variant_rankings.csv \
+    --null-rankings results/null_attributions/sieve_variant_rankings.csv \
+    --output-dir results/explainability_corrected \
+    --exclude-sex-chroms
 ```
 
 ### 5-Minute Test Run
@@ -201,9 +217,9 @@ See `pyproject.toml` for complete list.
 
 #### Step 1: Data Preparation
 
-**Purpose**: Convert VCF to SIEVE-compatible format
+**Purpose**: Convert VCF to SIEVE-compatible format (optionally sex-aware)
 
-**Theory**: SIEVE requires multi-sample VCF files annotated with VEP (Variant Effect Predictor). VEP adds functional annotations (SIFT, PolyPhen, consequence types) that enable multi-level analysis.
+**Theory**: SIEVE requires multi-sample VCF files annotated with VEP (Variant Effect Predictor). VEP adds functional annotations (SIFT, PolyPhen, consequence types) that enable multi-level analysis. For sex chromosomes, SIEVE can apply ploidy-aware dosage encoding to avoid chrX hemizygosity bias in male samples.
 
 **Requirements**:
 - Multi-sample VCF file (bgzipped and indexed)
@@ -216,8 +232,23 @@ See `pyproject.toml` for complete list.
 python scripts/preprocess.py \
     --vcf cohort.vcf.gz \
     --phenotypes phenotypes.tsv \
-    --output preprocessed.pt
+    --output preprocessed.pt \
+    --genome-build GRCh37 \
+    --sex-map results/sex_inference/sample_sex.tsv
 ```
+
+**Optional sex inference** (recommended for chrX/chrY analyses):
+```bash
+python scripts/infer_sex.py \
+    --vcf cohort.vcf.gz \
+    --output-dir results/sex_inference \
+    --genome-build GRCh37
+```
+
+**Why sex-aware preprocessing?**
+- Male chrX non-PAR variants are hemizygous; dosage 1 should be treated as 2
+- Avoids spurious chrX attribution inflation
+- Ensures downstream rankings are comparable across chromosomes
 
 **Output**: Single `.pt` file containing all parsed variant data (~1-5 MB per 1000 samples)
 
@@ -490,6 +521,62 @@ SAMPLE004	0
 
 ---
 
+### Sex-Aware Preprocessing (Recommended for chrX/chrY Analyses)
+
+SIEVE now supports a sex-aware preprocessing path to prevent chrX ploidy bias in downstream attributions. The pipeline uses the X-chromosome inbreeding coefficient (F-statistic) with pseudoautosomal region (PAR) exclusion to infer genetic sex, then applies ploidy-aware dosage encoding during VCF parsing.
+
+#### 1) Infer genetic sex (X-chromosome F-statistic)
+
+```bash
+python scripts/infer_sex.py \
+    --vcf cohort.vcf.gz \
+    --output-dir results/sex_inference \
+    --genome-build GRCh37 \
+    --min-gq 20 \
+    --min-maf 0.05 \
+    --f-male 0.8 \
+    --f-female 0.2
+```
+
+**Outputs**:
+- `sample_sex.tsv`: sample_id → inferred sex (`M`, `F`, or ambiguous labels)
+- `sex_inference_diagnostic.png`: histogram of F-statistics
+- `sex_inference_summary.yaml`: summary counts and thresholds
+
+**Interpretation**:
+- High F-statistic (≈1): low heterozygosity → genetic male
+- Low F-statistic (≈0): high heterozygosity → genetic female
+- Ambiguous/discordant samples are kept but excluded from ploidy correction
+
+#### 2) Check sex balance across cases/controls (recommended)
+
+```bash
+python scripts/check_sex_balance.py \
+    --phenotypes phenotypes.tsv \
+    --sex-map results/sex_inference/sample_sex.tsv \
+    --output-dir results/sex_balance
+```
+
+If a significant imbalance is detected, consider sex-stratified analysis or adding sex as a covariate in downstream modeling.
+
+#### 3) Preprocess with ploidy-aware encoding
+
+```bash
+python scripts/preprocess.py \
+    --vcf cohort.vcf.gz \
+    --phenotypes phenotypes.tsv \
+    --output preprocessed.pt \
+    --sex-map results/sex_inference/sample_sex.tsv \
+    --genome-build GRCh37
+```
+
+**Encoding rules**:
+- Male chrX non-PAR: hemizygous alt is doubled (dosage 2)
+- Female chrY: variants are skipped (data quality safeguard)
+- Unknown/ambiguous sex: no correction (conservative default)
+
+---
+
 ### Choosing Annotation Levels
 
 #### Scientific Rationale
@@ -677,13 +764,67 @@ python scripts/preprocess.py [OPTIONS]
 | `--output` | path | required | Output .pt file |
 | `--max-variants-per-sample` | int | None | Maximum variants per sample (for debugging/testing) |
 | `--min-gq` | int | 20 | Minimum genotype quality threshold |
+| `--genome-build` | str | GRCh37 | Reference genome build (GRCh37 or GRCh38) |
+| `--sex-map` | path | None | Path to sample_sex.tsv for ploidy-aware encoding |
 
 **Example**:
 ```bash
 python scripts/preprocess.py \
     --vcf cohort.vcf.gz \
     --phenotypes pheno.tsv \
-    --output preprocessed.pt
+    --output preprocessed.pt \
+    --sex-map results/sex_inference/sample_sex.tsv \
+    --genome-build GRCh37
+```
+
+---
+
+### infer_sex.py
+
+```bash
+python scripts/infer_sex.py [OPTIONS]
+```
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--vcf` | path | required | Multi-sample VCF file |
+| `--output-dir` | path | required | Output directory |
+| `--genome-build` | str | GRCh37 | Reference genome build |
+| `--min-gq` | int | 20 | Minimum genotype quality |
+| `--min-maf` | float | 0.05 | Minimum minor allele frequency |
+| `--max-missing` | float | 0.10 | Maximum missingness per variant |
+| `--f-male` | float | 0.8 | F-statistic threshold for males |
+| `--f-female` | float | 0.2 | F-statistic threshold for females |
+| `--known-sex` | path | None | Optional known sex file for concordance |
+
+**Example**:
+```bash
+python scripts/infer_sex.py \
+    --vcf cohort.vcf.gz \
+    --output-dir results/sex_inference \
+    --genome-build GRCh37
+```
+
+---
+
+### check_sex_balance.py
+
+```bash
+python scripts/check_sex_balance.py [OPTIONS]
+```
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--phenotypes` | path | required | Phenotypes TSV |
+| `--sex-map` | path | required | sample_sex.tsv from infer_sex.py |
+| `--output-dir` | path | results/sex_balance | Output directory |
+
+**Example**:
+```bash
+python scripts/check_sex_balance.py \
+    --phenotypes phenotypes.tsv \
+    --sex-map results/sex_inference/sample_sex.tsv \
+    --output-dir results/sex_balance
 ```
 
 ---
@@ -854,6 +995,33 @@ python scripts/compare_attributions.py \
 
 ---
 
+### correct_chrx_bias.py
+
+```bash
+python scripts/correct_chrx_bias.py [OPTIONS]
+```
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--rankings` | path | required | Variant rankings CSV |
+| `--output-dir` | path | required | Output directory |
+| `--null-rankings` | path | None | Null rankings CSV for recalculating enrichment |
+| `--exclude-sex-chroms` | flag | True | Exclude chrX/chrY from final rankings (default) |
+| `--include-sex-chroms` | flag | False | Include chrX/chrY (flagged) in rankings |
+| `--genome-build` | str | GRCh37 | Reference genome build |
+| `--top-k` | int | 100 | Top variants to annotate in plot |
+
+**Example**:
+```bash
+python scripts/correct_chrx_bias.py \
+    --rankings results/explainability/sieve_variant_rankings.csv \
+    --null-rankings results/null_attributions/sieve_variant_rankings.csv \
+    --output-dir results/explainability_corrected \
+    --exclude-sex-chroms
+```
+
+---
+
 ### validate_epistasis.py
 
 ```bash
@@ -979,6 +1147,16 @@ Interpretation: This BRCA1 variant has high attribution (0.45),
 is strongly enriched in cases (diff=0.38), and appears in 42
 samples. Likely a genuine disease-associated variant.
 ```
+
+#### chrX Ploidy Bias Correction (Optional)
+
+If you used sex-aware preprocessing or observe chrX inflation in rankings, run `correct_chrx_bias.py` to standardise mean attributions per chromosome. The script adds:
+
+- `z_attribution`: per-chromosome z-scored attribution
+- `corrected_rank`: rank based on `z_attribution`
+- `is_sex_chrom`: flags chrX/chrY variants
+
+By default, the corrected rankings exclude sex chromosomes. Use `--include-sex-chroms` if you want to keep them in the output (they remain flagged).
 
 #### Gene Rankings
 
@@ -1287,6 +1465,19 @@ If using `--experiment-dir`, check that `best_model.pt` or `fold_*/best_model.pt
 - Solution: Check cross-validation stability
 - Look at fold-specific rankings - is it consistent?
 
+#### chrX dominates top rankings
+
+**Possible causes**:
+- Ploidy differences (hemizygosity) inflate chrX attributions
+- Sex imbalance across case/control groups
+
+**Solutions**:
+1. Run sex-aware preprocessing (`infer_sex.py` → `preprocess.py --sex-map`)
+2. Check sex balance (`check_sex_balance.py`)
+3. Apply post-hoc correction (`correct_chrx_bias.py`)
+
+**Note**: `correct_chrx_bias.py` excludes sex chromosomes by default; use `--include-sex-chroms` if you need chrX/chrY retained.
+
 #### Very low attributions overall
 
 **Possible causes**:
@@ -1442,8 +1633,8 @@ MIT License - See LICENSE file for details.
 
 ---
 
-**Last Updated**: 2026-02-04
-**Document Version**: 1.0
+**Last Updated**: 2026-02-06
+**Document Version**: 1.1
 **SIEVE Version**: 0.1.0+
 
 
@@ -1901,3 +2092,25 @@ Report:
 
 ---
 
+## Appendix C: Method References
+
+This appendix lists key methodological references that motivate recent pipeline updates.
+
+### Sex inference and ploidy-aware encoding
+
+- **X-chromosome inbreeding coefficient (F-statistic)** for genetic sex inference:  
+  Purcell S, et al. (2007). *PLINK: a tool set for whole-genome association and population-based linkage analyses.* **American Journal of Human Genetics**, 81(3):559–575.
+- **X-chromosome association and pseudoautosomal regions (PAR)**:  
+  Clayton DG. (2008). *Testing for association on the X chromosome.* **Biostatistics**, 9(4):593–600.
+
+### Attribution and interpretability
+
+- **Integrated gradients** for feature attribution in deep networks:  
+  Sundararajan M, Taly A, Yan Q. (2017). *Axiomatic Attribution for Deep Networks.* **ICML**.
+
+### Attention mechanisms
+
+- **Scaled dot-product attention** for modeling interactions:  
+  Vaswani A, et al. (2017). *Attention Is All You Need.* **NeurIPS**.
+
+---
