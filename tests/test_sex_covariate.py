@@ -304,5 +304,96 @@ class TestChunkedModelSexCovariate:
         assert preds.shape[0] == 2
 
 
+class TestChunkedModelMultiCovariate:
+    """Tests for covariate tensor construction when num_covariates > 1.
+
+    Verifies that both chunked and non-chunked train_step paths build a
+    [num_samples, num_covariates] tensor with sex in column 0 and remaining
+    columns zero-initialized.
+    """
+
+    @pytest.fixture
+    def device(self):
+        return torch.device('cpu')
+
+    @pytest.fixture
+    def model_2cov(self):
+        base = SIEVE(input_dim=10, num_genes=100, latent_dim=8, num_covariates=2)
+        return ChunkedSIEVEModel(base, aggregation_method='mean')
+
+    def test_chunked_train_step_multi_covariate_shape(self, model_2cov, device):
+        """Chunked path builds [num_samples, num_covariates] covariates."""
+        model_2cov.to(device)
+        criterion = SIEVELoss(lambda_attr=0.0)
+
+        batch = {
+            'features': torch.randn(4, 10, 10),
+            'positions': torch.randint(0, 1000000, (4, 10)),
+            'gene_ids': torch.randint(0, 100, (4, 10)),
+            'mask': torch.ones(4, 10, dtype=torch.bool),
+            'labels': torch.tensor([1, 1, 0, 0], dtype=torch.long),
+            'sex': torch.tensor([1.0, 1.0, 0.0, 0.0]),
+            'chunk_indices': torch.tensor([0, 1, 0, 1], dtype=torch.long),
+            'total_chunks': torch.tensor([2, 2, 2, 2], dtype=torch.long),
+            'original_sample_indices': torch.tensor([0, 0, 1, 1], dtype=torch.long),
+        }
+
+        # Capture covariates passed to forward
+        captured = {}
+        original_forward = model_2cov.forward
+
+        def spy_forward(*args, **kwargs):
+            captured['covariates'] = kwargs.get('covariates')
+            return original_forward(*args, **kwargs)
+
+        model_2cov.forward = spy_forward
+        loss, preds = model_2cov.train_step(batch, criterion, device)
+
+        cov = captured['covariates']
+        assert cov is not None
+        assert cov.shape == (2, 2)  # 2 unique samples, 2 covariates
+        # Sex in column 0
+        assert cov[0, 0].item() == 1.0  # sample 0 = Male
+        assert cov[1, 0].item() == 0.0  # sample 1 = Female
+        # Column 1 zero-initialized
+        assert cov[0, 1].item() == 0.0
+        assert cov[1, 1].item() == 0.0
+
+    def test_non_chunked_train_step_multi_covariate_shape(self, model_2cov, device):
+        """Non-chunked path builds [batch, num_covariates] covariates."""
+        model_2cov.to(device)
+        criterion = SIEVELoss(lambda_attr=0.0)
+
+        batch = {
+            'features': torch.randn(3, 10, 10),
+            'positions': torch.randint(0, 1000000, (3, 10)),
+            'gene_ids': torch.randint(0, 100, (3, 10)),
+            'mask': torch.ones(3, 10, dtype=torch.bool),
+            'labels': torch.tensor([1, 0, 1], dtype=torch.long),
+            'sex': torch.tensor([1.0, 0.0, 1.0]),
+            # No chunk_indices / total_chunks / original_sample_indices
+        }
+
+        captured = {}
+        original_forward = model_2cov.forward
+
+        def spy_forward(*args, **kwargs):
+            captured['covariates'] = kwargs.get('covariates')
+            return original_forward(*args, **kwargs)
+
+        model_2cov.forward = spy_forward
+        loss, preds = model_2cov.train_step(batch, criterion, device)
+
+        cov = captured['covariates']
+        assert cov is not None
+        assert cov.shape == (3, 2)  # 3 samples, 2 covariates
+        # Sex in column 0
+        assert cov[0, 0].item() == 1.0
+        assert cov[1, 0].item() == 0.0
+        assert cov[2, 0].item() == 1.0
+        # Column 1 zero-initialized
+        assert (cov[:, 1] == 0.0).all()
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v', '-s'])
