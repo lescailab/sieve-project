@@ -172,6 +172,7 @@ def infer_architecture(state_dict: Dict[str, torch.Tensor]) -> Dict[str, int]:
         state_dict,
         [
             f"{prefix}classifier.classifier.0.weight",
+            f"{prefix}classifier.classifier.1.weight",
             f"{prefix}classifier.0.weight",
         ],
     )
@@ -336,76 +337,256 @@ def draw_architecture(
     title: str,
     dpi: int,
 ) -> None:
-    fig = plt.figure(figsize=(16, 9))
-    gs = fig.add_gridspec(1, 2, width_ratios=[1, 1.6])
-    ax_left = fig.add_subplot(gs[0, 0])
-    ax_right = fig.add_subplot(gs[0, 1])
+    import matplotlib.patches as mpatches
+    from matplotlib.patches import FancyBboxPatch
 
-    ax_left.axis("off")
-    ax_right.axis("off")
+    # -- colour palette --
+    colors = {
+        "input": "#E8F5E9",
+        "encoder": "#BBDEFB",
+        "attention": "#FFE0B2",
+        "aggregator": "#E1BEE7",
+        "classifier": "#FFCDD2",
+        "output": "#F5F5F5",
+        "border": "#424242",
+        "arrow": "#616161",
+        "shape_text": "#1565C0",
+    }
 
-    box_labels = [
-        "Variant Encoder",
-        f"Attention Stack\n({arch['num_attention_layers']} layers, {arch['num_heads']} heads)",
-        "Gene Aggregator",
-    ]
-    if arch["has_chunk_attention"]:
-        box_labels.append("Chunk Aggregation")
-    box_labels.append("Phenotype Classifier")
+    input_dim = arch["input_dim"]
+    hidden_dim = arch["hidden_dim"]
+    latent_dim = arch["latent_dim"]
+    num_heads = arch["num_heads"]
+    num_attn = arch["num_attention_layers"]
+    num_genes = arch["num_genes"]
+    num_pos_buckets = arch["num_position_buckets"]
+    cls_hidden = arch["classifier_hidden_dim"]
+    num_cov = arch["num_covariates"]
+    has_chunk = bool(arch["has_chunk_attention"])
 
-    num_boxes = len(box_labels)
-    y_positions = list(reversed([0.1 + i * (0.8 / (num_boxes - 1)) for i in range(num_boxes)]))
+    # -- build block definitions (top → bottom = data flow) --
+    blocks: List[Dict] = []
 
-    for i, (label, y) in enumerate(zip(box_labels, y_positions)):
-        ax_left.add_patch(
-            plt.Rectangle((0.1, y - 0.05), 0.8, 0.1, fill=False, linewidth=1.5)
+    # Input
+    blocks.append({
+        "label": "Input",
+        "details": (
+            f"variant_features  (B, V, {input_dim})\n"
+            f"positions  (B, V)\n"
+            f"gene_ids  (B, V)"
+            + (f"\ncovariates  (B, {num_cov})" if num_cov > 0 else "")
+        ),
+        "color": colors["input"],
+        "params": None,
+        "output_shape": None,
+    })
+
+    # Variant Encoder
+    blocks.append({
+        "label": "Variant Encoder",
+        "details": (
+            f"Linear({input_dim} \u2192 {hidden_dim}) \u2192 ReLU \u2192 LayerNorm \u2192 Dropout\n"
+            f"\u2192 Linear({hidden_dim} \u2192 {latent_dim})"
+        ),
+        "color": colors["encoder"],
+        "params": totals["encoder_params"],
+        "output_shape": f"(B, V, {latent_dim})",
+    })
+
+    # Attention Stack
+    blocks.append({
+        "label": f"Position-Aware Sparse Attention  \u00d7{num_attn}",
+        "details": (
+            f"Multi-head self-attention ({num_heads} heads, d_k={latent_dim // num_heads})\n"
+            f"+ relative position bias ({num_pos_buckets} buckets)\n"
+            f"Residual connection + LayerNorm per layer"
+        ),
+        "color": colors["attention"],
+        "params": totals["attention_params"],
+        "output_shape": f"(B, V, {latent_dim})",
+    })
+
+    # Gene Aggregator
+    blocks.append({
+        "label": "Gene Aggregator",
+        "details": (
+            f"Scatter-based permutation-invariant pooling\n"
+            f"Groups V variants into {num_genes:,} genes via gene_ids"
+        ),
+        "color": colors["aggregator"],
+        "params": totals["aggregator_params"],
+        "output_shape": f"(B, {num_genes:,}, {latent_dim})",
+    })
+
+    # Optional chunk attention
+    if has_chunk:
+        blocks.append({
+            "label": "Chunk Aggregation",
+            "details": "Learned weighted chunk pooling",
+            "color": colors["attention"],
+            "params": totals["chunk_attention_params"],
+            "output_shape": f"(B, {num_genes:,}, {latent_dim})",
+        })
+
+    # Phenotype Classifier
+    flat_dim = num_genes * latent_dim + num_cov
+    blocks.append({
+        "label": "Phenotype Classifier",
+        "details": (
+            f"Flatten \u2192 Linear({flat_dim:,} \u2192 {cls_hidden}) \u2192 ReLU \u2192 Dropout\n"
+            f"\u2192 Linear({cls_hidden} \u2192 1)"
+            + (f"  (+ {num_cov} covariate{'s' if num_cov != 1 else ''} concatenated)" if num_cov > 0 else "")
+        ),
+        "color": colors["classifier"],
+        "params": totals["classifier_params"],
+        "output_shape": "(B, 1)",
+    })
+
+    # Output
+    blocks.append({
+        "label": "Output",
+        "details": "Logit \u2192 sigmoid for P(case)",
+        "color": colors["output"],
+        "params": None,
+        "output_shape": None,
+    })
+
+    # -- layout constants --
+    num_blocks = len(blocks)
+    fig_width = 10
+    box_width = 7.0
+    box_x = (fig_width - box_width) / 2
+    box_height = 0.9
+    gap = 0.55  # space between boxes (for arrow + shape label)
+    top_margin = 1.4
+    bottom_margin = 1.2
+    fig_height = top_margin + num_blocks * box_height + (num_blocks - 1) * gap + bottom_margin
+
+    fig, ax = plt.subplots(figsize=(fig_width, fig_height))
+    ax.set_xlim(0, fig_width)
+    ax.set_ylim(0, fig_height)
+    ax.axis("off")
+
+    # -- draw blocks top-to-bottom --
+    y_positions_list: List[float] = []
+    for i in range(num_blocks):
+        y = fig_height - top_margin - i * (box_height + gap)
+        y_positions_list.append(y)
+
+    for i, (block, y_top) in enumerate(zip(blocks, y_positions_list)):
+        # Draw rounded box
+        box = FancyBboxPatch(
+            (box_x, y_top - box_height),
+            box_width,
+            box_height,
+            boxstyle="round,pad=0.12",
+            facecolor=block["color"],
+            edgecolor=colors["border"],
+            linewidth=1.5,
         )
-        ax_left.text(0.5, y, label, ha="center", va="center", fontsize=10)
-        if i < num_boxes - 1:
-            ax_left.annotate(
-                "",
-                xy=(0.5, y - 0.05),
-                xytext=(0.5, y_positions[i + 1] + 0.05),
-                arrowprops=dict(arrowstyle="->", lw=1.2),
+        ax.add_patch(box)
+
+        y_center = y_top - box_height / 2
+
+        # Block label (bold)
+        label_y = y_center + 0.22 if block["details"] else y_center
+        ax.text(
+            fig_width / 2,
+            label_y,
+            block["label"],
+            ha="center",
+            va="center",
+            fontsize=11,
+            fontweight="bold",
+            family="sans-serif",
+        )
+
+        # Block details (smaller, below label)
+        if block["details"]:
+            ax.text(
+                fig_width / 2,
+                y_center - 0.12,
+                block["details"],
+                ha="center",
+                va="center",
+                fontsize=8,
+                color="#37474F",
+                family="monospace",
+                linespacing=1.4,
             )
 
-    table = ax_right.table(
-        cellText=rows,
-        colLabels=columns,
-        cellLoc="center",
-        loc="center",
-    )
-    table.auto_set_font_size(False)
-    table.set_fontsize(8)
-    table.scale(1, 1.4)
+        # Parameter count (right-aligned inside box)
+        if block["params"] is not None:
+            ax.text(
+                box_x + box_width - 0.25,
+                y_top - 0.15,
+                f"{block['params']:,} params",
+                ha="right",
+                va="top",
+                fontsize=7,
+                color="#757575",
+                style="italic",
+            )
 
-    hyperparam_pairs = [
-        f"input_dim={arch['input_dim']}",
-        f"hidden_dim={arch['hidden_dim']}",
-        f"latent_dim={arch['latent_dim']}",
-        f"num_genes={arch['num_genes']}",
-        f"num_heads={arch['num_heads']}",
-        f"num_attention_layers={arch['num_attention_layers']}",
-        f"num_position_buckets={arch['num_position_buckets']}",
-        f"num_covariates={arch['num_covariates']}",
-    ]
-    hyperparams = ", ".join(hyperparam_pairs)
-    hyperparam_count = len(hyperparam_pairs)
+        # Arrow + output shape annotation between blocks
+        if i < num_blocks - 1:
+            arrow_start_y = y_top - box_height
+            arrow_end_y = y_positions_list[i + 1]
+            arrow_mid_y = (arrow_start_y + arrow_end_y) / 2
 
-    fig.suptitle(title, fontsize=14, y=0.98)
-    fig.text(
-        0.5,
-        0.02,
-        (
-            f"Total parameters: {totals['total_params']:,} | "
-            f"Hyperparameters ({hyperparam_count}): {hyperparams}"
-        ),
+            ax.annotate(
+                "",
+                xy=(fig_width / 2, arrow_end_y + 0.02),
+                xytext=(fig_width / 2, arrow_start_y - 0.02),
+                arrowprops=dict(
+                    arrowstyle="-|>",
+                    lw=1.5,
+                    color=colors["arrow"],
+                    mutation_scale=14,
+                ),
+            )
+
+            # Shape annotation next to arrow
+            if block["output_shape"]:
+                ax.text(
+                    fig_width / 2 + box_width / 2 + 0.15,
+                    arrow_mid_y,
+                    block["output_shape"],
+                    ha="left",
+                    va="center",
+                    fontsize=8,
+                    color=colors["shape_text"],
+                    family="monospace",
+                    fontweight="bold",
+                )
+
+    # -- title --
+    ax.text(
+        fig_width / 2,
+        fig_height - 0.5,
+        title,
         ha="center",
-        fontsize=9,
+        va="center",
+        fontsize=14,
+        fontweight="bold",
     )
+
+    # -- footer with total params --
+    footer = f"Total parameters: {totals['total_params']:,}"
+    ax.text(
+        fig_width / 2,
+        0.35,
+        footer,
+        ha="center",
+        va="center",
+        fontsize=10,
+        color="#424242",
+    )
+
+    plt.tight_layout(pad=0.3)
 
     for output_path in output_paths:
-        fig.savefig(output_path, dpi=dpi, bbox_inches="tight")
+        fig.savefig(output_path, dpi=dpi, bbox_inches="tight", facecolor="white")
 
     plt.close(fig)
 
