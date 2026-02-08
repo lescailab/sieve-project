@@ -347,12 +347,23 @@ class ChunkedSIEVEModel(nn.Module):
             if batch_sex is not None and num_covariates > 0:
                 batch_sex = batch_sex.to(device)
                 sample_sex = batch_sex[first_chunk_indices]
-                sample_covariates = sample_sex.unsqueeze(1)  # [num_samples, 1]
+                # Build [num_samples, num_covariates] tensor, sex in column 0
+                num_samples = len(unique_samples)
+                sample_covariates = torch.zeros(
+                    num_samples, num_covariates,
+                    device=device, dtype=sample_sex.dtype,
+                )
+                sample_covariates[:, 0] = sample_sex
         else:
             sample_labels = labels
             num_covariates = getattr(self.base_model, 'num_covariates', 0)
             if batch_sex is not None and num_covariates > 0:
-                sample_covariates = batch_sex.to(device).unsqueeze(1)
+                batch_sex_dev = batch_sex.to(device)
+                sample_covariates = torch.zeros(
+                    batch_sex_dev.shape[0], num_covariates,
+                    device=device, dtype=batch_sex_dev.dtype,
+                )
+                sample_covariates[:, 0] = batch_sex_dev
 
         # Forward pass (aggregates chunks automatically)
         # Get intermediates for attribution regularization if needed
