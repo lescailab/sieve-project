@@ -21,6 +21,7 @@ import re
 from typing import Dict, List, Optional, Tuple
 
 import matplotlib.pyplot as plt
+import numpy as np
 import torch
 
 
@@ -62,10 +63,18 @@ def parse_args() -> argparse.Namespace:
         default=300,
         help="Resolution (DPI) for raster outputs",
     )
+    parser.add_argument(
+        "--allow-unsafe",
+        action="store_true",
+        help=(
+            "Allow unsafe pickle-based checkpoint loading when tensor-only loading fails. "
+            "Only use this for trusted checkpoints."
+        ),
+    )
     return parser.parse_args()
 
 
-def load_state_dict(checkpoint_path: Path) -> Dict[str, torch.Tensor]:
+def load_state_dict(checkpoint_path: Path, allow_unsafe: bool = False) -> Dict[str, torch.Tensor]:
     """
     Load a model state dict from a checkpoint file.
 
@@ -75,7 +84,23 @@ def load_state_dict(checkpoint_path: Path) -> Dict[str, torch.Tensor]:
     try:
         checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
     except TypeError:
-        checkpoint = torch.load(checkpoint_path, map_location="cpu")
+        checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    except Exception as exc:
+        safe_globals = getattr(torch.serialization, "safe_globals", None)
+        if safe_globals is None:
+            if allow_unsafe:
+                checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+            else:
+                raise
+        else:
+            try:
+                with safe_globals([np.core.multiarray.scalar]):
+                    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+            except Exception:
+                if allow_unsafe:
+                    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+                else:
+                    raise exc
     if isinstance(checkpoint, dict):
         if "model_state_dict" in checkpoint and isinstance(checkpoint["model_state_dict"], dict):
             return checkpoint["model_state_dict"]
@@ -374,7 +399,7 @@ def main() -> None:
     if not checkpoint_path.exists():
         raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
 
-    state_dict = load_state_dict(checkpoint_path)
+    state_dict = load_state_dict(checkpoint_path, allow_unsafe=args.allow_unsafe)
     arch = infer_architecture(state_dict)
 
     columns, rows, totals = build_layer_table(arch, state_dict)
