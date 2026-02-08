@@ -49,6 +49,10 @@ model:
   classifier_hidden_dim: 256
   classifier_dropout: 0.3
 
+  # Covariates (e.g. sex) concatenated to gene embeddings in classifier
+  # Set to 1 when using --sex-map to adjust for sex imbalance
+  num_covariates: 0
+
 # =============================================================================
 # Training Configuration
 # =============================================================================
