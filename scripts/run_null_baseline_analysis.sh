@@ -4,9 +4,22 @@
 # ============================================
 # This script runs the complete null baseline analysis:
 # 1. Creates permuted dataset
-# 2. Trains null model
+# 2. Trains null model (identical conditions to real model, only labels permuted)
 # 3. Runs explainability on null model
 # 4. Compares real vs null attributions
+#
+# IMPORTANT: The null model must be trained under identical conditions to the
+# real model. The only difference is the permuted labels. Hyperparameters are
+# read from the real experiment's config.yaml to guarantee an exact match.
+# Ploidy correction is baked into the preprocessed data, so using the same
+# .pt file preserves it automatically — only labels are permuted.
+#
+# Usage:
+#   INPUT_DATA=/path/to/preprocessed.pt \
+#   REAL_EXPERIMENT=/path/to/experiments/EXPERIMENT_NAME/fold_N \
+#   REAL_RESULTS=/path/to/results/explainability \
+#   OUTPUT_BASE=/path/to/output \
+#   bash scripts/run_null_baseline_analysis.sh
 
 set -e  # Exit on error
 
@@ -17,78 +30,211 @@ if [ -z "$PYTHON" ]; then
     exit 1
 fi
 
-# Default parameters (override with environment variables)
-INPUT_DATA="${INPUT_DATA:-/home/shared/sieve-testing/preprocessed.pt}"
-REAL_EXPERIMENT="${REAL_EXPERIMENT:-/home/shared/sieve-testing/experiments/CONFIG_G_FINAL}"
-OUTPUT_BASE="${OUTPUT_BASE:-/home/shared/sieve-testing}"
+# Required parameters (set via environment variables)
+INPUT_DATA="${INPUT_DATA:-}"
+REAL_EXPERIMENT="${REAL_EXPERIMENT:-}"
+REAL_RESULTS="${REAL_RESULTS:-}"
+OUTPUT_BASE="${OUTPUT_BASE:-}"
 DEVICE="${DEVICE:-cuda}"
-
-# Model parameters (should match the real model)
-LR="${LR:-0.00001}"
-LAMBDA_ATTR="${LAMBDA_ATTR:-0.1}"
-LATENT_DIM="${LATENT_DIM:-32}"
-HIDDEN_DIM="${HIDDEN_DIM:-64}"
-NUM_LAYERS="${NUM_LAYERS:-1}"
 
 echo "=============================================="
 echo "Null Baseline Attribution Analysis Pipeline"
 echo "=============================================="
-echo "Input data: $INPUT_DATA"
-echo "Real experiment: $REAL_EXPERIMENT"
-echo "Output base: $OUTPUT_BASE"
+echo "Input data:       $INPUT_DATA"
+echo "Real experiment:  $REAL_EXPERIMENT"
+echo "Real results:     $REAL_RESULTS"
+echo "Output base:      $OUTPUT_BASE"
 echo ""
 
-# Validate that required paths exist
-if [ ! -f "$INPUT_DATA" ]; then
-    echo "ERROR: Input data not found at: $INPUT_DATA"
-    echo "Please set INPUT_DATA environment variable or provide the correct path."
+# -------------------------------------------------------------------
+# Validate required parameters
+# -------------------------------------------------------------------
+if [ -z "$INPUT_DATA" ]; then
+    echo "ERROR: INPUT_DATA is not set. Set it to the path of your preprocessed .pt file."
+    exit 1
+fi
+if [ -z "$OUTPUT_BASE" ]; then
+    echo "ERROR: OUTPUT_BASE is not set. Set it to the base output directory."
+    exit 1
+fi
+if [ -z "$REAL_EXPERIMENT" ]; then
+    echo "ERROR: REAL_EXPERIMENT is not set. Set it to the fold directory of the real experiment"
+    echo "       (e.g. /path/to/experiments/CONFIG_G_FINAL_CV/fold_4)."
     exit 1
 fi
 
+if [ ! -f "$INPUT_DATA" ]; then
+    echo "ERROR: Input data not found at: $INPUT_DATA"
+    exit 1
+fi
 if [ ! -d "$REAL_EXPERIMENT" ]; then
-    echo "WARNING: Real experiment directory not found at: $REAL_EXPERIMENT"
-    echo "This is only needed for comparison in Step 4."
-    echo "Continuing with null model training..."
+    echo "ERROR: Real experiment directory not found at: $REAL_EXPERIMENT"
+    exit 1
 fi
 
+# -------------------------------------------------------------------
+# Read hyperparameters from the real experiment's config.yaml
+# -------------------------------------------------------------------
+# Look for config.yaml in the fold directory first, then parent
+REAL_CONFIG=""
+if [ -f "${REAL_EXPERIMENT}/config.yaml" ]; then
+    REAL_CONFIG="${REAL_EXPERIMENT}/config.yaml"
+elif [ -f "$(dirname "$REAL_EXPERIMENT")/config.yaml" ]; then
+    REAL_CONFIG="$(dirname "$REAL_EXPERIMENT")/config.yaml"
+fi
+
+if [ -z "$REAL_CONFIG" ]; then
+    echo "ERROR: No config.yaml found in $REAL_EXPERIMENT or its parent directory."
+    echo "The null model needs the real experiment's config to match hyperparameters."
+    exit 1
+fi
+
+echo "Reading hyperparameters from: $REAL_CONFIG"
+
+# Extract all needed parameters from the YAML config using Python.
+# The config path is passed via environment variable to avoid shell
+# injection issues with special characters in paths.
+CONFIG_VARS=$(REAL_CONFIG="$REAL_CONFIG" "$PYTHON" -c "
+import os, sys, yaml, shlex
+
+config_path = os.environ['REAL_CONFIG']
+try:
+    with open(config_path) as f:
+        c = yaml.safe_load(f)
+except Exception as e:
+    print(f'ERROR: Failed to parse {config_path}: {e}', file=sys.stderr)
+    sys.exit(1)
+
+# Architecture parameters
+print(f'CFG_LEVEL={shlex.quote(str(c.get(\"level\", \"L3\")))}')
+print(f'CFG_LATENT_DIM={c.get(\"latent_dim\", 32)}')
+print(f'CFG_HIDDEN_DIM={c.get(\"hidden_dim\", 64)}')
+print(f'CFG_NUM_LAYERS={c.get(\"num_attention_layers\", 1)}')
+print(f'CFG_NUM_HEADS={c.get(\"num_heads\", 4)}')
+print(f'CFG_CHUNK_SIZE={c.get(\"chunk_size\", 3000)}')
+print(f'CFG_CHUNK_OVERLAP={c.get(\"chunk_overlap\", 0)}')
+print(f'CFG_AGGREGATION={shlex.quote(str(c.get(\"aggregation_method\", \"mean\")))}')
+
+# Training parameters
+print(f'CFG_LR={c.get(\"lr\", 0.00001)}')
+print(f'CFG_LAMBDA_ATTR={c.get(\"lambda_attr\", 0.1)}')
+print(f'CFG_BATCH_SIZE={c.get(\"batch_size\", 16)}')
+print(f'CFG_GRAD_ACCUM={c.get(\"gradient_accumulation_steps\", 4)}')
+grad_clip = c.get('gradient_clip')
+print(f'CFG_GRAD_CLIP={grad_clip if grad_clip is not None else \"\"}')
+print(f'CFG_EARLY_STOPPING={c.get(\"early_stopping\", 15)}')
+print(f'CFG_EPOCHS={c.get(\"epochs\", 100)}')
+print(f'CFG_SEED={c.get(\"seed\", 42)}')
+print(f'CFG_GENOME_BUILD={shlex.quote(str(c.get(\"genome_build\", \"GRCh37\")))}')
+
+# Sex covariate — read from config so null model matches exactly
+sex_map = c.get('sex_map')
+if sex_map and str(sex_map) not in ('None', 'null', ''):
+    print(f'CFG_SEX_MAP={shlex.quote(str(sex_map))}')
+else:
+    print('CFG_SEX_MAP=')
+")
+
+if [ $? -ne 0 ]; then
+    echo "ERROR: Failed to read config from $REAL_CONFIG"
+    exit 1
+fi
+
+eval "$CONFIG_VARS"
+
+echo ""
+echo "Config values read from real experiment:"
+echo "  level:                $CFG_LEVEL"
+echo "  latent_dim:           $CFG_LATENT_DIM"
+echo "  hidden_dim:           $CFG_HIDDEN_DIM"
+echo "  num_attention_layers: $CFG_NUM_LAYERS"
+echo "  num_heads:            $CFG_NUM_HEADS"
+echo "  chunk_size:           $CFG_CHUNK_SIZE"
+echo "  aggregation_method:   $CFG_AGGREGATION"
+echo "  lr:                   $CFG_LR"
+echo "  lambda_attr:          $CFG_LAMBDA_ATTR"
+echo "  batch_size:           $CFG_BATCH_SIZE"
+echo "  gradient_clip:        ${CFG_GRAD_CLIP:-<none>}"
+echo "  early_stopping:       $CFG_EARLY_STOPPING"
+echo "  epochs:               $CFG_EPOCHS"
+echo "  genome_build:         $CFG_GENOME_BUILD"
+echo "  sex_map:              ${CFG_SEX_MAP:-<not set>}"
+echo ""
+
+# Validate sex map file if config says one was used
+if [ -n "$CFG_SEX_MAP" ] && [ ! -f "$CFG_SEX_MAP" ]; then
+    echo "ERROR: Sex map file from real experiment config not found at: $CFG_SEX_MAP"
+    echo "The real model used sex as a covariate, so the null model must too."
+    exit 1
+fi
+
+# -------------------------------------------------------------------
 # Step 1: Create permuted dataset
+# -------------------------------------------------------------------
 echo "[Step 1/4] Creating permuted dataset..."
-NULL_DATA="${OUTPUT_BASE}/preprocessed_NULL.pt"
+INPUT_BASENAME="$(basename "$INPUT_DATA" .pt)"
+NULL_DATA="${OUTPUT_BASE}/data/${INPUT_BASENAME}_NULL.pt"
 
 $PYTHON scripts/create_null_baseline.py \
     --input "$INPUT_DATA" \
     --output "$NULL_DATA" \
-    --seed 42
+    --seed "$CFG_SEED"
 
 echo ""
 
+# -------------------------------------------------------------------
 # Step 2: Train null model
+# -------------------------------------------------------------------
+# All hyperparameters are read from the real experiment's config.yaml.
+# The only differences are:
+#   - --preprocessed-data points to the null (permuted) .pt file
+#   - --experiment-name is NULL_BASELINE
+#   - --val-split 0.2 (single split instead of full CV — sufficient for null)
 echo "[Step 2/4] Training null model..."
 NULL_EXPERIMENT="${OUTPUT_BASE}/experiments/NULL_BASELINE"
 
-$PYTHON scripts/train.py \
-    --preprocessed-data "$NULL_DATA" \
-    --level L3 \
-    --val-split 0.2 \
-    --lr "$LR" \
-    --lambda-attr "$LAMBDA_ATTR" \
-    --early-stopping 15 \
-    --epochs 100 \
-    --batch-size 16 \
-    --chunk-size 3000 \
-    --aggregation-method mean \
-    --gradient-accumulation-steps 4 \
-    --gradient-clip 1.0 \
-    --latent-dim "$LATENT_DIM" \
-    --hidden-dim "$HIDDEN_DIM" \
-    --num-attention-layers "$NUM_LAYERS" \
-    --output-dir "${OUTPUT_BASE}/experiments" \
-    --experiment-name NULL_BASELINE \
+TRAIN_CMD=(
+    "$PYTHON" scripts/train.py
+    --preprocessed-data "$NULL_DATA"
+    --level "$CFG_LEVEL"
+    --val-split 0.2
+    --lr "$CFG_LR"
+    --lambda-attr "$CFG_LAMBDA_ATTR"
+    --early-stopping "$CFG_EARLY_STOPPING"
+    --epochs "$CFG_EPOCHS"
+    --batch-size "$CFG_BATCH_SIZE"
+    --chunk-size "$CFG_CHUNK_SIZE"
+    --chunk-overlap "$CFG_CHUNK_OVERLAP"
+    --aggregation-method "$CFG_AGGREGATION"
+    --gradient-accumulation-steps "$CFG_GRAD_ACCUM"
+    --latent-dim "$CFG_LATENT_DIM"
+    --hidden-dim "$CFG_HIDDEN_DIM"
+    --num-heads "$CFG_NUM_HEADS"
+    --num-attention-layers "$CFG_NUM_LAYERS"
+    --seed "$CFG_SEED"
+    --output-dir "${OUTPUT_BASE}/experiments"
+    --experiment-name NULL_BASELINE
+    --genome-build "$CFG_GENOME_BUILD"
     --device "$DEVICE"
+)
+
+# Add --gradient-clip if it was set in the real config
+if [ -n "$CFG_GRAD_CLIP" ]; then
+    TRAIN_CMD+=(--gradient-clip "$CFG_GRAD_CLIP")
+fi
+
+# Add --sex-map if the real model used it (critical for fair comparison)
+if [ -n "$CFG_SEX_MAP" ]; then
+    TRAIN_CMD+=(--sex-map "$CFG_SEX_MAP")
+fi
+
+"${TRAIN_CMD[@]}"
 
 echo ""
 
+# -------------------------------------------------------------------
 # Step 3: Run explainability on null model
+# -------------------------------------------------------------------
 echo "[Step 3/4] Running explainability on null model..."
 NULL_EXPLAIN_DIR="${OUTPUT_BASE}/results/null_attributions"
 
@@ -96,41 +242,51 @@ $PYTHON scripts/explain.py \
     --experiment-dir "$NULL_EXPERIMENT" \
     --preprocessed-data "$NULL_DATA" \
     --output-dir "$NULL_EXPLAIN_DIR" \
+    --genome-build "$CFG_GENOME_BUILD" \
     --device "$DEVICE" \
     --is-null-baseline
 
 echo ""
 
+# -------------------------------------------------------------------
 # Step 4: Compare real vs null
+# -------------------------------------------------------------------
 echo "[Step 4/4] Comparing real vs null attributions..."
-REAL_RANKINGS="${REAL_EXPERIMENT}/explainability/sieve_variant_rankings.csv"
 NULL_RANKINGS="${NULL_EXPLAIN_DIR}/sieve_variant_rankings.csv"
 COMPARISON_DIR="${OUTPUT_BASE}/results/attribution_comparison"
 
-# Check if real rankings exist
-if [ ! -f "$REAL_RANKINGS" ]; then
-    echo "Warning: Real rankings not found at $REAL_RANKINGS"
-    echo "Looking for alternative locations..."
+# Locate real rankings — try several known locations
+REAL_RANKINGS=""
+CANDIDATE_PATHS=(
+    "${REAL_RESULTS}/sieve_variant_rankings.csv"
+    "${REAL_EXPERIMENT}/explainability/sieve_variant_rankings.csv"
+    "${REAL_EXPERIMENT}/sieve_variant_rankings.csv"
+    "${OUTPUT_BASE}/results/explainability/sieve_variant_rankings.csv"
+)
 
-    # Try alternative paths
-    ALT_PATHS=(
-        "${OUTPUT_BASE}/results/explainability/sieve_variant_rankings.csv"
-        "${REAL_EXPERIMENT}/sieve_variant_rankings.csv"
-    )
+for candidate in "${CANDIDATE_PATHS[@]}"; do
+    if [ -f "$candidate" ]; then
+        REAL_RANKINGS="$candidate"
+        echo "Found real rankings at: $REAL_RANKINGS"
+        break
+    fi
+done
 
-    for alt in "${ALT_PATHS[@]}"; do
-        if [ -f "$alt" ]; then
-            REAL_RANKINGS="$alt"
-            echo "Found real rankings at: $REAL_RANKINGS"
-            break
-        fi
+if [ -z "$REAL_RANKINGS" ]; then
+    echo "ERROR: Real rankings not found. Tried:"
+    for candidate in "${CANDIDATE_PATHS[@]}"; do
+        echo "  - $candidate"
     done
+    echo "Ensure sieve_variant_rankings.csv exists in one of the locations above,"
+    echo "or set REAL_RESULTS to the directory containing it."
+    exit 1
 fi
 
 $PYTHON scripts/compare_attributions.py \
     --real "$REAL_RANKINGS" \
     --null "$NULL_RANKINGS" \
     --output-dir "$COMPARISON_DIR" \
+    --genome-build "$CFG_GENOME_BUILD" \
     --top-k 100
 
 echo ""
