@@ -190,5 +190,90 @@ def test_multiple_permutations_creates_files():
         assert summary_file.exists(), "Summary file not created"
 
 
+def test_permutation_preserves_all_keys_including_sex_metadata():
+    """Verify all keys (including sex-related metadata) are preserved verbatim."""
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent.parent))
+    from scripts.create_null_baseline import create_single_permutation
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        input_path = Path(tmpdir) / "input.pt"
+        output_path = Path(tmpdir) / "output.pt"
+
+        n_samples = 50
+        labels = torch.cat([torch.ones(20), torch.zeros(30)]).long()
+        mock_data = {
+            'labels': labels,
+            'features': torch.randn(n_samples, 10),
+            'positions': torch.randint(0, 1_000_000, (n_samples, 5)),
+            'gene_ids': list(range(n_samples)),
+            'metadata': {
+                'genome_build': 'GRCh37',
+                'num_cases': 20,
+                'num_controls': 30,
+                'n_genes': 100,
+            },
+            'sample_sex': ['M', 'F'] * 25,  # sex metadata
+        }
+        torch.save(mock_data, input_path)
+
+        create_single_permutation(str(input_path), str(output_path), seed=42)
+
+        permuted = torch.load(output_path, weights_only=False)
+
+        # All original keys must be present (plus _null_baseline_metadata)
+        original_keys = set(mock_data.keys())
+        permuted_keys = set(permuted.keys()) - {'_null_baseline_metadata'}
+        assert original_keys == permuted_keys, (
+            f"Key mismatch: missing={original_keys - permuted_keys}, "
+            f"extra={permuted_keys - original_keys}"
+        )
+
+        # Labels should be permuted (different order)
+        assert not torch.equal(permuted['labels'], labels), "Labels should be permuted"
+
+        # All non-label fields must be identical
+        assert torch.equal(permuted['features'], mock_data['features']), "features changed"
+        assert torch.equal(permuted['positions'], mock_data['positions']), "positions changed"
+        assert permuted['gene_ids'] == mock_data['gene_ids'], "gene_ids changed"
+        assert permuted['metadata'] == mock_data['metadata'], "metadata changed"
+        assert permuted['sample_sex'] == mock_data['sample_sex'], "sample_sex changed"
+
+
+def test_permutation_preserves_sex_in_sample_dicts():
+    """Verify sex field in sample dicts is NOT permuted (only label is)."""
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent.parent))
+    from scripts.create_null_baseline import create_single_permutation
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        input_path = Path(tmpdir) / "input.pt"
+        output_path = Path(tmpdir) / "output.pt"
+
+        samples = [
+            {'sample_id': f'S{i}', 'label': i % 2, 'sex': 'M' if i < 10 else 'F',
+             'variants': []}
+            for i in range(20)
+        ]
+        mock_data = {'samples': samples}
+        torch.save(mock_data, input_path)
+
+        create_single_permutation(str(input_path), str(output_path), seed=42)
+
+        permuted = torch.load(output_path, weights_only=False)
+
+        # Sex and sample_id should NOT change — only label is permuted
+        for i, (orig, perm) in enumerate(
+            zip(mock_data['samples'], permuted['samples'])
+        ):
+            assert perm['sample_id'] == orig['sample_id'], (
+                f"Sample {i}: sample_id changed"
+            )
+            assert perm['sex'] == orig['sex'], (
+                f"Sample {i}: sex field changed (should only permute labels)"
+            )
+            assert 'variants' in perm, f"Sample {i}: variants field missing"
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])
