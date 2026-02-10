@@ -23,6 +23,10 @@
 
 set -e  # Exit on error
 
+# Resolve the repository root from this script's location
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
 # Find Python interpreter
 PYTHON="${PYTHON:-$(command -v python3 || command -v python)}"
 if [ -z "$PYTHON" ]; then
@@ -175,7 +179,7 @@ echo "[Step 1/4] Creating permuted dataset..."
 INPUT_BASENAME="$(basename "$INPUT_DATA" .pt)"
 NULL_DATA="${OUTPUT_BASE}/data/${INPUT_BASENAME}_NULL.pt"
 
-$PYTHON scripts/create_null_baseline.py \
+"$PYTHON" "$REPO_ROOT/scripts/create_null_baseline.py" \
     --input "$INPUT_DATA" \
     --output "$NULL_DATA" \
     --seed "$CFG_SEED"
@@ -194,7 +198,7 @@ echo "[Step 2/4] Training null model..."
 NULL_EXPERIMENT="${OUTPUT_BASE}/experiments/NULL_BASELINE"
 
 TRAIN_CMD=(
-    "$PYTHON" scripts/train.py
+    "$PYTHON" "$REPO_ROOT/scripts/train.py"
     --preprocessed-data "$NULL_DATA"
     --level "$CFG_LEVEL"
     --val-split 0.2
@@ -238,7 +242,7 @@ echo ""
 echo "[Step 3/4] Running explainability on null model..."
 NULL_EXPLAIN_DIR="${OUTPUT_BASE}/results/null_attributions"
 
-$PYTHON scripts/explain.py \
+"$PYTHON" "$REPO_ROOT/scripts/explain.py" \
     --experiment-dir "$NULL_EXPERIMENT" \
     --preprocessed-data "$NULL_DATA" \
     --output-dir "$NULL_EXPLAIN_DIR" \
@@ -282,7 +286,7 @@ if [ -z "$REAL_RANKINGS" ]; then
     exit 1
 fi
 
-$PYTHON scripts/compare_attributions.py \
+"$PYTHON" "$REPO_ROOT/scripts/compare_attributions.py" \
     --real "$REAL_RANKINGS" \
     --null "$NULL_RANKINGS" \
     --output-dir "$COMPARISON_DIR" \
