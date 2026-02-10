@@ -22,15 +22,22 @@ if [ -z "$PYTHON" ]; then
     exit 1
 fi
 
-# Default parameters (override with environment variables)
-INPUT_DATA="${INPUT_DATA:-/home/shared/sieve-run/data/preprocessed_discovery_chr.pt}"
-REAL_EXPERIMENT="${REAL_EXPERIMENT:-/home/shared/sieve-run/experiments/CONFIG_G_FINAL_CV/fold_4}"
-REAL_RESULTS="${REAL_RESULTS:-/home/shared/sieve-run/results/fold4_explainability}"
-OUTPUT_BASE="${OUTPUT_BASE:-/home/shared/sieve-run}"
+# Required parameters (set via environment variables)
+# Example:
+#   INPUT_DATA=/path/to/preprocessed.pt \
+#   REAL_EXPERIMENT=/path/to/experiments/EXPERIMENT_NAME/fold_N \
+#   REAL_RESULTS=/path/to/results/explainability \
+#   OUTPUT_BASE=/path/to/output \
+#   SEX_MAP=/path/to/sample_sex.tsv \
+#   bash scripts/run_null_baseline_analysis.sh
+INPUT_DATA="${INPUT_DATA:-}"
+REAL_EXPERIMENT="${REAL_EXPERIMENT:-}"
+REAL_RESULTS="${REAL_RESULTS:-}"
+OUTPUT_BASE="${OUTPUT_BASE:-}"
 DEVICE="${DEVICE:-cuda}"
 
 # Sex covariate and genome build (must match real model)
-SEX_MAP="${SEX_MAP:-/home/shared/sieve-run/data/sample_sex.tsv}"
+SEX_MAP="${SEX_MAP:-}"
 GENOME_BUILD="${GENOME_BUILD:-GRCh37}"
 
 # Model parameters (MUST match real model exactly)
@@ -51,10 +58,18 @@ echo "Sex map:          ${SEX_MAP:-<not set>}"
 echo "Genome build:     $GENOME_BUILD"
 echo ""
 
-# Validate that required paths exist
+# Validate required parameters
+if [ -z "$INPUT_DATA" ]; then
+    echo "ERROR: INPUT_DATA is not set. Set it to the path of your preprocessed .pt file."
+    exit 1
+fi
+if [ -z "$OUTPUT_BASE" ]; then
+    echo "ERROR: OUTPUT_BASE is not set. Set it to the base output directory."
+    exit 1
+fi
+
 if [ ! -f "$INPUT_DATA" ]; then
     echo "ERROR: Input data not found at: $INPUT_DATA"
-    echo "Please set INPUT_DATA environment variable or provide the correct path."
     exit 1
 fi
 
@@ -72,7 +87,9 @@ fi
 
 # Step 1: Create permuted dataset
 echo "[Step 1/4] Creating permuted dataset..."
-NULL_DATA="${OUTPUT_BASE}/data/preprocessed_discovery_chr_NULL.pt"
+# Derive null data filename from the input filename
+INPUT_BASENAME="$(basename "$INPUT_DATA" .pt)"
+NULL_DATA="${OUTPUT_BASE}/data/${INPUT_BASENAME}_NULL.pt"
 
 $PYTHON scripts/create_null_baseline.py \
     --input "$INPUT_DATA" \
@@ -149,7 +166,6 @@ CANDIDATE_PATHS=(
     "${REAL_EXPERIMENT}/explainability/sieve_variant_rankings.csv"
     "${REAL_EXPERIMENT}/sieve_variant_rankings.csv"
     "${OUTPUT_BASE}/results/explainability/sieve_variant_rankings.csv"
-    "${OUTPUT_BASE}/results/fold4_explainability/sieve_variant_rankings.csv"
 )
 
 for candidate in "${CANDIDATE_PATHS[@]}"; do
