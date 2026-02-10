@@ -92,12 +92,18 @@ fi
 echo "Reading hyperparameters from: $REAL_CONFIG"
 
 # Extract all needed parameters from the YAML config using Python.
-# This outputs KEY=VALUE lines that we eval to set shell variables.
-CONFIG_VARS=$($PYTHON -c "
-import yaml, shlex
+# The config path is passed via environment variable to avoid shell
+# injection issues with special characters in paths.
+CONFIG_VARS=$(REAL_CONFIG="$REAL_CONFIG" "$PYTHON" -c "
+import os, sys, yaml, shlex
 
-with open('$REAL_CONFIG') as f:
-    c = yaml.safe_load(f)
+config_path = os.environ['REAL_CONFIG']
+try:
+    with open(config_path) as f:
+        c = yaml.safe_load(f)
+except Exception as e:
+    print(f'ERROR: Failed to parse {config_path}: {e}', file=sys.stderr)
+    sys.exit(1)
 
 # Architecture parameters
 print(f'CFG_LEVEL={shlex.quote(str(c.get(\"level\", \"L3\")))}')
@@ -128,6 +134,11 @@ if sex_map and str(sex_map) not in ('None', 'null', ''):
 else:
     print('CFG_SEX_MAP=')
 ")
+
+if [ $? -ne 0 ]; then
+    echo "ERROR: Failed to read config from $REAL_CONFIG"
+    exit 1
+fi
 
 eval "$CONFIG_VARS"
 
@@ -183,7 +194,7 @@ echo "[Step 2/4] Training null model..."
 NULL_EXPERIMENT="${OUTPUT_BASE}/experiments/NULL_BASELINE"
 
 TRAIN_CMD=(
-    $PYTHON scripts/train.py
+    "$PYTHON" scripts/train.py
     --preprocessed-data "$NULL_DATA"
     --level "$CFG_LEVEL"
     --val-split 0.2
@@ -266,7 +277,8 @@ if [ -z "$REAL_RANKINGS" ]; then
     for candidate in "${CANDIDATE_PATHS[@]}"; do
         echo "  - $candidate"
     done
-    echo "Set REAL_RESULTS to the directory containing sieve_variant_rankings.csv"
+    echo "Ensure sieve_variant_rankings.csv exists in one of the locations above,"
+    echo "or set REAL_RESULTS to the directory containing it."
     exit 1
 fi
 

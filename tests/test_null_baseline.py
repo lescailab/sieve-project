@@ -229,8 +229,13 @@ def test_permutation_preserves_all_keys_including_sex_metadata():
             f"extra={permuted_keys - original_keys}"
         )
 
-        # Labels should be permuted (different order)
-        assert not torch.equal(permuted['labels'], labels), "Labels should be permuted"
+        # Labels should be permuted — verify at least some changed position
+        n_changed = (permuted['labels'] != labels).sum().item()
+        assert n_changed > 0, "No labels changed position after permutation"
+
+        # Label distribution must be preserved
+        assert (permuted['labels'] == 1).sum() == 20, "Case count changed"
+        assert (permuted['labels'] == 0).sum() == 30, "Control count changed"
 
         # All non-label fields must be identical
         assert torch.equal(permuted['features'], mock_data['features']), "features changed"
@@ -263,6 +268,9 @@ def test_permutation_preserves_sex_in_sample_dicts():
         permuted = torch.load(output_path, weights_only=False)
 
         # Sex and sample_id should NOT change — only label is permuted
+        original_labels = [s['label'] for s in mock_data['samples']]
+        permuted_labels = [s['label'] for s in permuted['samples']]
+
         for i, (orig, perm) in enumerate(
             zip(mock_data['samples'], permuted['samples'])
         ):
@@ -273,6 +281,11 @@ def test_permutation_preserves_sex_in_sample_dicts():
                 f"Sample {i}: sex field changed (should only permute labels)"
             )
             assert 'variants' in perm, f"Sample {i}: variants field missing"
+
+        # Labels should actually have been permuted
+        n_changed = sum(1 for p, o in zip(permuted_labels, original_labels) if p != o)
+        assert n_changed > 0, "No labels changed position after permutation"
+        assert sum(permuted_labels) == sum(original_labels), "Label distribution changed"
 
 
 if __name__ == '__main__':
