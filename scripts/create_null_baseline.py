@@ -71,6 +71,11 @@ def create_single_permutation(
 
     print(f"Original data: {n_samples} samples ({n_cases} cases, {n_controls} controls)")
 
+    # Report all keys found in the data — everything except 'labels'
+    # (or the label field inside 'samples') will be copied verbatim.
+    all_keys = sorted(data.keys())
+    print(f"Data keys ({len(all_keys)}): {all_keys}")
+
     # Permute labels using a local RNG to avoid mutating global NumPy state
     rng = np.random.default_rng(seed)
     permuted_indices = rng.permutation(n_samples)
@@ -123,6 +128,33 @@ def create_single_permutation(
         'n_controls': n_controls,
         'same_position_count': same_position,
     }
+
+    # Verify all original keys are preserved (only labels should differ)
+    preserved_keys = sorted(k for k in permuted_data.keys()
+                            if k != '_null_baseline_metadata')
+    original_keys = sorted(data.keys())
+    if preserved_keys != original_keys:
+        missing = set(original_keys) - set(preserved_keys)
+        extra = set(preserved_keys) - set(original_keys)
+        raise RuntimeError(
+            f"Key mismatch after permutation! "
+            f"Missing: {missing}, Extra: {extra}"
+        )
+    print(f"Verified: all {len(original_keys)} original keys preserved")
+
+    # Report non-label fields that were copied verbatim
+    for key in original_keys:
+        if key in ('labels', 'samples'):
+            continue
+        value = permuted_data[key]
+        if isinstance(value, torch.Tensor):
+            print(f"  {key}: Tensor {value.shape} {value.dtype} (unchanged)")
+        elif isinstance(value, list):
+            print(f"  {key}: list[{len(value)}] (unchanged)")
+        elif isinstance(value, dict):
+            print(f"  {key}: dict with {len(value)} entries (unchanged)")
+        else:
+            print(f"  {key}: {type(value).__name__} (unchanged)")
 
     # Save
     output_path = Path(output_path)

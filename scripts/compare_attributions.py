@@ -23,6 +23,7 @@ Author: Francesco Lescai
 """
 
 import argparse
+import sys
 from pathlib import Path
 from typing import Optional, Dict, Any
 
@@ -30,6 +31,44 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 import yaml
+
+# Allow imports from project root
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from src.data.genome import get_genome_build, is_sex_chrom
+
+
+def filter_sex_chroms(
+    df: pd.DataFrame,
+    genome_build_name: str,
+) -> pd.DataFrame:
+    """
+    Remove variants on sex chromosomes from a rankings DataFrame.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Variant rankings with a 'chromosome' column
+    genome_build_name : str
+        Genome build name (e.g. 'GRCh37')
+
+    Returns
+    -------
+    pd.DataFrame
+        Filtered DataFrame with only autosomal variants
+    """
+    if 'chromosome' not in df.columns:
+        print("  WARNING: 'chromosome' column not found — cannot filter sex chromosomes")
+        return df
+
+    build = get_genome_build(genome_build_name)
+    mask = df['chromosome'].apply(lambda c: not is_sex_chrom(str(c), build))
+    n_before = len(df)
+    filtered = df[mask].copy()
+    n_removed = n_before - len(filtered)
+    print(f"  Removed {n_removed} sex-chromosome variants "
+          f"({n_before} -> {len(filtered)} autosomal)")
+    return filtered
 
 
 def load_null_attributions(
@@ -358,6 +397,11 @@ def main():
                        help='Output directory for comparison results')
     parser.add_argument('--top-k', type=int, default=100,
                        help='Number of top variants to output')
+    parser.add_argument('--genome-build', type=str, default='GRCh37',
+                       help='Reference genome build (GRCh37 or GRCh38)')
+    parser.add_argument('--exclude-sex-chroms', action='store_true',
+                       help='Exclude sex chromosome variants from comparison '
+                            '(recommended when ploidy correction may bias attributions)')
 
     args = parser.parse_args()
 
@@ -370,14 +414,25 @@ def main():
     # Load data
     print("Loading real attributions...")
     real_df = pd.read_csv(args.real)
-    real_attr = real_df['mean_attribution'].values
 
     print("Loading null attributions...")
     null_df = load_null_attributions(args.null, args.null_dir)
-    null_attr = null_df['mean_attribution'].values
 
     n_permutations = null_df['permutation'].nunique()
     print(f"  Loaded {n_permutations} null permutation(s)")
+
+    # Optionally filter sex chromosomes
+    sex_chroms_excluded = False
+    if args.exclude_sex_chroms:
+        print("\nFiltering sex chromosome variants...")
+        print("  Real:")
+        real_df = filter_sex_chroms(real_df, args.genome_build)
+        print("  Null:")
+        null_df = filter_sex_chroms(null_df, args.genome_build)
+        sex_chroms_excluded = True
+
+    real_attr = real_df['mean_attribution'].values
+    null_attr = null_df['mean_attribution'].values
 
     # Compute thresholds from null
     print("\nComputing null-derived significance thresholds...")
@@ -459,6 +514,8 @@ def main():
             'n_null_permutations': n_permutations,
             'n_real_variants': len(real_df),
             'n_null_variants': len(null_df),
+            'genome_build': args.genome_build,
+            'sex_chroms_excluded': sex_chroms_excluded,
         },
         'thresholds': {k: float(v) for k, v in thresholds.items()},
         'distribution_comparison': dist_comparison,
