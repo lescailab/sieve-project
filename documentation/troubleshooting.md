@@ -1,0 +1,228 @@
+# Troubleshooting
+
+### Installation Issues
+
+#### ImportError: No module named 'cyvcf2'
+
+**Solution**:
+```bash
+pip install cyvcf2
+# or if that fails:
+conda install -c bioconda cyvcf2
+```
+
+#### CUDA out of memory
+
+**Solution**: Reduce memory usage
+```bash
+python scripts/train.py \
+    --batch-size 2 \
+    --chunk-size 2000 \
+    --gradient-accumulation-steps 16 \
+    ...
+```
+
+---
+
+### Data Preparation Issues
+
+#### VCF parsing fails
+
+**Symptom**: `KeyError: 'CSQ'` or `ValueError: No VEP annotations found`
+
+**Solution**: Your VCF is not VEP-annotated. Run VEP:
+```bash
+vep --input_file your.vcf \
+    --output_file annotated.vcf \
+    --vcf --symbol --sift b --polyphen b \
+    --assembly GRCh37
+```
+
+#### Sample name mismatch
+
+**Symptom**: `KeyError: SAMPLE001` or `ValueError: Sample not found in VCF`
+
+**Solution**: Check that phenotype file sample IDs exactly match VCF:
+```bash
+# Get VCF samples
+bcftools query -l your.vcf.gz
+
+# Check phenotype file
+cut -f1 phenotypes.tsv
+```
+
+Sample names must match character-for-character (case-sensitive).
+
+#### Chromosome naming issue
+
+**Symptom**: `KeyError: 'chr1'` or no variants loaded
+
+**Solution**: SIEVE normalises both styles (`1` and `chr1`) internally. If you still see this error, check:
+- `--genome-build` matches your data (`GRCh37` or `GRCh38`)
+- Contigs are standard autosomes/sex chromosomes (1-22, X, Y), or can be mapped cleanly
+- Phenotype sample IDs match VCF sample IDs
+
+If your VCF uses non-standard contig labels, rename contigs:
+```bash
+bcftools annotate --rename-chrs chr_name_conv.txt input.vcf.gz -O z -o output.vcf.gz
+
+# Where chr_name_conv.txt contains:
+chr1 1
+chr2 2
+...
+```
+
+---
+
+### Training Issues
+
+#### Model not learning (AUC ≈ 0.5)
+
+**Possible Causes & Solutions**:
+
+1. **Insufficient data**
+   - Need: >100 cases and >100 controls minimum
+   - Solution: Acquire more samples or use data augmentation
+
+2. **Label imbalance**
+   - Check: How many cases vs controls?
+   - Solution: If extreme (<10% minority), consider class weights
+
+3. **Encoding issues**
+   - Check: Run `python test_encoding_pipeline.py`
+   - Solution: Verify features have non-zero variance
+
+4. **Wrong learning rate**
+   - Try: `--lr 0.000001` (lower) or `--lr 0.0001` (higher)
+
+5. **Model too complex for data size**
+   - Try: `--latent-dim 16 --hidden-dim 32 --num-attention-layers 1`
+
+6. **Data leakage or preprocessing error**
+   - Verify: Cases and controls are truly different cohorts
+
+#### Training very slow
+
+**Solutions**:
+
+1. **Use GPU**: `--device cuda`
+2. **Increase batch size**: `--batch-size 32` (if memory allows)
+3. **Use preprocessed data**: Much faster than parsing VCF each time
+4. **Reduce integration steps**: `--n-steps 25` in explain.py
+
+#### Out of memory during training
+
+**Solution**: Use memory-efficient settings:
+```bash
+--batch-size 2 \
+--gradient-accumulation-steps 16 \
+--chunk-size 2000
+```
+
+See "Memory-Efficient Training" section above.
+
+---
+
+### Explainability Issues
+
+#### Integrated gradients very slow
+
+**Solutions**:
+
+1. Reduce integration steps: `--n-steps 25` (less accurate but faster)
+2. Limit variants per sample: `--max-variants 1500`
+3. Use larger batch size: `--batch-size 8` (if memory allows)
+4. Skip attention analysis: `--skip-attention` (if only need variant rankings)
+
+#### AttributeError: 'NoneType' object has no attribute
+
+**Cause**: Model checkpoint not found or corrupted
+
+**Solution**: Verify checkpoint exists:
+```bash
+ls -lh experiments/my_model/best_model.pt
+```
+
+If using `--experiment-dir`, check that `best_model.pt` or `fold_*/best_model.pt` exists.
+
+---
+
+### Null Baseline Issues
+
+#### Null model AUC ≠ 0.5
+
+**Expected**: Null model AUC should be ≈0.50 ± 0.05
+
+**If AUC > 0.6**:
+- **Problem**: Permutation didn't properly break genotype-phenotype relationship
+- **Check**: Did you use the same preprocessed file for null training?
+- **Solution**: Verify null baseline file has `_null_baseline_metadata` field
+
+**If AUC < 0.4**:
+- This is actually fine - model is consistently wrong, which is equivalent to chance
+- Attributions are still valid for null distribution
+
+#### No significant variants (enrichment < 1)
+
+**Possible Causes**:
+
+1. **Real model didn't learn**: Check real model AUC first
+2. **Null and real similar**: May indicate no genuine signal in data
+3. **Sample size too small**: Need larger cohort for robust signal
+4. **Wrong parameters**: Ensure null trained with exact same params as real
+
+**Solution**: Review real model performance first, then consider increasing sample size.
+
+---
+
+### Interpretation Issues
+
+#### All top variants in the same gene
+
+**Is this a problem?**
+- Depends! If studying a Mendelian disease, this is expected
+- For complex diseases, expect multiple genes
+- Check: Is the gene biologically relevant to your phenotype?
+
+**Possible issue**: Overfitting to one gene
+- Solution: Check cross-validation stability
+- Look at fold-specific rankings - is it consistent?
+
+#### chrX dominates top rankings
+
+**Possible causes**:
+- Ploidy differences (hemizygosity) inflate chrX attributions
+- Sex imbalance across case/control groups
+
+**Solutions**:
+1. Run sex-aware preprocessing (`infer_sex.py` → `preprocess.py --sex-map`)
+2. Check sex balance (`check_sex_balance.py`)
+3. Apply post-hoc correction (`correct_chrx_bias.py`)
+
+**Note**: `correct_chrx_bias.py` excludes sex chromosomes by default; use `--include-sex-chroms` if you need chrX/chrY retained.
+
+#### Very low attributions overall
+
+**Possible causes**:
+- Model has low confidence (AUC close to 0.5)
+- Attribution regularisation too strong (reduce `--lambda-attr`)
+- Integration steps too low (increase `--n-steps`)
+
+**Solution**:
+1. Check model performance first
+2. If AUC is good but attributions low, increase `--n-steps` to 100
+
+#### Case-control differences all near zero
+
+**Meaning**: Variants affect cases and controls similarly
+
+**Interpretation**:
+- May indicate population stratification (batch effects)
+- Or: Model learned overall variant burden, not disease-specific patterns
+
+**Solution**:
+- Check for population structure (PCA analysis)
+- Consider adjusting for covariates in future version
+
+---
+

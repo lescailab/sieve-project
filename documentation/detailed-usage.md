@@ -1,0 +1,293 @@
+# Detailed Usage
+
+### Preparing Your VCF File
+
+#### VCF Requirements
+
+Your VCF must be:
+1. **Multi-sample** (at least 50 samples recommended)
+2. **VEP-annotated** with CSQ field containing:
+   - Consequence (e.g., missense_variant)
+   - SYMBOL (gene name)
+   - SIFT (score)
+   - PolyPhen (score)
+3. **Reference build declared** as GRCh37 or GRCh38 via `--genome-build`
+4. **Contig naming may be either style** (e.g., `1` or `chr1`; harmonised internally)
+5. **Bgzipped and indexed** (`.vcf.gz` + `.vcf.gz.tbi`)
+
+#### Running VEP
+
+If your VCF is not annotated:
+
+```bash
+vep --input_file variants.vcf \
+    --output_file variants_annotated.vcf \
+    --vcf \
+    --symbol \
+    --sift b \
+    --polyphen b \
+    --assembly GRCh37 \
+    --offline \
+    --cache /path/to/vep_cache
+```
+
+#### Phenotype File Format
+
+Tab-separated file with header:
+```
+sample_id	phenotype
+SAMPLE001	1
+SAMPLE002	0
+SAMPLE003	1
+SAMPLE004	0
+```
+
+- Column 1: `sample_id` (must match VCF exactly)
+- Column 2: `phenotype` (0 = control, 1 = case)
+
+**Note**: Sample order doesn't matter, but names must match VCF.
+
+---
+
+### Sex-Aware Preprocessing (Recommended for chrX/chrY Analyses)
+
+SIEVE now supports a sex-aware preprocessing path to prevent chrX ploidy bias in downstream attributions. The pipeline uses the X-chromosome inbreeding coefficient (F-statistic) with pseudoautosomal region (PAR) exclusion to infer genetic sex, then applies ploidy-aware dosage encoding during VCF parsing.
+
+#### 1) Infer genetic sex (X-chromosome F-statistic)
+
+```bash
+python scripts/infer_sex.py \
+    --vcf cohort.vcf.gz \
+    --output-dir results/sex_inference \
+    --genome-build GRCh37 \
+    --min-gq 20 \
+    --min-maf 0.05 \
+    --f-male 0.8 \
+    --f-female 0.2
+```
+
+**Outputs**:
+- `sample_sex.tsv`: sample_id → inferred sex (`M`, `F`, or ambiguous labels)
+- `sex_inference_diagnostic.png`: histogram of F-statistics
+- `sex_inference_summary.yaml`: summary counts and thresholds
+
+**Interpretation**:
+- High F-statistic (≈1): low heterozygosity → genetic male
+- Low F-statistic (≈0): high heterozygosity → genetic female
+- Ambiguous/discordant samples are kept but excluded from ploidy correction
+
+#### 2) Check sex balance across cases/controls (recommended)
+
+```bash
+python scripts/check_sex_balance.py \
+    --phenotypes phenotypes.tsv \
+    --sex-map results/sex_inference/sample_sex.tsv \
+    --output-dir results/sex_balance
+```
+
+If a significant imbalance is detected, consider sex-stratified analysis or adding sex as a covariate in downstream modeling.
+
+#### 3) Preprocess with ploidy-aware encoding
+
+```bash
+python scripts/preprocess.py \
+    --vcf cohort.vcf.gz \
+    --phenotypes phenotypes.tsv \
+    --output preprocessed.pt \
+    --sex-map results/sex_inference/sample_sex.tsv \
+    --genome-build GRCh37
+```
+
+**Encoding rules**:
+- Male chrX non-PAR: hemizygous alt is doubled (dosage 2)
+- Female chrY: variants are skipped (data quality safeguard)
+- Unknown/ambiguous sex: no correction (conservative default)
+
+#### 4) Train with sex covariate (recommended if imbalance exists)
+
+```bash
+python scripts/train.py \
+    --preprocessed-data preprocessed.pt \
+    --level L3 \
+    --sex-map results/sex_inference/sample_sex.tsv \
+    --experiment-name my_model_sex_adjusted
+```
+
+`--sex-map` has two effects:
+- During VCF-based training, it enables ploidy-aware dosage encoding and adds sex covariate to the classifier.
+- During `--preprocessed-data` training, dosages are unchanged (already baked into `.pt`), and sex is used as a classifier covariate.
+
+---
+
+### Choosing Annotation Levels
+
+#### Scientific Rationale
+
+The annotation ablation protocol tests whether deep learning can discover variants independently of prior knowledge:
+
+- **L0 (Genotype only)**: Can patterns in 0/1/2 dosages alone predict disease?
+- **L1 (+ Position)**: Does knowing where variants are located help?
+- **L2 (+ Consequence)**: Does basic VEP info (missense/LoF) matter?
+- **L3 (+ SIFT/PolyPhen)**: Do deleteriousness scores improve discovery?
+- **L4 (Full annotations)**: Maximum information
+
+#### Decision Guide
+
+**Start with L3** for most analyses because:
+- Includes standard functional annotations
+- Good balance of information and interpretability
+- Comparable to existing methods
+
+**Use L0** to test annotation-free discovery:
+- If L0 performs well (AUC > 0.6), genotype patterns alone carry signal
+- Variants unique to L0 may represent novel mechanisms
+
+**Compare L0 vs L3 vs L4** for ablation studies:
+- Identifies which annotations are actually helpful
+- Reveals annotation-dependent vs independent discoveries
+
+---
+
+### Training Strategies
+
+#### Single Train/Val Split
+
+Fast, good for initial exploration:
+```bash
+python scripts/train.py \
+    --preprocessed-data preprocessed.pt \
+    --level L3 \
+    --val-split 0.2 \
+    --epochs 100 \
+    --experiment-name quick_test
+```
+
+#### Cross-Validation
+
+More robust performance estimation:
+```bash
+python scripts/train.py \
+    --preprocessed-data preprocessed.pt \
+    --level L3 \
+    --cv 5 \
+    --epochs 100 \
+    --experiment-name robust_eval
+```
+
+Creates 5 models (one per fold), reports mean ± std performance.
+
+#### Memory-Efficient Training (Large Datasets)
+
+For datasets with >1000 samples and 5000+ variants per sample:
+
+```bash
+python scripts/train.py \
+    --preprocessed-data preprocessed.pt \
+    --level L3 \
+    --batch-size 2 \
+    --gradient-accumulation-steps 16 \
+    --chunk-size 2000 \
+    --epochs 100 \
+    --experiment-name large_cohort
+```
+
+**Explanation**:
+- `--batch-size 2`: Process 2 samples at a time (low memory)
+- `--gradient-accumulation-steps 16`: Simulate batch_size=32 (no quality loss)
+- `--chunk-size 2000`: Cap variants per forward pass (prevents OOM)
+
+**Memory Usage**:
+| Configuration | GPU Memory | Works On |
+|--------------|------------|----------|
+| batch=32, chunk=5000 | ~40 GB | A100 80GB |
+| batch=8, chunk=3000 | ~12 GB | A100 40GB |
+| batch=2, chunk=3000 | ~7 GB | T4/RTX5000 |
+| batch=2, chunk=2000 | ~5 GB | Most GPUs |
+
+---
+
+### Attribution-Regularized Training
+
+#### Theory
+
+Standard training:
+```
+Loss = Classification_Loss
+```
+
+Attribution-regularised training:
+```
+Loss = Classification_Loss + λ × Attribution_Sparsity_Loss
+```
+
+The sparsity term encourages the model to:
+- Rely on fewer variants (better interpretability)
+- Produce more stable attributions across CV folds
+- Potentially improve generalisation
+
+#### Usage
+
+```bash
+# No regularisation (default)
+python scripts/train.py --lambda-attr 0.0 ...
+
+# Light regularisation
+python scripts/train.py --lambda-attr 0.01 ...
+
+# Medium regularisation (recommended)
+python scripts/train.py --lambda-attr 0.1 ...
+
+# Strong regularisation
+python scripts/train.py --lambda-attr 0.5 ...
+```
+
+#### When to Use
+
+- **λ = 0**: Standard training, maximum flexibility
+- **λ = 0.01-0.1**: Mild sparsity, improves interpretability
+- **λ = 0.5+**: Strong sparsity, may hurt performance
+
+**Recommendation**: Start with λ=0, then try λ=0.1 if attributions are noisy.
+
+---
+
+### Multiple Null Permutations
+
+For more robust null baseline estimation:
+
+```bash
+# Create 5 null permutations (stored under results/null_permutations)
+python scripts/create_null_baseline.py \
+    --input preprocessed.pt \
+    --output-dir results/null_permutations \
+    --n-permutations 5
+
+# Train each (can parallelise)
+for i in {0..4}; do
+    python scripts/train.py \
+        --preprocessed-data results/null_permutations/preprocessed_NULL_perm${i}.pt \
+        --level L3 \
+        --experiment-name null_perm${i} \
+        --output-dir experiments
+
+    python scripts/explain.py \
+        --experiment-dir experiments/null_perm${i} \
+        --preprocessed-data results/null_permutations/preprocessed_NULL_perm${i}.pt \
+        --output-dir results/null_permutations/perm${i} \
+        --is-null-baseline
+done
+
+# Compare using all permutations (null_dir restricted to null outputs only)
+python scripts/compare_attributions.py \
+    --real results/explainability/sieve_variant_rankings.csv \
+    --null-dir results/null_permutations \
+    --output-dir results/comparison_robust
+```
+
+**Benefits**:
+- More stable null thresholds
+- Better confidence in significance calls
+- Recommended for publication-quality analyses
+
+---
+
