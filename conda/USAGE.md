@@ -15,10 +15,10 @@ conda install -c <your-channel> sieve
 ### Option B: Build and install locally from this repository
 
 ```bash
-conda create -n sieve-build python=3.10 conda-build
+conda create -n sieve-build -c conda-forge python=3.11 conda>=26 conda-build>=26
 conda activate sieve-build
-conda build conda
-conda install -n sieve -c local sieve
+CONDA_SOLVER=libmamba conda build conda --no-anaconda-upload --croot /tmp/sieve-conda-bld
+conda install -n sieve -c file:///tmp/sieve-conda-bld sieve
 ```
 
 ## Verify commands are available
@@ -147,5 +147,5 @@ sieve-validate-discoveries \
 ## Notes
 
 - In conda package mode, prefer `sieve-*` commands instead of `python scripts/...`.
-- The package dependencies are aligned to `pyproject.toml` version constraints.
+- The package dependencies are based on `pyproject.toml`; in some cases conda-specific compatibility constraints may differ from pip constraints.
 - For GPU usage, ensure your conda environment includes a CUDA-compatible PyTorch build.
