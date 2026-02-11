@@ -1,7 +1,7 @@
 # SIEVE User Guide
 
-**Version**: 1.1
-**Last Updated**: 2026-02-06
+**Version**: 1.2
+**Last Updated**: 2026-02-11
 **For**: SIEVE v0.1.0+
 
 ## Table of Contents
@@ -95,14 +95,15 @@ python scripts/explain.py \
 # 6. Validate (null baseline)
 # Set required environment variables first
 export INPUT_DATA="preprocessed.pt"
-export REAL_EXPERIMENT="experiments/my_model"
-export OUTPUT_BASE="experiments"
+export REAL_EXPERIMENT="experiments/my_model"            # or experiments/my_model/fold_0
+export REAL_RESULTS="results/explainability"             # directory with sieve_variant_rankings.csv
+export OUTPUT_BASE="results/null_baseline_run"           # where null outputs will be written
 bash scripts/run_null_baseline_analysis.sh
 
 # 7. (Optional) Correct chrX ploidy bias in rankings
 python scripts/correct_chrx_bias.py \
     --rankings results/explainability/sieve_variant_rankings.csv \
-    --null-rankings results/null_attributions/sieve_variant_rankings.csv \
+    --null-rankings results/null_baseline_run/results/null_attributions/sieve_variant_rankings.csv \
     --output-dir results/explainability_corrected \
     --exclude-sex-chroms
 ```
@@ -224,7 +225,8 @@ See `pyproject.toml` for complete list.
 **Requirements**:
 - Multi-sample VCF file (bgzipped and indexed)
 - VEP-annotated (CSQ field with SIFT, PolyPhen, Consequence, SYMBOL)
-- GRCh37 reference (contigs without 'chr' prefix)
+- Reference genome build specified as GRCh37 or GRCh38 (`--genome-build`)
+- Contig labels with or without `chr` prefix are accepted (normalised internally)
 - Phenotype file (TSV: sample_id, phenotype)
 
 **Command**:
@@ -295,6 +297,8 @@ python scripts/train.py \
 - `best_model.pt` - Best model checkpoint
 - `training_history.yaml` - Loss curves and metrics
 - `config.yaml` - Full configuration for reproducibility
+- `fold_*/config.yaml` - Fold-specific config (CV mode)
+- `fold_*/fold_info.yaml` - Fold split metadata and training summary (CV mode)
 
 **Expected Results**:
 - Validation AUC > 0.6: Model is learning signal
@@ -353,12 +357,15 @@ python scripts/explain.py \
 ```bash
 # Set environment variables
 export INPUT_DATA=preprocessed.pt
-export REAL_EXPERIMENT=experiments/my_model
-export OUTPUT_BASE=experiments
+export REAL_EXPERIMENT=experiments/my_model          # or fold dir for CV
+export REAL_RESULTS=results/explainability           # contains sieve_variant_rankings.csv
+export OUTPUT_BASE=results/null_baseline_run
 
 # Run complete pipeline
 bash scripts/run_null_baseline_analysis.sh
 ```
+
+The wrapper reads hyperparameters directly from the real run `config.yaml` (including `--sex-map` when used) so the null model is trained under matched settings.
 
 **Manual Steps**:
 ```bash
@@ -461,7 +468,8 @@ python scripts/validate_discoveries.py \
     --variant-rankings results/explainability/sieve_variant_rankings.csv \
     --gene-rankings results/explainability/sieve_gene_rankings.csv \
     --output-dir results/validation \
-    --top-k 100
+    --top-k-variants 100 \
+    --top-k-genes 50
 ```
 
 **Checks**:
@@ -484,8 +492,9 @@ Your VCF must be:
    - SYMBOL (gene name)
    - SIFT (score)
    - PolyPhen (score)
-3. **GRCh37 reference** (contigs: 1, 2, 3... not chr1, chr2, chr3...)
-4. **Bgzipped and indexed** (`.vcf.gz` + `.vcf.gz.tbi`)
+3. **Reference build declared** as GRCh37 or GRCh38 via `--genome-build`
+4. **Contig naming may be either style** (e.g., `1` or `chr1`; harmonised internally)
+5. **Bgzipped and indexed** (`.vcf.gz` + `.vcf.gz.tbi`)
 
 #### Running VEP
 
@@ -574,6 +583,20 @@ python scripts/preprocess.py \
 - Male chrX non-PAR: hemizygous alt is doubled (dosage 2)
 - Female chrY: variants are skipped (data quality safeguard)
 - Unknown/ambiguous sex: no correction (conservative default)
+
+#### 4) Train with sex covariate (recommended if imbalance exists)
+
+```bash
+python scripts/train.py \
+    --preprocessed-data preprocessed.pt \
+    --level L3 \
+    --sex-map results/sex_inference/sample_sex.tsv \
+    --experiment-name my_model_sex_adjusted
+```
+
+`--sex-map` has two effects:
+- During VCF-based training, it enables ploidy-aware dosage encoding and adds sex covariate to the classifier.
+- During `--preprocessed-data` training, dosages are unchanged (already baked into `.pt`), and sex is used as a classifier covariate.
 
 ---
 
@@ -817,7 +840,8 @@ python scripts/check_sex_balance.py [OPTIONS]
 |--------|------|---------|-------------|
 | `--phenotypes` | path | required | Phenotypes TSV |
 | `--sex-map` | path | required | sample_sex.tsv from infer_sex.py |
-| `--output-dir` | path | results/sex_balance | Output directory |
+| `--genome-build` | str | GRCh37 | Reference genome build |
+| `--output-dir` | path | required | Output directory |
 
 **Example**:
 ```bash
@@ -864,6 +888,7 @@ python scripts/train.py [OPTIONS]
 |--------|------|---------|-------------|
 | `--latent-dim` | int | 64 | Embedding dimension |
 | `--hidden-dim` | int | 128 | Hidden layer dimension |
+| `--num-heads` | int | 4 | Number of attention heads |
 | `--num-attention-layers` | int | 2 | Number of attention layers |
 | `--aggregation-method` | str | mean | Chunk aggregation method [mean, max, attention, logit_mean] |
 
@@ -879,9 +904,14 @@ python scripts/train.py [OPTIONS]
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `--output-dir` | path | outputs | Output directory |
-| `--experiment-name` | str | - | Experiment name |
-| `--device` | str | cuda | Device [cuda, cpu] |
+| `--experiment-name` | str | `{level}_run` | Experiment name |
+| `--device` | str | `cuda` if available, else `cpu` | Device [cuda, cpu] |
+| `--num-workers` | int | 0 | DataLoader workers |
+| `--genome-build` | str | GRCh37 | Reference genome build |
+| `--sex-map` | path | None | Adds sex covariate in training (and ploidy-aware encoding when training from VCF) |
 | `--seed` | int | 42 | Random seed |
+
+Note: `--aggregation-method attention` is currently exposed but not implemented in `ChunkedSIEVEModel`; use `mean`, `max`, or `logit_mean`.
 
 **Example**:
 ```bash
@@ -924,6 +954,7 @@ python scripts/explain.py [OPTIONS]
 | `--attention-threshold` | float | 0.1 | Min attention weight |
 | `--is-null-baseline` | flag | False | Flag for null baseline analysis |
 | `--device` | str | cuda | Device [cuda, cpu] |
+| `--genome-build` | str | GRCh37 | Reference genome build |
 
 **Example**:
 ```bash
@@ -970,6 +1001,41 @@ python scripts/create_null_baseline.py \
 
 ---
 
+### run_null_baseline_analysis.sh
+
+```bash
+bash scripts/run_null_baseline_analysis.sh
+```
+
+This wrapper is configured through environment variables:
+
+| Variable | Required | Description |
+|---------|----------|-------------|
+| `INPUT_DATA` | Yes | Path to real preprocessed `.pt` file |
+| `REAL_EXPERIMENT` | Yes | Real experiment directory (single run) or fold directory (CV) |
+| `OUTPUT_BASE` | Yes | Base directory where null outputs are written |
+| `REAL_RESULTS` | No (recommended) | Directory containing real `sieve_variant_rankings.csv` |
+| `DEVICE` | No | `cuda` or `cpu` (default: `cuda`) |
+| `PYTHON` | No | Python interpreter path override |
+
+Behaviour:
+- Reads model/training hyperparameters from real `config.yaml` (in `REAL_EXPERIMENT` or parent).
+- Carries over `sex_map` automatically when the real model used sex covariates.
+- Resolves script paths relative to wrapper location, so it can be run from any working directory.
+
+**Example**:
+```bash
+export INPUT_DATA=data/preprocessed.pt
+export REAL_EXPERIMENT=experiments/my_model
+export REAL_RESULTS=results/explainability
+export OUTPUT_BASE=results/null_baseline_run
+export DEVICE=cuda
+
+bash scripts/run_null_baseline_analysis.sh
+```
+
+---
+
 ### compare_attributions.py
 
 ```bash
@@ -983,6 +1049,8 @@ python scripts/compare_attributions.py [OPTIONS]
 | `--null-dir` | path | - | Directory with multiple null results |
 | `--output-dir` | path | required | Output directory |
 | `--top-k` | int | 100 | Number of top variants to output |
+| `--genome-build` | str | GRCh37 | Reference genome build |
+| `--exclude-sex-chroms` | flag | False | Exclude chrX/chrY before thresholding/comparison |
 
 **Example**:
 ```bash
@@ -1015,7 +1083,7 @@ python scripts/correct_chrx_bias.py [OPTIONS]
 ```bash
 python scripts/correct_chrx_bias.py \
     --rankings results/explainability/sieve_variant_rankings.csv \
-    --null-rankings results/null_attributions/sieve_variant_rankings.csv \
+    --null-rankings results/null_baseline_run/results/null_attributions/sieve_variant_rankings.csv \
     --output-dir results/explainability_corrected \
     --exclude-sex-chroms
 ```
@@ -1038,6 +1106,7 @@ python scripts/validate_epistasis.py [OPTIONS]
 | `--top-k` | int | 50 | Number of interactions to validate |
 | `--synergy-threshold` | float | 0.05 | Minimum significant synergy |
 | `--device` | str | cuda | Device [cuda, cpu] |
+| `--genome-build` | str | GRCh37 | Reference genome build |
 
 ---
 
@@ -1052,9 +1121,13 @@ python scripts/validate_discoveries.py [OPTIONS]
 | `--variant-rankings` | path | required | Variant rankings CSV |
 | `--gene-rankings` | path | required | Gene rankings CSV |
 | `--output-dir` | path | required | Output directory |
-| `--top-k` | int | 100 | Number of top variants/genes |
-| `--clinvar-vcf` | path | - | ClinVar VCF (optional) |
-| `--gwas-catalog` | path | - | GWAS catalog (optional) |
+| `--clinvar-db` / `--clinvar` | path | - | ClinVar TSV database |
+| `--gwas-db` / `--gwas` | path | - | GWAS Catalog TSV |
+| `--go-annotations` / `--go-mapping` | path | - | Gene-to-GO mapping JSON |
+| `--top-k-variants` | int | 100 | Number of top variants to validate |
+| `--top-k-genes` | int | 50 | Number of top genes to validate |
+| `--disease-terms` | str list | - | Optional GWAS trait filter terms |
+| `--genome-build` | str | GRCh37 | Reference genome build |
 
 ---
 
@@ -1086,9 +1159,11 @@ std_auc: 0.05          # Lower is better (more stable)
 mean_accuracy: 0.70
 std_accuracy: 0.03
 fold_results:
-  - fold: 0
-    auc: 0.78
+  - auc: 0.78
     accuracy: 0.72
+    best_epoch: 14
+    epochs_trained: 22
+    training_time_seconds: 480.1
   ...
 ```
 
@@ -1137,7 +1212,7 @@ Columns in `sieve_variant_rankings.csv`:
 
 **Example Interpretation**:
 ```
-variant: chr17:41245466
+variant: 17:41245466
 gene: BRCA1
 mean_attribution: 0.45
 case_control_diff: 0.38
@@ -1336,11 +1411,13 @@ Sample names must match character-for-character (case-sensitive).
 
 **Symptom**: `KeyError: 'chr1'` or no variants loaded
 
-**Solution**: SIEVE expects contigs without 'chr' prefix (1, 2, 3... not chr1, chr2, chr3...)
+**Solution**: SIEVE normalises both styles (`1` and `chr1`) internally. If you still see this error, check:
+- `--genome-build` matches your data (`GRCh37` or `GRCh38`)
+- Contigs are standard autosomes/sex chromosomes (1-22, X, Y), or can be mapped cleanly
+- Phenotype sample IDs match VCF sample IDs
 
-If your VCF has 'chr' prefix:
+If your VCF uses non-standard contig labels, rename contigs:
 ```bash
-# Option 1: Rename contigs
 bcftools annotate --rename-chrs chr_name_conv.txt input.vcf.gz -O z -o output.vcf.gz
 
 # Where chr_name_conv.txt contains:
@@ -1517,7 +1594,7 @@ A: Yes, but be aware:
 - May need to filter to exonic regions for meaningful results
 
 **Q: What reference genome does SIEVE use?**
-A: GRCh37 (hg19). Contigs should be named 1, 2, 3... (not chr1, chr2, chr3...).
+A: Both GRCh37 (hg19) and GRCh38 (hg38) are supported via `--genome-build`. Contigs with or without `chr` prefix are normalised automatically.
 
 **Q: Can I use SIEVE for quantitative traits?**
 A: Not currently. SIEVE is designed for binary case-control studies. Adaptation for quantitative traits would require modifying the loss function and output layer.
@@ -1870,7 +1947,7 @@ This appendix describes the rigorous experimental protocol for evaluating SIEVE.
 **Input data**:
 - Multi-sample VCF file, annotated with VEP (CSQ field)
 - Phenotype file: sample IDs with binary case/control labels
-- Reference genome: GRCh37
+- Reference genome: GRCh37 or GRCh38
 
 **Minimum dataset size**:
 - At least 500 samples (250 cases, 250 controls) for meaningful cross-validation
