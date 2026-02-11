@@ -181,6 +181,13 @@ Core packages:
 
 See `pyproject.toml` for complete list.
 
+### Conda Package Workflow
+
+If you install SIEVE as a conda package (instead of editable source install), use the
+`sieve-*` commands exposed by the package. A complete command-based walkthrough is in:
+
+- `conda/USAGE.md`
+
 ---
 
 ## Complete Workflow

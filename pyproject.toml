@@ -83,8 +83,16 @@ notebooks = [
 
 [project.scripts]
 sieve-preprocess = "scripts.preprocess:main"
+sieve-infer-sex = "scripts.infer_sex:main"
+sieve-check-sex-balance = "scripts.check_sex_balance:main"
 sieve-train = "scripts.train:main"
 sieve-explain = "scripts.explain:main"
+sieve-create-null-baseline = "scripts.create_null_baseline:main"
+sieve-run-null-baseline = "scripts.run_null_baseline:main"
+sieve-compare-attributions = "scripts.compare_attributions:main"
+sieve-correct-chrx-bias = "scripts.correct_chrx_bias:main"
+sieve-validate-discoveries = "scripts.validate_discoveries:main"
+sieve-validate-epistasis = "scripts.validate_epistasis:main"
 
 [project.urls]
 Homepage = "https://github.com/lescailab/dl-exome-img"
@@ -94,7 +102,10 @@ Issues = "https://github.com/lescailab/dl-exome-img/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["src*"]
+include = ["src*", "scripts*"]
+
+[tool.setuptools.package-data]
+scripts = ["*.sh"]
 
 [tool.black]
 line-length = 100
