@@ -84,3 +84,5 @@ dmypy.json
 
 # Documentation builds
 docs/_build/
+site/*
+!site/.gitkeep
