@@ -1,0 +1,296 @@
+# Complete Workflow
+
+### Overview
+
+```
+┌─────────────────────┐
+│  1. Data Prep       │  VCF + Phenotypes → preprocessed.pt
+└─────────┬───────────┘
+          ↓
+┌─────────────────────┐
+│  2. Train Model     │  Learn genotype-phenotype relationships
+└─────────┬───────────┘
+          ↓
+┌─────────────────────┐
+│  3. Explainability  │  Compute variant attributions
+└─────────┬───────────┘
+          ↓
+┌─────────────────────┐
+│  4. Null Baseline   │  Establish statistical significance
+└─────────┬───────────┘
+          ↓
+┌─────────────────────┐
+│  5. Validation      │  Cross-reference with databases
+└─────────┬───────────┘
+          ↓
+┌─────────────────────┐
+│  6. Biological      │  Experimental validation
+│     Follow-up       │
+└─────────────────────┘
+```
+
+### Workflow Steps
+
+#### Step 1: Data Preparation
+
+**Purpose**: Convert VCF to SIEVE-compatible format (optionally sex-aware)
+
+**Theory**: SIEVE requires multi-sample VCF files annotated with VEP (Variant Effect Predictor). VEP adds functional annotations (SIFT, PolyPhen, consequence types) that enable multi-level analysis. For sex chromosomes, SIEVE can apply ploidy-aware dosage encoding to avoid chrX hemizygosity bias in male samples.
+
+**Requirements**:
+- Multi-sample VCF file (bgzipped and indexed)
+- VEP-annotated (CSQ field with SIFT, PolyPhen, Consequence, SYMBOL)
+- Reference genome build specified as GRCh37 or GRCh38 (`--genome-build`)
+- Contig labels with or without `chr` prefix are accepted (normalised internally)
+- Phenotype file (TSV: sample_id, phenotype)
+
+**Command**:
+```bash
+python scripts/preprocess.py \
+    --vcf cohort.vcf.gz \
+    --phenotypes phenotypes.tsv \
+    --output preprocessed.pt \
+    --genome-build GRCh37 \
+    --sex-map results/sex_inference/sample_sex.tsv
+```
+
+**Optional sex inference** (recommended for chrX/chrY analyses):
+```bash
+python scripts/infer_sex.py \
+    --vcf cohort.vcf.gz \
+    --output-dir results/sex_inference \
+    --genome-build GRCh37
+```
+
+**Why sex-aware preprocessing?**
+- Male chrX non-PAR variants are hemizygous; dosage 1 should be treated as 2
+- Avoids spurious chrX attribution inflation
+- Ensures downstream rankings are comparable across chromosomes
+
+**Output**: Single `.pt` file containing all parsed variant data (~1-5 MB per 1000 samples)
+
+**Why Preprocess?**
+- VCF parsing: 30 mins to 5+ hours (one time)
+- Loading preprocessed: 5-10 seconds (every run)
+- **100-3600× speedup** for repeated experiments!
+
+---
+
+#### Step 2: Model Training
+
+**Purpose**: Learn which variants predict case/control status
+
+**Theory**: SIEVE uses position-aware sparse attention to learn relationships between variants. Training includes:
+- Classification loss: Binary cross-entropy on case/control prediction
+- Attribution regularisation (optional): Encourages model to rely on fewer variants
+
+**Annotation Levels**:
+- **L0**: Genotype dosage only (0, 1, 2) - tests annotation-free discovery
+- **L1**: L0 + genomic position
+- **L2**: L1 + consequence class (missense/synonymous/LoF)
+- **L3**: L2 + SIFT + PolyPhen ← **recommended starting point**
+- **L4**: L3 + additional annotations (extensible)
+
+**Command**:
+```bash
+python scripts/train.py \
+    --preprocessed-data preprocessed.pt \
+    --level L3 \
+    --val-split 0.2 \
+    --lr 0.00001 \
+    --lambda-attr 0.1 \
+    --epochs 100 \
+    --batch-size 16 \
+    --chunk-size 3000 \
+    --aggregation-method mean \
+    --output-dir experiments \
+    --experiment-name my_model \
+    --device cuda
+```
+
+**Outputs**:
+- `best_model.pt` - Best model checkpoint
+- `training_history.yaml` - Loss curves and metrics
+- `config.yaml` - Full configuration for reproducibility
+- `fold_*/config.yaml` - Fold-specific config (CV mode)
+- `fold_*/fold_info.yaml` - Fold split metadata and training summary (CV mode)
+
+**Expected Results**:
+- Validation AUC > 0.6: Model is learning signal
+- Validation AUC > 0.7: Good performance
+- Validation AUC ≈ 0.5: No signal (check data/encoding)
+
+---
+
+#### Step 3: Explainability Analysis
+
+**Purpose**: Identify which variants drive predictions
+
+**Theory**: Uses integrated gradients to compute attribution scores for each variant. Integrated gradients approximates the contribution of each input feature by integrating gradients along a path from a baseline (all zeros) to the actual input.
+
+**Method**:
+1. For each sample, compute gradient of prediction w.r.t. each variant
+2. Integrate gradients from baseline (no variants) to observed genotype
+3. Aggregate attributions across samples
+4. Rank variants by mean absolute attribution
+
+**Command**:
+```bash
+python scripts/explain.py \
+    --experiment-dir experiments/my_model \
+    --preprocessed-data preprocessed.pt \
+    --output-dir results/explainability \
+    --n-steps 50 \
+    --device cuda
+```
+
+**Outputs**:
+- `sieve_variant_rankings.csv` - All variants ranked by attribution
+- `sieve_gene_rankings.csv` - Gene-level aggregated scores
+- `sieve_interactions.csv` - High-attention variant pairs
+
+**Interpretation**:
+- **High attribution**: Variant strongly influences model prediction
+- **Consistent across samples**: Variant is important for many individuals
+- **Case-enriched**: Variant has higher attribution in cases than controls
+
+---
+
+#### Step 4: Null Baseline Analysis ⭐ **CRITICAL**
+
+**Purpose**: Establish statistical significance of discoveries
+
+**Theory**: When we train a model, every variant receives some attribution score. But which attributions represent genuine biological signal vs. random noise? By training an identical model on **permuted labels** (shuffled case/control assignments), we break any real genotype-phenotype relationship. Attributions from this null model represent the "noise floor" of our pipeline.
+
+**Why It Matters**:
+- Without null baseline: Can't distinguish signal from noise
+- With null baseline: Identify variants exceeding chance expectations
+- Establishes p-value thresholds (p<0.05, 0.01, 0.001)
+- Computes enrichment factors (e.g., "5× more discoveries than expected by chance")
+
+**Quick Start**:
+```bash
+# Set environment variables
+export INPUT_DATA=preprocessed.pt
+export REAL_EXPERIMENT=experiments/my_model          # or fold dir for CV
+export REAL_RESULTS=results/explainability           # contains sieve_variant_rankings.csv
+export OUTPUT_BASE=results/null_baseline_run
+
+# Run complete pipeline
+bash scripts/run_null_baseline_analysis.sh
+```
+
+The wrapper reads hyperparameters directly from the real run `config.yaml` (including `--sex-map` when used) so the null model is trained under matched settings.
+
+**Manual Steps**:
+```bash
+# 1. Create permuted dataset
+python scripts/create_null_baseline.py \
+    --input preprocessed.pt \
+    --output preprocessed_NULL.pt \
+    --seed 42
+
+# 2. Train null model (SAME params as real!)
+python scripts/train.py \
+    --preprocessed-data preprocessed_NULL.pt \
+    --level L3 \
+    --experiment-name null_baseline \
+    [... exact same parameters as real model ...]
+
+# 3. Run explainability on null
+python scripts/explain.py \
+    --experiment-dir experiments/null_baseline \
+    --preprocessed-data preprocessed_NULL.pt \
+    --output-dir results/null_attributions \
+    --is-null-baseline
+
+# 4. Compare real vs null
+python scripts/compare_attributions.py \
+    --real results/explainability/sieve_variant_rankings.csv \
+    --null results/null_attributions/sieve_variant_rankings.csv \
+    --output-dir results/comparison
+```
+
+**Outputs**:
+- `comparison_summary.yaml` - Statistical tests and thresholds
+- `significant_variants_p01.csv` - Variants exceeding p<0.01
+- `variant_rankings_with_significance.csv` - All variants annotated
+- `real_vs_null_comparison.png` - Distribution comparison plot
+
+**Expected Results**:
+- Null model AUC ≈ 0.50 (chance level - confirms permutation worked)
+- Real distributions differ from null (KS test p < 0.001)
+- Enrichment at p<0.01:
+  - **< 1.5×**: Weak signal, be cautious
+  - **1.5-2×**: Moderate signal, validate carefully
+  - **> 2×**: Strong signal, proceed with confidence
+
+**Interpretation Guide**:
+```
+Enrichment = Observed / Expected
+
+Example:
+- Real data: 50 variants exceed null p<0.01 threshold
+- Expected by chance: 10 variants (1% of 1000 total)
+- Enrichment: 50 / 10 = 5×
+- Interpretation: 5× more discoveries than expected by chance
+```
+
+---
+
+#### Step 5: Epistasis Detection (Optional)
+
+**Purpose**: Identify variant pairs with non-additive effects
+
+**Theory**: Epistasis occurs when the combined effect of two variants differs from the sum of their individual effects. SIEVE detects epistasis through:
+1. High attention weights between variant pairs (model looks at them together)
+2. Counterfactual validation (test all four combinations)
+
+**Command**:
+```bash
+python scripts/validate_epistasis.py \
+    --interactions results/explainability/sieve_interactions.csv \
+    --checkpoint experiments/my_model/best_model.pt \
+    --config experiments/my_model/config.yaml \
+    --preprocessed-data preprocessed.pt \
+    --output-dir results/epistasis \
+    --top-k 50 \
+    --device cuda
+```
+
+**Synergy Calculation**:
+```
+effect_v1 = f(v1=1, v2=0) - f(v1=0, v2=0)
+effect_v2 = f(v1=0, v2=1) - f(v1=0, v2=0)
+effect_combined = f(v1=1, v2=1) - f(v1=0, v2=0)
+
+synergy = effect_combined - effect_v1 - effect_v2
+
+synergy > 0.05  → Synergistic (work together)
+synergy < -0.05 → Antagonistic (interfere)
+synergy ≈ 0     → Independent
+```
+
+---
+
+#### Step 6: Biological Validation (Optional)
+
+**Purpose**: Cross-reference discoveries with known databases
+
+**Command**:
+```bash
+python scripts/validate_discoveries.py \
+    --variant-rankings results/explainability/sieve_variant_rankings.csv \
+    --gene-rankings results/explainability/sieve_gene_rankings.csv \
+    --output-dir results/validation \
+    --top-k-variants 100 \
+    --top-k-genes 50
+```
+
+**Checks**:
+- **ClinVar**: Are variants known pathogenic?
+- **GWAS Catalog**: Are genes in disease associations?
+- **GO Enrichment**: Are genes enriched in specific pathways?
+
+---
+
