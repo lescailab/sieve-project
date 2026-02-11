@@ -56,5 +56,13 @@ Core packages:
 
 See `pyproject.toml` for complete list.
 
----
+### Conda Package Workflow
 
+If SIEVE is installed as a conda package, run the pipeline via installed
+`sieve-*` commands rather than `python scripts/...`.
+
+Detailed guide:
+
+- `conda/USAGE.md`
+
+---

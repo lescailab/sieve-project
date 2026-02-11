@@ -1,0 +1,67 @@
+{% set version = "0.1.0" %}
+
+package:
+  name: sieve
+  version: {{ version }}
+
+source:
+  path: ..
+
+build:
+  number: 0
+  script: "{{ PYTHON }} -m pip install . --no-deps -vv"
+
+requirements:
+  host:
+    - python >=3.10
+    - pip
+    - setuptools >=61.0
+    - wheel
+  run:
+    - python >=3.10
+    - numpy >=1.24.0,<2.0
+    - pandas >=2.0.0
+    - scipy >=1.10.0
+    - pytorch >=2.0.0
+    - captum >=0.6.0,<1.0
+    - cyvcf2 >=0.30.0
+    - pysam >=0.21.0
+    - scikit-learn >=1.3.0
+    - shap >=0.42.0,<0.50
+    - pyyaml >=6.0
+    - tqdm >=4.65.0
+    - matplotlib >=3.7.0
+    - seaborn >=0.12.0
+
+test:
+  imports:
+    - src
+    - scripts
+  commands:
+    - sieve-preprocess --help
+    - sieve-infer-sex --help
+    - sieve-check-sex-balance --help
+    - sieve-train --help
+    - sieve-explain --help
+    - sieve-create-null-baseline --help
+    - sieve-run-null-baseline --help
+    - sieve-compare-attributions --help
+    - sieve-correct-chrx-bias --help
+    - sieve-validate-discoveries --help
+    - sieve-validate-epistasis --help
+
+about:
+  home: https://github.com/lescailab/sieve-project
+  summary: Sparse Interpretable Exome Variant Explainer for case-control variant discovery.
+  description: |
+    SIEVE is a deep learning framework for variant discovery in exome
+    case-control cohorts. This conda recipe installs core dependencies and
+    exposes end-to-end CLI commands for preprocessing, training, explainability,
+    null baseline calibration, and biological validation workflows.
+  license: MIT
+  license_file: documentation/license.md
+  dev_url: https://github.com/lescailab/sieve-project
+
+extra:
+  recipe-maintainers:
+    - lescai
