@@ -86,3 +86,6 @@ dmypy.json
 docs/_build/
 site/*
 !site/.gitkeep
+
+# Conda Builds
+conda-build/
