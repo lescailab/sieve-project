@@ -90,3 +90,4 @@ site/*
 # Conda Builds
 conda-build/
 .conda-build/
+.cb-env/
