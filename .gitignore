@@ -92,3 +92,4 @@ conda-build/
 .conda-build/
 .conda-bld/
 .cb-env/
+=*
