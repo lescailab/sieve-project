@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 """
-Generate a detailed computational graph for a trained SIEVE checkpoint using torchviz.
+Generate a detailed computational graph for a trained SIEVE checkpoint.
+
+Supports graph backends:
+- torchviz (autograd graph)
+- torchview (module-centric graph)
 
 Example:
-    python scripts/plot_detailed_architecture.py -c path/to/best_model.pt -o best_model_graph.png --V 64
+    python scripts/plot_detailed_architecture.py -c path/to/best_model.pt -o best_model_graph.png --V 64 --type torchview
 """
 
 from __future__ import annotations
@@ -62,6 +66,13 @@ def parse_args() -> argparse.Namespace:
         choices=["png", "pdf", "svg"],
         help="Output graph format.",
     )
+    parser.add_argument(
+        "--type",
+        type=str,
+        default="torchviz",
+        choices=["torchviz", "torchview"],
+        help="Graph backend to use.",
+    )
     parser.add_argument("--B", type=int, default=1, help="Dummy batch size.")
     parser.add_argument("--V", type=int, default=64, help="Dummy number of variants.")
     parser.add_argument(
@@ -75,6 +86,49 @@ def parse_args() -> argparse.Namespace:
         "--no-params",
         action="store_true",
         help="Do not include model parameters in torchviz.make_dot.",
+    )
+    parser.add_argument(
+        "--tv-graph-dir",
+        type=str,
+        default="TB",
+        choices=["TB", "BT", "LR", "RL"],
+        help=(
+            "(torchview) Graph orientation: TB=top-bottom, BT=bottom-top, "
+            "LR=left-right, RL=right-left."
+        ),
+    )
+    parser.add_argument(
+        "--tv-depth",
+        type=int,
+        default=6,
+        help=(
+            "(torchview) Maximum module expansion depth. "
+            "Use 0 or a negative value to use torchview's default/unlimited behavior."
+        ),
+    )
+    parser.add_argument(
+        "--tv-expand-nested",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="(torchview) Expand nested modules in the rendered graph.",
+    )
+    parser.add_argument(
+        "--tv-roll",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="(torchview) Roll repeated nested modules into compact nodes.",
+    )
+    parser.add_argument(
+        "--tv-hide-inner-tensors",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="(torchview) Hide internal tensor nodes to reduce clutter.",
+    )
+    parser.add_argument(
+        "--tv-hide-module-functions",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="(torchview) Hide module-function wrapper nodes for cleaner graphs.",
     )
     return parser.parse_args()
 
@@ -352,6 +406,110 @@ def _is_graphviz_missing_error(exc: Exception) -> bool:
     return ("executable not found" in text) or ("graphviz" in text and "not found" in text) or ("dot" in text and "not found" in text)
 
 
+def _get_torchview_base_kwargs(
+    draw_graph: Any,
+    device_name: str,
+    args: argparse.Namespace,
+) -> Dict[str, Any]:
+    try:
+        signature = inspect.signature(draw_graph)
+        params = set(signature.parameters.keys())
+    except (TypeError, ValueError):
+        params = set()
+
+    kwargs: Dict[str, Any] = {}
+    if "graph_dir" in params:
+        kwargs["graph_dir"] = args.tv_graph_dir
+    if "expand_nested" in params:
+        kwargs["expand_nested"] = args.tv_expand_nested
+    if "roll" in params:
+        kwargs["roll"] = args.tv_roll
+    if "hide_inner_tensors" in params:
+        kwargs["hide_inner_tensors"] = args.tv_hide_inner_tensors
+    if "hide_module_functions" in params:
+        kwargs["hide_module_functions"] = args.tv_hide_module_functions
+    if "save_graph" in params:
+        kwargs["save_graph"] = False
+    if "depth" in params and args.tv_depth > 0:
+        kwargs["depth"] = args.tv_depth
+    if "device" in params:
+        kwargs["device"] = device_name
+    return kwargs
+
+
+def _draw_with_torchview(
+    draw_graph: Any,
+    model: torch.nn.Module,
+    variant_features: torch.Tensor,
+    positions: torch.Tensor,
+    gene_ids: torch.Tensor,
+    covariates: torch.Tensor,
+    device_name: str,
+    args: argparse.Namespace,
+) -> Tuple[Any, str]:
+    try:
+        signature = inspect.signature(draw_graph)
+        params = set(signature.parameters.keys())
+    except (TypeError, ValueError):
+        params = set()
+
+    base_kwargs = _get_torchview_base_kwargs(draw_graph, device_name, args)
+    supports_kwargs = "kwargs" in params
+
+    attempts: List[Tuple[str, Dict[str, Any]]] = []
+    if supports_kwargs:
+        attempts.append(
+            (
+                "draw_graph(model, input_data=(features, positions, gene_ids, None), kwargs={'covariates': covariates})",
+                {
+                    **base_kwargs,
+                    "input_data": (variant_features, positions, gene_ids, None),
+                    "kwargs": {"covariates": covariates},
+                },
+            )
+        )
+        attempts.append(
+            (
+                "draw_graph(model, input_data=(features, positions, gene_ids), kwargs={'covariates': covariates})",
+                {
+                    **base_kwargs,
+                    "input_data": (variant_features, positions, gene_ids),
+                    "kwargs": {"covariates": covariates},
+                },
+            )
+        )
+
+    attempts.append(
+        (
+            "draw_graph(model, input_data=(features, positions, gene_ids, covariates))",
+            {
+                **base_kwargs,
+                "input_data": (variant_features, positions, gene_ids, covariates),
+            },
+        )
+    )
+    attempts.append(
+        (
+            "draw_graph(model, input_data=(features, positions, gene_ids, None, covariates))",
+            {
+                **base_kwargs,
+                "input_data": (variant_features, positions, gene_ids, None, covariates),
+            },
+        )
+    )
+
+    errors: List[str] = []
+    for label, kwargs in attempts:
+        try:
+            return draw_graph(model, **kwargs), label
+        except Exception as exc:
+            errors.append(f"{label}: {type(exc).__name__}: {exc}")
+
+    raise RuntimeError(
+        "All torchview draw_graph call variants failed:\n  - " + "\n  - ".join(errors)
+    )
+
+
 def main() -> int:
     args = parse_args()
     checkpoint_path = Path(args.checkpoint).expanduser().resolve()
@@ -373,16 +531,6 @@ def main() -> int:
         print("  - src.models.ChunkedSIEVEModel")
         print(f"Current working directory: {Path.cwd()}")
         print(f"Project root used: {PROJECT_ROOT}")
-        print(f"Import error: {exc}")
-        return 1
-
-    try:
-        from torchviz import make_dot
-        import graphviz  # noqa: F401 - explicit dependency check
-    except Exception as exc:
-        print("ERROR: Missing torchviz/graphviz dependency.")
-        print("Install with: pip install torchviz graphviz")
-        print("Also install the Graphviz system package and ensure the 'dot' binary is on PATH.")
         print(f"Import error: {exc}")
         return 1
 
@@ -469,42 +617,105 @@ def main() -> int:
     gene_ids = torch.randint(0, gene_high, (args.B, args.V), dtype=torch.long, device=device)
     covariates = torch.randn(args.B, 1, device=device)
 
-    try:
-        forward_out, forward_call_used = _run_forward_with_fallbacks(
-            model=model,
-            variant_features=variant_features,
-            positions=positions,
-            gene_ids=gene_ids,
-            covariates=covariates,
-        )
-        output_tensor = _select_tensor_output(forward_out)
-    except Exception as exc:
-        print("ERROR: Model forward pass failed.")
-        print(f"Checkpoint: {checkpoint_path}")
-        if used_config_path is not None:
-            print(f"Config used: {used_config_path}")
-        print(f"n_genes source: {n_genes_source} ({n_genes})")
-        print(f"Forward error: {type(exc).__name__}: {exc}")
-        return 1
-
-    params = None if args.no_params else dict(model.named_parameters())
-    dot = make_dot(output_tensor, params=params)
-    dot.format = args.format
-
     render_prefix, expected_final_path = _resolve_render_paths(args.out, args.format)
     render_prefix.parent.mkdir(parents=True, exist_ok=True)
 
-    try:
-        rendered_path = Path(dot.render(filename=str(render_prefix), cleanup=True))
-    except Exception as exc:
-        if _is_graphviz_missing_error(exc):
-            print("ERROR: Graphviz rendering failed because dependencies are missing.")
+    if args.type == "torchviz":
+        try:
+            from torchviz import make_dot
+            import graphviz  # noqa: F401 - explicit dependency check
+        except Exception as exc:
+            print("ERROR: Missing torchviz/graphviz dependency.")
             print("Install with: pip install torchviz graphviz")
             print("Also install the Graphviz system package and ensure the 'dot' binary is on PATH.")
-            print(f"Render error: {type(exc).__name__}: {exc}")
+            print(f"Import error: {exc}")
             return 1
-        print(f"ERROR: Failed to render graph: {type(exc).__name__}: {exc}")
-        return 1
+
+        try:
+            forward_out, _forward_call_used = _run_forward_with_fallbacks(
+                model=model,
+                variant_features=variant_features,
+                positions=positions,
+                gene_ids=gene_ids,
+                covariates=covariates,
+            )
+            output_tensor = _select_tensor_output(forward_out)
+        except Exception as exc:
+            print("ERROR: Model forward pass failed.")
+            print(f"Checkpoint: {checkpoint_path}")
+            if used_config_path is not None:
+                print(f"Config used: {used_config_path}")
+            print(f"n_genes source: {n_genes_source} ({n_genes})")
+            print(f"Forward error: {type(exc).__name__}: {exc}")
+            return 1
+
+        params = None if args.no_params else dict(model.named_parameters())
+        dot = make_dot(output_tensor, params=params)
+        dot.format = args.format
+
+        try:
+            rendered_path = Path(dot.render(filename=str(render_prefix), cleanup=True))
+        except Exception as exc:
+            if _is_graphviz_missing_error(exc):
+                print("ERROR: Graphviz rendering failed because dependencies are missing.")
+                print("Install with: pip install torchviz graphviz")
+                print("Also install the Graphviz system package and ensure the 'dot' binary is on PATH.")
+                print(f"Render error: {type(exc).__name__}: {exc}")
+                return 1
+            print(f"ERROR: Failed to render graph: {type(exc).__name__}: {exc}")
+            return 1
+    else:
+        try:
+            from torchview import draw_graph
+            import graphviz  # noqa: F401 - explicit dependency check
+        except Exception as exc:
+            print("ERROR: Missing torchview/graphviz dependency.")
+            print("Install with: pip install torchview graphviz")
+            print("Also install the Graphviz system package and ensure the 'dot' binary is on PATH.")
+            print(f"Import error: {exc}")
+            return 1
+
+        if args.no_params:
+            print("WARNING: --no-params is only applicable to --type torchviz and will be ignored for torchview.")
+
+        try:
+            graph_obj, _draw_call_used = _draw_with_torchview(
+                draw_graph=draw_graph,
+                model=model,
+                variant_features=variant_features,
+                positions=positions,
+                gene_ids=gene_ids,
+                covariates=covariates,
+                device_name=device_name,
+                args=args,
+            )
+        except Exception as exc:
+            print("ERROR: torchview graph construction failed.")
+            print(f"Checkpoint: {checkpoint_path}")
+            if used_config_path is not None:
+                print(f"Config used: {used_config_path}")
+            print(f"n_genes source: {n_genes_source} ({n_genes})")
+            print(f"torchview error: {type(exc).__name__}: {exc}")
+            return 1
+
+        visual_graph = getattr(graph_obj, "visual_graph", graph_obj)
+        if not hasattr(visual_graph, "render"):
+            print("ERROR: torchview did not return a renderable graphviz object.")
+            print(f"Returned object type: {type(visual_graph).__name__}")
+            return 1
+
+        try:
+            visual_graph.format = args.format
+            rendered_path = Path(visual_graph.render(filename=str(render_prefix), cleanup=True))
+        except Exception as exc:
+            if _is_graphviz_missing_error(exc):
+                print("ERROR: Graphviz rendering failed because dependencies are missing.")
+                print("Install with: pip install torchview graphviz")
+                print("Also install the Graphviz system package and ensure the 'dot' binary is on PATH.")
+                print(f"Render error: {type(exc).__name__}: {exc}")
+                return 1
+            print(f"ERROR: Failed to render graph: {type(exc).__name__}: {exc}")
+            return 1
 
     final_output = rendered_path.resolve() if rendered_path.exists() else expected_final_path.resolve()
     print(final_output)
