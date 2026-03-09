@@ -198,19 +198,44 @@ The comparison produces:
 ### 6. Annotation Ablation (Compare Levels)
 
 ```bash
-# Train models at multiple annotation levels
-for level in L0 L1 L2 L3 L4; do
+# Train and explain at each annotation level
+for LEVEL in L0 L1 L2 L3; do
     python scripts/train.py \
         --preprocessed-data data/preprocessed.pt \
-        --level $level \
-        --experiment-name ablation_$level \
+        --level $LEVEL \
+        --experiment-name ablation_$LEVEL \
         --output-dir experiments
+
+    python scripts/explain.py \
+        --experiment-dir experiments/ablation_$LEVEL \
+        --preprocessed-data data/preprocessed.pt \
+        --output-dir results/${LEVEL}_explainability \
+        --device cuda
 done
 
-# Compare discoveries across levels
-python scripts/compare_levels.py \
-    --experiments experiments/ablation_* \
-    --output-dir results/ablation_comparison
+# Compare model performance across levels
+python scripts/ablation_compare.py \
+    --results-dir experiments \
+    --out-summary-yaml results/ablation/ablation_summary.yaml
+
+# Compare variant attribution rankings across levels
+mkdir -p results/ablation/rankings
+for LEVEL in L0 L1 L2 L3; do
+    cp results/${LEVEL}_explainability/sieve_variant_rankings.csv \
+       results/ablation/rankings/${LEVEL}_sieve_variant_rankings.csv
+done
+
+python scripts/compare_ablation_rankings.py \
+    --ranking-dir results/ablation/rankings \
+    --out-jaccard results/ablation/ablation_jaccard_matrix.tsv \
+    --out-level-specific results/ablation/level_specific_variants.tsv
+
+# Visualise the ablation comparison
+python scripts/plot_ablation_comparison.py \
+    --jaccard-tsv results/ablation/ablation_jaccard_matrix.tsv \
+    --level-specific-tsv results/ablation/level_specific_variants.tsv \
+    --summary-yaml results/ablation/ablation_summary.yaml \
+    --output results/ablation/ablation_comparison.png
 ```
 
 ## Complete Workflow
@@ -219,14 +244,16 @@ The recommended SIEVE workflow:
 
 ```text
 1. Preprocess VCF → preprocessed.pt
-2. Train real model → experiments/real_model/
-3. Run explainability → results/explainability/
+2. Train model(s) → experiments/ (repeat for each annotation level)
+3. Run explainability → results/ (repeat for each annotation level)
 4. Create null baseline → preprocessed_NULL.pt
 5. Train null model → experiments/null_baseline/
 6. Run null explainability → results/null_attributions/
 7. Compare real vs null → results/comparison/
    ↓ Review significant_variants_p01.csv
-8. Biological validation (experiments)
+8. Compare across annotation levels → results/ablation/
+   ↓ Review ablation_comparison.png + level_specific_variants.tsv
+9. Biological validation (experiments)
 ```
 
 ## Output Files
@@ -257,6 +284,13 @@ The recommended SIEVE workflow:
 - `significant_variants_p01.csv` - Statistically significant discoveries
 - `variant_rankings_with_significance.csv` - All variants with significance flags
 
+**From Ablation Comparison:**
+
+- `ablation_summary.yaml` - Performance (AUC, accuracy, loss) per annotation level
+- `ablation_jaccard_matrix.tsv` - Pairwise ranking overlap at multiple top-k thresholds
+- `level_specific_variants.tsv` - Variants uniquely important at one annotation level
+- `ablation_comparison.png` / `.pdf` - Multi-panel publication figure
+
 ## Project Structure
 
 ```text
@@ -277,9 +311,12 @@ sieve-project/
 │   ├── preprocess.py      # VCF preprocessing
 │   ├── train.py           # Model training
 │   ├── explain.py         # Attribution analysis
-│   ├── create_null_baseline.py   # Permute labels
-│   ├── compare_attributions.py   # Real vs null comparison
-│   └── run_null_baseline_analysis.sh  # Full pipeline
+│   ├── create_null_baseline.py        # Permute labels
+│   ├── compare_attributions.py        # Real vs null comparison
+│   ├── run_null_baseline_analysis.sh  # Full null baseline pipeline
+│   ├── ablation_compare.py            # Performance across levels
+│   ├── compare_ablation_rankings.py   # Ranking overlap across levels
+│   └── plot_ablation_comparison.py    # Multi-panel ablation figure
 └── tests/                 # Unit tests
 ```
 
