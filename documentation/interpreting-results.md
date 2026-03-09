@@ -176,6 +176,101 @@ interpretation:
 
 ---
 
+### Ablation Comparison Results
+
+#### Performance Summary (`ablation_summary.yaml`)
+
+```yaml
+best_level: L2
+best_run_id: ablation_L2
+ranking_metric_priority: [auc, accuracy, loss]
+levels:
+  - level: L0
+    run_id: ablation_L0
+    auc: 0.68
+    std_auc: 0.04
+    accuracy: 0.65
+    loss: 0.58
+  - level: L1
+    run_id: ablation_L1
+    auc: 0.72
+    std_auc: 0.03
+    accuracy: 0.69
+    loss: 0.51
+  - level: L2
+    run_id: ablation_L2
+    auc: 0.76
+    std_auc: 0.03
+    accuracy: 0.72
+    loss: 0.46
+  - level: L3
+    run_id: ablation_L3
+    auc: 0.75
+    std_auc: 0.04
+    accuracy: 0.71
+    loss: 0.47
+```
+
+**Interpretation**:
+- **L0 AUC > 0.6**: Genotype patterns alone carry disease signal (annotation-free discovery is feasible)
+- **L2 ≈ L3**: Consequence class is sufficient; SIFT/PolyPhen add little beyond consequence type
+- **L3 > L0 by >0.1 AUC**: Annotations provide substantial additional signal
+- **L3 ≈ L0**: Annotations do not help, model discovers signal from genotype structure alone
+
+#### Jaccard Matrix (`ablation_jaccard_matrix.tsv`)
+
+Each row represents a pairwise comparison at a given top-k:
+
+| Column | Description |
+|--------|-------------|
+| `top_k` | Number of top variants compared |
+| `level_a`, `level_b` | The two levels being compared |
+| `jaccard` | Jaccard index (0-1; higher = more overlap) |
+| `overlap` | Number of shared variants |
+| `size_a`, `size_b` | Number of variants in each set |
+| `union` | Size of the union |
+
+**How to read it**:
+- **Jaccard > 0.7**: Very similar rankings — the two levels discover largely the same variants
+- **Jaccard 0.3-0.7**: Moderate overlap — some shared discoveries, some unique to each level
+- **Jaccard < 0.3**: Different rankings — annotation level fundamentally changes which variants are prioritised
+
+**Scientific significance**:
+- High L0-vs-L3 Jaccard indicates the model can discover the same variants without annotations (supports annotation-free discovery)
+- Low L0-vs-L3 Jaccard suggests annotations drive different discoveries (may indicate circular logic if annotations encode known associations)
+
+#### Level-Specific Variants (`level_specific_variants.tsv`)
+
+Variants ranked in the top-100 at one level but outside the top-500 at all other levels:
+
+| Column | Description |
+|--------|-------------|
+| `variant_id` | Unique variant identifier (chrom:pos_gene_id) |
+| `gene` | Gene name |
+| `specific_to_level` | The annotation level where this variant is highly ranked |
+| `rank_at_specific_level` | Rank at the specific level |
+| `rank_at_L0` ... `rank_at_L3` | Rank at each level (for cross-reference) |
+| `mean_attribution_at_specific_level` | Attribution score at the specific level |
+
+**How to use these**:
+- **L0-specific variants**: Discovered from genotype patterns alone — potentially novel mechanisms invisible to annotation-based methods. Priority candidates for experimental follow-up.
+- **L3-specific variants**: Only discovered when SIFT/PolyPhen are provided — may reflect annotation-dependent signal (known pathogenicity) rather than novel discovery.
+- **L1-specific variants**: Position carries information not captured by genotype alone — may indicate positional clustering or regulatory elements.
+
+#### Multi-Panel Figure (`ablation_comparison.png`)
+
+The figure produced by `plot_ablation_comparison.py` contains four panels:
+
+1. **Jaccard Heatmap** (top-left): Pairwise overlap at a selected top-k. Warm colours indicate low overlap (different discoveries), cool colours indicate high overlap (similar discoveries).
+
+2. **Jaccard by Top-k** (top-right): Line plot showing how overlap evolves as you consider more variants. If lines rise steeply, the top-ranked variants differ but broader rankings converge.
+
+3. **Level-Specific Counts** (bottom-left): Bar chart of how many uniquely important variants each level discovers. Large L0 bars support annotation-free discovery.
+
+4. **AUC Comparison** (bottom-right): Model performance per level with error bars. The best level is highlighted. The red dashed line marks random performance (AUC=0.5).
+
+---
+
 ### Epistasis Results
 
 #### Validation Output (`epistasis_validation.csv`)
