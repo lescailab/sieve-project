@@ -291,3 +291,91 @@ python scripts/compare_attributions.py \
 
 ---
 
+### Running Ablation Experiments
+
+The annotation ablation is the central experiment in SIEVE. It trains models at multiple annotation levels and compares both their predictive performance and the variant discoveries they produce.
+
+#### Full Ablation Pipeline
+
+```bash
+# Preprocess once
+python scripts/preprocess.py \
+    --vcf cohort.vcf.gz \
+    --phenotypes phenotypes.tsv \
+    --output preprocessed.pt \
+    --genome-build GRCh37
+
+# Train at each annotation level
+for LEVEL in L0 L1 L2 L3; do
+    python scripts/train.py \
+        --preprocessed-data preprocessed.pt \
+        --level ${LEVEL} \
+        --cv 5 \
+        --epochs 100 \
+        --output-dir experiments \
+        --experiment-name ablation_${LEVEL} \
+        --device cuda
+done
+
+# Run explainability at each level
+for LEVEL in L0 L1 L2 L3; do
+    python scripts/explain.py \
+        --experiment-dir experiments/ablation_${LEVEL} \
+        --preprocessed-data preprocessed.pt \
+        --output-dir results/${LEVEL}_explainability \
+        --device cuda
+done
+
+# Compare model performance
+python scripts/ablation_compare.py \
+    --results-dir experiments \
+    --out-summary-tsv results/ablation/ablation_summary.tsv \
+    --out-summary-yaml results/ablation/ablation_summary.yaml
+
+# Compare attribution rankings
+mkdir -p results/ablation/rankings
+for LEVEL in L0 L1 L2 L3; do
+    cp results/${LEVEL}_explainability/sieve_variant_rankings.csv \
+       results/ablation/rankings/${LEVEL}_sieve_variant_rankings.csv
+done
+
+python scripts/compare_ablation_rankings.py \
+    --ranking-dir results/ablation/rankings \
+    --out-comparison results/ablation/ablation_ranking_comparison.yaml \
+    --out-jaccard results/ablation/ablation_jaccard_matrix.tsv \
+    --out-level-specific results/ablation/level_specific_variants.tsv
+
+# Visualise everything
+python scripts/plot_ablation_comparison.py \
+    --jaccard-tsv results/ablation/ablation_jaccard_matrix.tsv \
+    --level-specific-tsv results/ablation/level_specific_variants.tsv \
+    --summary-yaml results/ablation/ablation_summary.yaml \
+    --output results/ablation/ablation_comparison.png
+```
+
+#### Using Explicit Ranking Paths
+
+If your ranking files are not in a single directory with level prefixes, you can specify them individually:
+
+```bash
+python scripts/compare_ablation_rankings.py \
+    --rankings L0:results/L0_explainability/sieve_variant_rankings.csv \
+               L1:results/L1_explainability/sieve_variant_rankings.csv \
+               L2:results/L2_explainability/sieve_variant_rankings.csv \
+               L3:results/L3_explainability/sieve_variant_rankings.csv \
+    --out-comparison results/ablation/ablation_ranking_comparison.yaml \
+    --out-jaccard results/ablation/ablation_jaccard_matrix.tsv \
+    --out-level-specific results/ablation/level_specific_variants.tsv
+```
+
+#### Adjusting Comparison Thresholds
+
+The level-specific variant detection uses two thresholds:
+
+- `--high-rank-threshold` (default: 100): a variant must be in the top-N at one level
+- `--low-rank-threshold` (default: 500): the variant must be outside the top-N at all other levels
+
+Tighter thresholds (e.g., `--high-rank-threshold 50 --low-rank-threshold 200`) produce a more selective list; looser thresholds capture more candidates.
+
+---
+
