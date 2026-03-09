@@ -1,7 +1,7 @@
 # SIEVE User Guide
 
-**Version**: 1.2
-**Last Updated**: 2026-02-11
+**Version**: 1.3
+**Last Updated**: 2026-03-09
 **For**: SIEVE v0.1.0+
 
 ## Table of Contents
@@ -201,22 +201,27 @@ If you install SIEVE as a conda package (instead of editable source install), us
           ↓
 ┌─────────────────────┐
 │  2. Train Model     │  Learn genotype-phenotype relationships
-└─────────┬───────────┘
+└─────────┬───────────┘  (repeat for each annotation level L0-L3)
           ↓
 ┌─────────────────────┐
 │  3. Explainability  │  Compute variant attributions
-└─────────┬───────────┘
+└─────────┬───────────┘  (repeat for each annotation level)
           ↓
 ┌─────────────────────┐
 │  4. Null Baseline   │  Establish statistical significance
 └─────────┬───────────┘
           ↓
 ┌─────────────────────┐
-│  5. Validation      │  Cross-reference with databases
+│  5. Ablation        │  Compare rankings and performance
+│     Comparison      │  across annotation levels
 └─────────┬───────────┘
           ↓
 ┌─────────────────────┐
-│  6. Biological      │  Experimental validation
+│  6. Validation      │  Cross-reference with databases
+└─────────┬───────────┘
+          ↓
+┌─────────────────────┐
+│  7. Biological      │  Experimental validation
 │     Follow-up       │
 └─────────────────────┘
 ```
@@ -430,7 +435,70 @@ Example:
 
 ---
 
-#### Step 5: Epistasis Detection (Optional)
+#### Step 5: Ablation Comparison
+
+**Purpose**: Compare variant rankings and model performance across annotation levels to assess whether deep learning can discover disease-associated variants without relying on functional annotations.
+
+**Theory**: The annotation ablation is the core experiment of SIEVE. By training models at levels L0 (genotype only) through L3 (full annotations), you can determine:
+- Whether positional or functional information is needed for discovery
+- Which variants are found regardless of annotation level (robust discoveries)
+- Which variants are only found at specific levels (annotation-dependent)
+
+**Prerequisites**: Train and run explain.py at each annotation level (Steps 2-3 repeated for L0, L1, L2, L3).
+
+**Step 5a: Compare model performance across levels**:
+```bash
+python scripts/ablation_compare.py \
+    --results-dir experiments \
+    --out-summary-tsv results/ablation/ablation_summary.tsv \
+    --out-summary-yaml results/ablation/ablation_summary.yaml
+```
+
+**Step 5b: Compare variant attribution rankings across levels**:
+```bash
+# Collect ranking files into one directory with level prefixes
+mkdir -p results/ablation/rankings
+cp results/L0_explainability/sieve_variant_rankings.csv results/ablation/rankings/L0_sieve_variant_rankings.csv
+cp results/L1_explainability/sieve_variant_rankings.csv results/ablation/rankings/L1_sieve_variant_rankings.csv
+cp results/L2_explainability/sieve_variant_rankings.csv results/ablation/rankings/L2_sieve_variant_rankings.csv
+cp results/L3_explainability/sieve_variant_rankings.csv results/ablation/rankings/L3_sieve_variant_rankings.csv
+
+# Run comparison
+python scripts/compare_ablation_rankings.py \
+    --ranking-dir results/ablation/rankings \
+    --top-k 50,100,200,500 \
+    --high-rank-threshold 100 \
+    --low-rank-threshold 500 \
+    --out-comparison results/ablation/ablation_ranking_comparison.yaml \
+    --out-jaccard results/ablation/ablation_jaccard_matrix.tsv \
+    --out-level-specific results/ablation/level_specific_variants.tsv
+```
+
+**Step 5c: Visualise the comparison**:
+```bash
+python scripts/plot_ablation_comparison.py \
+    --jaccard-tsv results/ablation/ablation_jaccard_matrix.tsv \
+    --level-specific-tsv results/ablation/level_specific_variants.tsv \
+    --summary-yaml results/ablation/ablation_summary.yaml \
+    --output results/ablation/ablation_comparison.png
+```
+
+**Outputs**:
+- `ablation_summary.tsv` / `.yaml` — AUC, accuracy, loss per level, best level
+- `ablation_jaccard_matrix.tsv` — pairwise Jaccard similarity at each top-k
+- `level_specific_variants.tsv` — variants uniquely important at one level
+- `ablation_ranking_comparison.yaml` — structured comparison summary
+- `ablation_comparison.png` / `.pdf` — multi-panel publication figure
+
+**Interpretation**:
+- **High Jaccard (>0.7)** between L0 and L3 → annotations are redundant, model discovers the same variants from genotype alone
+- **Low Jaccard (<0.3)** between L0 and L3 → annotations substantially change which variants are prioritised
+- **Many L0-specific variants** → genotype-only model finds signals annotations miss (novel discoveries)
+- **Many L3-specific variants** → those discoveries depend on annotation information (potentially circular)
+
+---
+
+#### Step 6: Epistasis Detection (Optional)
 
 **Purpose**: Identify variant pairs with non-additive effects
 
@@ -465,7 +533,7 @@ synergy ≈ 0     → Independent
 
 ---
 
-#### Step 6: Biological Validation (Optional)
+#### Step 7: Biological Validation (Optional)
 
 **Purpose**: Cross-reference discoveries with known databases
 
@@ -776,6 +844,94 @@ python scripts/compare_attributions.py \
 - More stable null thresholds
 - Better confidence in significance calls
 - Recommended for publication-quality analyses
+
+---
+
+### Running Ablation Experiments
+
+The annotation ablation is the central experiment in SIEVE. It trains models at multiple annotation levels and compares both their predictive performance and the variant discoveries they produce.
+
+#### Full Ablation Pipeline
+
+```bash
+# Preprocess once
+python scripts/preprocess.py \
+    --vcf cohort.vcf.gz \
+    --phenotypes phenotypes.tsv \
+    --output preprocessed.pt \
+    --genome-build GRCh37
+
+# Train at each annotation level
+for LEVEL in L0 L1 L2 L3; do
+    python scripts/train.py \
+        --preprocessed-data preprocessed.pt \
+        --level ${LEVEL} \
+        --cv 5 \
+        --epochs 100 \
+        --output-dir experiments \
+        --experiment-name ablation_${LEVEL} \
+        --device cuda
+done
+
+# Run explainability at each level
+for LEVEL in L0 L1 L2 L3; do
+    python scripts/explain.py \
+        --experiment-dir experiments/ablation_${LEVEL} \
+        --preprocessed-data preprocessed.pt \
+        --output-dir results/${LEVEL}_explainability \
+        --device cuda
+done
+
+# Compare model performance
+python scripts/ablation_compare.py \
+    --results-dir experiments \
+    --out-summary-tsv results/ablation/ablation_summary.tsv \
+    --out-summary-yaml results/ablation/ablation_summary.yaml
+
+# Compare attribution rankings
+mkdir -p results/ablation/rankings
+for LEVEL in L0 L1 L2 L3; do
+    cp results/${LEVEL}_explainability/sieve_variant_rankings.csv \
+       results/ablation/rankings/${LEVEL}_sieve_variant_rankings.csv
+done
+
+python scripts/compare_ablation_rankings.py \
+    --ranking-dir results/ablation/rankings \
+    --out-comparison results/ablation/ablation_ranking_comparison.yaml \
+    --out-jaccard results/ablation/ablation_jaccard_matrix.tsv \
+    --out-level-specific results/ablation/level_specific_variants.tsv
+
+# Visualise everything
+python scripts/plot_ablation_comparison.py \
+    --jaccard-tsv results/ablation/ablation_jaccard_matrix.tsv \
+    --level-specific-tsv results/ablation/level_specific_variants.tsv \
+    --summary-yaml results/ablation/ablation_summary.yaml \
+    --output results/ablation/ablation_comparison.png
+```
+
+#### Using Explicit Ranking Paths
+
+If your ranking files are not in a single directory with level prefixes, you can specify them individually:
+
+```bash
+python scripts/compare_ablation_rankings.py \
+    --rankings L0:results/L0_explainability/sieve_variant_rankings.csv \
+               L1:results/L1_explainability/sieve_variant_rankings.csv \
+               L2:results/L2_explainability/sieve_variant_rankings.csv \
+               L3:results/L3_explainability/sieve_variant_rankings.csv \
+    --out-comparison results/ablation/ablation_ranking_comparison.yaml \
+    --out-jaccard results/ablation/ablation_jaccard_matrix.tsv \
+    --out-level-specific results/ablation/level_specific_variants.tsv
+```
+
+#### Adjusting Comparison Thresholds
+
+The level-specific variant detection uses two thresholds:
+
+- `--high-rank-threshold` (default: 100): a variant must be in the top-N at one level
+- `--low-rank-threshold` (default: 500): the variant must be outside the top-N at all other levels
+
+Tighter thresholds (e.g., `--high-rank-threshold 50 --low-rank-threshold 200`) produce a more selective list; looser thresholds capture more candidates.
 
 ---
 
@@ -1097,6 +1253,89 @@ python scripts/correct_chrx_bias.py \
 
 ---
 
+### compare_ablation_rankings.py
+
+```bash
+python scripts/compare_ablation_rankings.py [OPTIONS]
+```
+
+Compares variant attribution rankings across annotation levels. Computes pairwise Jaccard similarity at multiple top-k thresholds and identifies level-specific variant discoveries.
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--ranking-dir` | path | - | Directory with `L{0..3}_sieve_variant_rankings.csv` files (mutually exclusive with `--rankings`) |
+| `--rankings` | LEVEL:PATH | - | Explicit per-level paths, e.g. `L0:path/to/rankings.csv` (repeatable, mutually exclusive with `--ranking-dir`) |
+| `--top-k` | str | `50,100,200,500` | Comma-separated top-k values for Jaccard computation |
+| `--high-rank-threshold` | int | 100 | A variant must be in the top-N at one level to be level-specific |
+| `--low-rank-threshold` | int | 500 | A variant must be outside the top-N at all other levels |
+| `--out-comparison` | path | `ablation_ranking_comparison.yaml` | Output YAML summary |
+| `--out-jaccard` | path | `ablation_jaccard_matrix.tsv` | Output Jaccard matrix TSV |
+| `--out-level-specific` | path | `level_specific_variants.tsv` | Output level-specific variants TSV |
+
+**Example**:
+```bash
+python scripts/compare_ablation_rankings.py \
+    --ranking-dir results/ablation/rankings \
+    --top-k 50,100,200,500 \
+    --out-comparison results/ablation/ablation_ranking_comparison.yaml \
+    --out-jaccard results/ablation/ablation_jaccard_matrix.tsv \
+    --out-level-specific results/ablation/level_specific_variants.tsv
+```
+
+---
+
+### ablation_compare.py
+
+```bash
+python scripts/ablation_compare.py [OPTIONS]
+```
+
+Compares model performance (AUC, accuracy, loss) across annotation levels. Reads `results.yaml` or `cv_results.yaml` from each run directory and ranks levels by predictive performance.
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--run-dir` | path | - | Run directory containing results/config YAML (repeatable, mutually exclusive with `--results-dir`) |
+| `--results-dir` | path | - | Parent directory with `ablation_L{0..3}/` sub-directories (mutually exclusive with `--run-dir`) |
+| `--out-summary-tsv` | path | `ablation_summary.tsv` | Output TSV |
+| `--out-summary-yaml` | path | `ablation_summary.yaml` | Output YAML |
+
+**Example**:
+```bash
+python scripts/ablation_compare.py \
+    --results-dir experiments \
+    --out-summary-tsv results/ablation/ablation_summary.tsv \
+    --out-summary-yaml results/ablation/ablation_summary.yaml
+```
+
+---
+
+### plot_ablation_comparison.py
+
+```bash
+python scripts/plot_ablation_comparison.py [OPTIONS]
+```
+
+Creates a multi-panel publication figure from the outputs of `compare_ablation_rankings.py` and `ablation_compare.py`. Panels include a Jaccard heatmap, overlap-by-top-k line plot, level-specific variant counts, and (optionally) an AUC comparison bar chart.
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--jaccard-tsv` | path | required | Jaccard matrix TSV from `compare_ablation_rankings.py` |
+| `--level-specific-tsv` | path | required | Level-specific variants TSV from `compare_ablation_rankings.py` |
+| `--summary-yaml` | path | None | Ablation summary YAML from `ablation_compare.py` (optional; adds AUC panel) |
+| `--heatmap-top-k` | int | 100 | Top-k value for the heatmap panel |
+| `--output` | path | `ablation_comparison.png` | Output figure path (PNG or PDF) |
+
+**Example**:
+```bash
+python scripts/plot_ablation_comparison.py \
+    --jaccard-tsv results/ablation/ablation_jaccard_matrix.tsv \
+    --level-specific-tsv results/ablation/level_specific_variants.tsv \
+    --summary-yaml results/ablation/ablation_summary.yaml \
+    --output results/ablation/ablation_comparison.png
+```
+
+---
+
 ### validate_epistasis.py
 
 ```bash
@@ -1313,6 +1552,101 @@ interpretation:
 | > 2× | < 0.001 | Strong signal | Proceed to validation |
 | 1.5-2× | < 0.01 | Moderate signal | Validate top hits carefully |
 | < 1.5× | > 0.05 | Weak/no signal | Check data quality, increase sample size |
+
+---
+
+### Ablation Comparison Results
+
+#### Performance Summary (`ablation_summary.yaml`)
+
+```yaml
+best_level: L2
+best_run_id: ablation_L2
+ranking_metric_priority: [auc, accuracy, loss]
+levels:
+  - level: L0
+    run_id: ablation_L0
+    auc: 0.68
+    std_auc: 0.04
+    accuracy: 0.65
+    loss: 0.58
+  - level: L1
+    run_id: ablation_L1
+    auc: 0.72
+    std_auc: 0.03
+    accuracy: 0.69
+    loss: 0.51
+  - level: L2
+    run_id: ablation_L2
+    auc: 0.76
+    std_auc: 0.03
+    accuracy: 0.72
+    loss: 0.46
+  - level: L3
+    run_id: ablation_L3
+    auc: 0.75
+    std_auc: 0.04
+    accuracy: 0.71
+    loss: 0.47
+```
+
+**Interpretation**:
+- **L0 AUC > 0.6**: Genotype patterns alone carry disease signal (annotation-free discovery is feasible)
+- **L2 ≈ L3**: Consequence class is sufficient; SIFT/PolyPhen add little beyond consequence type
+- **L3 > L0 by >0.1 AUC**: Annotations provide substantial additional signal
+- **L3 ≈ L0**: Annotations do not help, model discovers signal from genotype structure alone
+
+#### Jaccard Matrix (`ablation_jaccard_matrix.tsv`)
+
+Each row represents a pairwise comparison at a given top-k:
+
+| Column | Description |
+|--------|-------------|
+| `top_k` | Number of top variants compared |
+| `level_a`, `level_b` | The two levels being compared |
+| `jaccard` | Jaccard index (0-1; higher = more overlap) |
+| `overlap` | Number of shared variants |
+| `size_a`, `size_b` | Number of variants in each set |
+| `union` | Size of the union |
+
+**How to read it**:
+- **Jaccard > 0.7**: Very similar rankings — the two levels discover largely the same variants
+- **Jaccard 0.3-0.7**: Moderate overlap — some shared discoveries, some unique to each level
+- **Jaccard < 0.3**: Different rankings — annotation level fundamentally changes which variants are prioritised
+
+**Scientific significance**:
+- High L0-vs-L3 Jaccard indicates the model can discover the same variants without annotations (supports annotation-free discovery)
+- Low L0-vs-L3 Jaccard suggests annotations drive different discoveries (may indicate circular logic if annotations encode known associations)
+
+#### Level-Specific Variants (`level_specific_variants.tsv`)
+
+Variants ranked in the top-100 at one level but outside the top-500 at all other levels:
+
+| Column | Description |
+|--------|-------------|
+| `variant_id` | Unique variant identifier (chrom:pos_gene_id) |
+| `gene` | Gene name |
+| `specific_to_level` | The annotation level where this variant is highly ranked |
+| `rank_at_specific_level` | Rank at the specific level |
+| `rank_at_L0` ... `rank_at_L3` | Rank at each level (for cross-reference) |
+| `mean_attribution_at_specific_level` | Attribution score at the specific level |
+
+**How to use these**:
+- **L0-specific variants**: Discovered from genotype patterns alone — potentially novel mechanisms invisible to annotation-based methods. Priority candidates for experimental follow-up.
+- **L3-specific variants**: Only discovered when SIFT/PolyPhen are provided — may reflect annotation-dependent signal (known pathogenicity) rather than novel discovery.
+- **L1-specific variants**: Position carries information not captured by genotype alone — may indicate positional clustering or regulatory elements.
+
+#### Multi-Panel Figure (`ablation_comparison.png`)
+
+The figure produced by `plot_ablation_comparison.py` contains four panels:
+
+1. **Jaccard Heatmap** (top-left): Pairwise overlap at a selected top-k. Warm colours indicate low overlap (different discoveries), cool colours indicate high overlap (similar discoveries).
+
+2. **Jaccard by Top-k** (top-right): Line plot showing how overlap evolves as you consider more variants. If lines rise steeply, the top-ranked variants differ but broader rankings converge.
+
+3. **Level-Specific Counts** (bottom-left): Bar chart of how many uniquely important variants each level discovers. Large L0 bars support annotation-free discovery.
+
+4. **AUC Comparison** (bottom-right): Model performance per level with error bars. The best level is highlighted. The red dashed line marks random performance (AUC=0.5).
 
 ---
 
