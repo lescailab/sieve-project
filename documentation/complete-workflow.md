@@ -9,22 +9,27 @@
           ↓
 ┌─────────────────────┐
 │  2. Train Model     │  Learn genotype-phenotype relationships
-└─────────┬───────────┘
+└─────────┬───────────┘  (repeat for each annotation level L0-L3)
           ↓
 ┌─────────────────────┐
 │  3. Explainability  │  Compute variant attributions
-└─────────┬───────────┘
+└─────────┬───────────┘  (repeat for each annotation level)
           ↓
 ┌─────────────────────┐
 │  4. Null Baseline   │  Establish statistical significance
 └─────────┬───────────┘
           ↓
 ┌─────────────────────┐
-│  5. Validation      │  Cross-reference with databases
+│  5. Ablation        │  Compare rankings and performance
+│     Comparison      │  across annotation levels
 └─────────┬───────────┘
           ↓
 ┌─────────────────────┐
-│  6. Biological      │  Experimental validation
+│  6. Validation      │  Cross-reference with databases
+└─────────┬───────────┘
+          ↓
+┌─────────────────────┐
+│  7. Biological      │  Experimental validation
 │     Follow-up       │
 └─────────────────────┘
 ```
@@ -238,7 +243,70 @@ Example:
 
 ---
 
-#### Step 5: Epistasis Detection (Optional)
+#### Step 5: Ablation Comparison
+
+**Purpose**: Compare variant rankings and model performance across annotation levels to assess whether deep learning can discover disease-associated variants without relying on functional annotations.
+
+**Theory**: The annotation ablation is the core experiment of SIEVE. By training models at levels L0 (genotype only) through L3 (full annotations), you can determine:
+- Whether positional or functional information is needed for discovery
+- Which variants are found regardless of annotation level (robust discoveries)
+- Which variants are only found at specific levels (annotation-dependent)
+
+**Prerequisites**: Train and run explain.py at each annotation level (Steps 2-3 repeated for L0, L1, L2, L3).
+
+**Step 5a: Compare model performance across levels**:
+```bash
+python scripts/ablation_compare.py \
+    --results-dir experiments \
+    --out-summary-tsv results/ablation/ablation_summary.tsv \
+    --out-summary-yaml results/ablation/ablation_summary.yaml
+```
+
+**Step 5b: Compare variant attribution rankings across levels**:
+```bash
+# Collect ranking files into one directory with level prefixes
+mkdir -p results/ablation/rankings
+cp results/L0_explainability/sieve_variant_rankings.csv results/ablation/rankings/L0_sieve_variant_rankings.csv
+cp results/L1_explainability/sieve_variant_rankings.csv results/ablation/rankings/L1_sieve_variant_rankings.csv
+cp results/L2_explainability/sieve_variant_rankings.csv results/ablation/rankings/L2_sieve_variant_rankings.csv
+cp results/L3_explainability/sieve_variant_rankings.csv results/ablation/rankings/L3_sieve_variant_rankings.csv
+
+# Run comparison
+python scripts/compare_ablation_rankings.py \
+    --ranking-dir results/ablation/rankings \
+    --top-k 50,100,200,500 \
+    --high-rank-threshold 100 \
+    --low-rank-threshold 500 \
+    --out-comparison results/ablation/ablation_ranking_comparison.yaml \
+    --out-jaccard results/ablation/ablation_jaccard_matrix.tsv \
+    --out-level-specific results/ablation/level_specific_variants.tsv
+```
+
+**Step 5c: Visualise the comparison**:
+```bash
+python scripts/plot_ablation_comparison.py \
+    --jaccard-tsv results/ablation/ablation_jaccard_matrix.tsv \
+    --level-specific-tsv results/ablation/level_specific_variants.tsv \
+    --summary-yaml results/ablation/ablation_summary.yaml \
+    --output results/ablation/ablation_comparison.png
+```
+
+**Outputs**:
+- `ablation_summary.tsv` / `.yaml` — AUC, accuracy, loss per level, best level
+- `ablation_jaccard_matrix.tsv` — pairwise Jaccard similarity at each top-k
+- `level_specific_variants.tsv` — variants uniquely important at one level
+- `ablation_ranking_comparison.yaml` — structured comparison summary
+- `ablation_comparison.png` / `.pdf` — multi-panel publication figure
+
+**Interpretation**:
+- **High Jaccard (>0.7)** between L0 and L3 → annotations are redundant, model discovers the same variants from genotype alone
+- **Low Jaccard (<0.3)** between L0 and L3 → annotations substantially change which variants are prioritised
+- **Many L0-specific variants** → genotype-only model finds signals annotations miss (novel discoveries)
+- **Many L3-specific variants** → those discoveries depend on annotation information (potentially circular)
+
+---
+
+#### Step 6: Epistasis Detection (Optional)
 
 **Purpose**: Identify variant pairs with non-additive effects
 
@@ -273,7 +341,7 @@ synergy ≈ 0     → Independent
 
 ---
 
-#### Step 6: Biological Validation (Optional)
+#### Step 7: Biological Validation (Optional)
 
 **Purpose**: Cross-reference discoveries with known databases
 

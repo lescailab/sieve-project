@@ -316,6 +316,89 @@ python scripts/correct_chrx_bias.py \
 
 ---
 
+### compare_ablation_rankings.py
+
+```bash
+python scripts/compare_ablation_rankings.py [OPTIONS]
+```
+
+Compares variant attribution rankings across annotation levels. Computes pairwise Jaccard similarity at multiple top-k thresholds and identifies level-specific variant discoveries.
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--ranking-dir` | path | - | Directory with `L{0..3}_sieve_variant_rankings.csv` files (mutually exclusive with `--rankings`) |
+| `--rankings` | LEVEL:PATH | - | Explicit per-level paths, e.g. `L0:path/to/rankings.csv` (repeatable, mutually exclusive with `--ranking-dir`) |
+| `--top-k` | str | `50,100,200,500` | Comma-separated top-k values for Jaccard computation |
+| `--high-rank-threshold` | int | 100 | A variant must be in the top-N at one level to be level-specific |
+| `--low-rank-threshold` | int | 500 | A variant must be outside the top-N at all other levels |
+| `--out-comparison` | path | `ablation_ranking_comparison.yaml` | Output YAML summary |
+| `--out-jaccard` | path | `ablation_jaccard_matrix.tsv` | Output Jaccard matrix TSV |
+| `--out-level-specific` | path | `level_specific_variants.tsv` | Output level-specific variants TSV |
+
+**Example**:
+```bash
+python scripts/compare_ablation_rankings.py \
+    --ranking-dir results/ablation/rankings \
+    --top-k 50,100,200,500 \
+    --out-comparison results/ablation/ablation_ranking_comparison.yaml \
+    --out-jaccard results/ablation/ablation_jaccard_matrix.tsv \
+    --out-level-specific results/ablation/level_specific_variants.tsv
+```
+
+---
+
+### ablation_compare.py
+
+```bash
+python scripts/ablation_compare.py [OPTIONS]
+```
+
+Compares model performance (AUC, accuracy, loss) across annotation levels. Reads `results.yaml` or `cv_results.yaml` from each run directory and ranks levels by predictive performance.
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--run-dir` | path | - | Run directory containing results/config YAML (repeatable, mutually exclusive with `--results-dir`) |
+| `--results-dir` | path | - | Parent directory with `ablation_L{0..3}/` sub-directories (mutually exclusive with `--run-dir`) |
+| `--out-summary-tsv` | path | `ablation_summary.tsv` | Output TSV |
+| `--out-summary-yaml` | path | `ablation_summary.yaml` | Output YAML |
+
+**Example**:
+```bash
+python scripts/ablation_compare.py \
+    --results-dir experiments \
+    --out-summary-tsv results/ablation/ablation_summary.tsv \
+    --out-summary-yaml results/ablation/ablation_summary.yaml
+```
+
+---
+
+### plot_ablation_comparison.py
+
+```bash
+python scripts/plot_ablation_comparison.py [OPTIONS]
+```
+
+Creates a multi-panel publication figure from the outputs of `compare_ablation_rankings.py` and `ablation_compare.py`. Panels include a Jaccard heatmap, overlap-by-top-k line plot, level-specific variant counts, and (optionally) an AUC comparison bar chart.
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--jaccard-tsv` | path | required | Jaccard matrix TSV from `compare_ablation_rankings.py` |
+| `--level-specific-tsv` | path | required | Level-specific variants TSV from `compare_ablation_rankings.py` |
+| `--summary-yaml` | path | None | Ablation summary YAML from `ablation_compare.py` (optional; adds AUC panel) |
+| `--heatmap-top-k` | int | 100 | Top-k value for the heatmap panel |
+| `--output` | path | `ablation_comparison.png` | Output figure path (PNG or PDF) |
+
+**Example**:
+```bash
+python scripts/plot_ablation_comparison.py \
+    --jaccard-tsv results/ablation/ablation_jaccard_matrix.tsv \
+    --level-specific-tsv results/ablation/level_specific_variants.tsv \
+    --summary-yaml results/ablation/ablation_summary.yaml \
+    --output results/ablation/ablation_comparison.png
+```
+
+---
+
 ### validate_epistasis.py
 
 ```bash

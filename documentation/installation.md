@@ -7,31 +7,38 @@
 - **Storage**: ~100MB for software, ~10GB for large preprocessed datasets
 - **RAM**: 16GB minimum, 32GB+ recommended for large cohorts
 
-### Step 1: Clone Repository
+### Step 1: Install SIEVE
 
+**Option A: Conda package** (recommended)
+```bash
+conda create -n sieve -c lescailab -c conda-forge sieve
+conda activate sieve
+```
+
+This installs a release build with all dependencies. Pipeline commands are available as `sieve-*` entry points (e.g. `sieve-train`, `sieve-explain`). See `conda/USAGE.md` for the full command-based walkthrough.
+
+**Option B: Development install** (for contributors or latest features)
 ```bash
 git clone https://github.com/lescailab/sieve-project.git
 cd sieve-project
-```
-
-### Step 2: Create Environment
-
-**Option A: Using conda** (recommended)
-```bash
 conda create -n sieve python=3.10
 conda activate sieve
 pip install -e .
 ```
 
-**Option B: Using venv**
+This installs from source in editable mode. Use `python scripts/...` to run pipeline steps.
+
+**Option C: Using venv** (development install without conda)
 ```bash
+git clone https://github.com/lescailab/sieve-project.git
+cd sieve-project
 python3 -m venv venv
 source venv/bin/activate  # Linux/Mac
 # or: venv\Scripts\activate  # Windows
 pip install -e .
 ```
 
-### Step 3: Verify Installation
+### Step 2: Verify Installation
 
 ```bash
 # Run test suite
@@ -56,13 +63,14 @@ Core packages:
 
 See `pyproject.toml` for complete list.
 
-### Conda Package Workflow
+### Conda Package vs Development Install
 
-If SIEVE is installed as a conda package, run the pipeline via installed
-`sieve-*` commands rather than `python scripts/...`.
+| | Conda package (`lescailab::sieve`) | Development install (`pip install -e .`) |
+|---|---|---|
+| **Commands** | `sieve-train`, `sieve-explain`, etc. | `python scripts/train.py`, etc. |
+| **Updates** | `conda update -c lescailab sieve` | `git pull` |
+| **Use when** | Running analyses | Contributing or testing latest features |
 
-Detailed guide:
-
-- `conda/USAGE.md`
+For full conda command reference see `conda/USAGE.md`.
 
 ---
