@@ -93,6 +93,9 @@ sieve-compare-attributions = "scripts.compare_attributions:main"
 sieve-correct-chrx-bias = "scripts.correct_chrx_bias:main"
 sieve-validate-discoveries = "scripts.validate_discoveries:main"
 sieve-validate-epistasis = "scripts.validate_epistasis:main"
+sieve-compare-ablation-rankings = "scripts.compare_ablation_rankings:main"
+sieve-ablation-compare = "scripts.ablation_compare:main"
+sieve-plot-ablation-comparison = "scripts.plot_ablation_comparison:main"
 
 [project.urls]
 Homepage = "https://github.com/lescailab/dl-exome-img"
