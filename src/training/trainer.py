@@ -123,8 +123,20 @@ class Trainer:
             # Check if model has train_step (for chunked processing)
             if hasattr(self.model, 'train_step'):
                 # Use model's train_step for chunked processing
-                loss, logits = self.model.train_step(batch, self.loss_fn, self.device)
-                loss_dict = {'total': loss, 'classification': loss, 'attribution_sparsity': torch.tensor(0.0)}
+                loss_output, logits = self.model.train_step(batch, self.loss_fn, self.device)
+
+                # Build loss_dict from the returned output
+                if isinstance(loss_output, dict):
+                    loss_dict = loss_output
+                    loss = loss_output['total']
+                else:
+                    # Scalar loss (e.g. BCEWithLogitsLoss) — no decomposition available
+                    loss = loss_output
+                    loss_dict = {
+                        'total': loss,
+                        'classification': loss,
+                        'attribution_sparsity': torch.tensor(0.0, device=loss.device),
+                    }
 
                 # Get sample labels for metrics
                 if 'original_sample_indices' in batch:
@@ -263,8 +275,18 @@ class Trainer:
             # Check if model has train_step (for chunked processing)
             if hasattr(self.model, 'train_step'):
                 # Use model's train_step for chunked processing (works for eval too)
-                loss, logits = self.model.train_step(batch, self.loss_fn, self.device)
-                loss_dict = {'total': loss, 'classification': loss, 'attribution_sparsity': torch.tensor(0.0)}
+                loss_output, logits = self.model.train_step(batch, self.loss_fn, self.device)
+
+                if isinstance(loss_output, dict):
+                    loss_dict = loss_output
+                    loss = loss_output['total']
+                else:
+                    loss = loss_output
+                    loss_dict = {
+                        'total': loss,
+                        'classification': loss,
+                        'attribution_sparsity': torch.tensor(0.0, device=loss.device),
+                    }
 
                 # Get sample labels for metrics
                 if 'original_sample_indices' in batch:
