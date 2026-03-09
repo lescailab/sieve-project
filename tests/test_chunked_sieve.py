@@ -128,35 +128,73 @@ class TestChunkedSIEVEModel:
         return batch
 
     def test_train_step_with_dict_loss(self, chunked_model, sample_batch, device):
-        """Test train_step with SIEVELoss (dict return)."""
+        """Test train_step with SIEVELoss and lambda_attr=0 (dict return, zero attribution)."""
         chunked_model.to(device)
-        # Note: lambda_attr must be 0 for chunked processing (attribution not supported)
         criterion = SIEVELoss(lambda_attr=0.0)
 
         # Run train_step
-        loss, predictions = chunked_model.train_step(sample_batch, criterion, device)
+        loss_output, predictions = chunked_model.train_step(sample_batch, criterion, device)
 
-        # Verify loss is a scalar tensor
-        assert isinstance(loss, torch.Tensor), "Loss should be a tensor"
+        # SIEVELoss always returns a dict
+        assert isinstance(loss_output, dict), "SIEVELoss should return a dict"
+        loss = loss_output['total']
+
         assert loss.dim() == 0 or loss.numel() == 1, "Loss should be a scalar"
+        assert loss.requires_grad, "Loss should require gradients"
 
-        # Verify loss supports division (for gradient accumulation)
-        scaled_loss = loss / 4  # Simulate gradient accumulation with 4 steps
-        assert isinstance(scaled_loss, torch.Tensor), "Scaled loss should be a tensor"
-        assert scaled_loss.dim() == 0 or scaled_loss.numel() == 1, "Scaled loss should be a scalar"
+        # With lambda_attr=0, attribution should be zero
+        assert loss_output['attribution_sparsity'].item() == 0.0
+
+        # Total should equal classification
+        assert torch.allclose(loss_output['total'], loss_output['classification'])
 
         # Verify predictions shape matches number of unique samples
         unique_samples = sample_batch['original_sample_indices'].unique()
         num_samples = len(unique_samples)
         assert predictions.shape[0] == num_samples, f"Expected {num_samples} predictions, got {predictions.shape[0]}"
 
-        # Verify loss has gradients
-        assert loss.requires_grad, "Loss should require gradients"
-
-        # Verify we can backprop
         loss.backward()
+        print(f"✓ train_step with dict loss (λ=0): loss={loss.item():.4f}")
 
-        print(f"✓ train_step with dict loss: loss={loss.item():.4f}, predictions shape={predictions.shape}")
+    def test_train_step_with_attribution_loss(self, chunked_model, sample_batch, device):
+        """Test train_step returns full loss dict when lambda_attr > 0."""
+        chunked_model.to(device)
+        criterion = SIEVELoss(lambda_attr=0.1)
+
+        loss_output, predictions = chunked_model.train_step(sample_batch, criterion, device)
+
+        # Should return a dict with decomposition
+        assert isinstance(loss_output, dict), "Loss output should be a dict when using SIEVELoss"
+        assert 'total' in loss_output
+        assert 'classification' in loss_output
+        assert 'attribution_sparsity' in loss_output
+
+        # Attribution sparsity should be > 0 when lambda_attr > 0
+        assert loss_output['attribution_sparsity'].item() > 0.0, (
+            "Attribution sparsity loss should be non-zero when lambda_attr > 0"
+        )
+
+        # Total should equal classification + lambda * attribution
+        expected_total = (
+            loss_output['classification']
+            + 0.1 * loss_output['attribution_sparsity']
+        )
+        assert torch.allclose(loss_output['total'], expected_total, atol=1e-5), (
+            f"Total loss {loss_output['total'].item():.6f} should equal "
+            f"classification {loss_output['classification'].item():.6f} + "
+            f"0.1 * attribution {loss_output['attribution_sparsity'].item():.6f} = "
+            f"{expected_total.item():.6f}"
+        )
+
+        # Backprop should work on total
+        loss_output['total'].backward()
+
+        print(
+            f"✓ train_step with attribution: "
+            f"total={loss_output['total'].item():.4f}, "
+            f"classification={loss_output['classification'].item():.4f}, "
+            f"attribution={loss_output['attribution_sparsity'].item():.4f}"
+        )
 
     def test_train_step_with_scalar_loss(self, chunked_model, sample_batch, device):
         """Test train_step with BCEWithLogitsLoss (scalar return)."""
@@ -164,29 +202,20 @@ class TestChunkedSIEVEModel:
         criterion = nn.BCEWithLogitsLoss()
 
         # Run train_step
-        loss, predictions = chunked_model.train_step(sample_batch, criterion, device)
+        loss_output, predictions = chunked_model.train_step(sample_batch, criterion, device)
 
-        # Verify loss is a scalar tensor
-        assert isinstance(loss, torch.Tensor), "Loss should be a tensor"
-        assert loss.dim() == 0 or loss.numel() == 1, "Loss should be a scalar"
-
-        # Verify loss supports division (for gradient accumulation)
-        scaled_loss = loss / 4  # Simulate gradient accumulation with 4 steps
-        assert isinstance(scaled_loss, torch.Tensor), "Scaled loss should be a tensor"
-        assert scaled_loss.dim() == 0 or scaled_loss.numel() == 1, "Scaled loss should be a scalar"
+        # Should return a plain tensor (not a dict)
+        assert isinstance(loss_output, torch.Tensor), "Loss should be a tensor for BCEWithLogitsLoss"
+        assert loss_output.dim() == 0 or loss_output.numel() == 1, "Loss should be a scalar"
+        assert loss_output.requires_grad, "Loss should require gradients"
 
         # Verify predictions shape matches number of unique samples
         unique_samples = sample_batch['original_sample_indices'].unique()
         num_samples = len(unique_samples)
         assert predictions.shape[0] == num_samples, f"Expected {num_samples} predictions, got {predictions.shape[0]}"
 
-        # Verify loss has gradients
-        assert loss.requires_grad, "Loss should require gradients"
-
-        # Verify we can backprop
-        loss.backward()
-
-        print(f"✓ train_step with scalar loss: loss={loss.item():.4f}, predictions shape={predictions.shape}")
+        loss_output.backward()
+        print(f"✓ train_step with scalar loss: loss={loss_output.item():.4f}")
 
     def test_chunk_aggregation_correctness(self, chunked_model, sample_batch, device):
         """Test that chunk aggregation produces correct sample-level outputs."""
@@ -334,14 +363,14 @@ class TestChunkedSIEVEModel:
     def test_gradient_accumulation_compatibility(self, chunked_model, sample_batch, device):
         """Test that loss can be properly scaled for gradient accumulation."""
         chunked_model.to(device)
-        # Note: lambda_attr must be 0 for chunked processing (attribution not supported)
         criterion = SIEVELoss(lambda_attr=0.0)
 
         # Simulate gradient accumulation with 8 steps
         accumulation_steps = 8
 
         for step in range(accumulation_steps):
-            loss, predictions = chunked_model.train_step(sample_batch, criterion, device)
+            loss_output, predictions = chunked_model.train_step(sample_batch, criterion, device)
+            loss = loss_output['total'] if isinstance(loss_output, dict) else loss_output
 
             # Scale loss
             scaled_loss = loss / accumulation_steps

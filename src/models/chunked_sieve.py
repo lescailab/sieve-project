@@ -14,7 +14,7 @@ Key features:
 Author: Francesco Lescai
 """
 
-from typing import Dict, Tuple, Optional, List
+from typing import Dict, Tuple, Optional, List, Union
 import torch
 import torch.nn as nn
 
@@ -273,7 +273,7 @@ class ChunkedSIEVEModel(nn.Module):
         batch: Dict[str, torch.Tensor],
         criterion: nn.Module,
         device: torch.device
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> Tuple[Union[Dict[str, torch.Tensor], torch.Tensor], torch.Tensor]:
         """
         Training step that handles chunk aggregation.
 
@@ -296,8 +296,11 @@ class ChunkedSIEVEModel(nn.Module):
 
         Returns
         -------
-        loss : torch.Tensor
-            Scalar loss value (extracted from dict if criterion returns dict)
+        loss_output : Union[Dict[str, torch.Tensor], torch.Tensor]
+            If criterion returns a dict (SIEVELoss): dict with keys
+            'total', 'classification', 'attribution_sparsity'.
+            If criterion returns a scalar (BCEWithLogitsLoss): scalar tensor.
+            The trainer is responsible for extracting the scalar for backprop.
         predictions : torch.Tensor
             Sample-level predictions [num_samples] or [num_samples, 1]
 
@@ -390,13 +393,11 @@ class ChunkedSIEVEModel(nn.Module):
             # Standard classification loss only
             loss_output = criterion(predictions, sample_labels.float())
 
-        # Handle both dict (SIEVELoss) and scalar (BCEWithLogitsLoss) returns
-        if isinstance(loss_output, dict):
-            loss = loss_output['total']
-        else:
-            loss = loss_output
-
-        return loss, predictions
+        # Return the full loss_output (dict or scalar) so the trainer
+        # can log the decomposition (classification vs attribution).
+        # For dict (SIEVELoss): contains 'total', 'classification', 'attribution_sparsity'
+        # For scalar (BCEWithLogitsLoss): plain tensor
+        return loss_output, predictions
 
     def get_gene_embeddings(
         self,
