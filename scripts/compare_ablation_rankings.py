@@ -76,6 +76,8 @@ SCORE_COLUMNS = [
     "max_attribution",
     "mean_score",
     "importance",
+    "z_attribution",
+    "corrected_rank",
 ]
 GENE_COLUMNS = ["gene_name", "gene", "gene_symbol"]
 GENE_ID_COLUMNS = ["gene_id"]
@@ -123,13 +125,70 @@ def _build_variant_id(row: Dict[str, str], headers: List[str]) -> Optional[str]:
     return None
 
 
-def _get_score(row: Dict[str, str], headers: List[str]) -> float:
-    """Extract attribution score from a row."""
-    score_col = _find_column(headers, SCORE_COLUMNS)
-    if score_col:
+_score_column_warning_shown = False
+
+
+def _resolve_score_column(
+    headers: List[str],
+    score_column: Optional[str] = None,
+) -> Tuple[str, bool]:
+    """Resolve which score column to use for a given set of headers.
+
+    Parameters
+    ----------
+    headers : List[str]
+        Column headers from the CSV.
+    score_column : str, optional
+        Explicit column name override.
+
+    Returns
+    -------
+    Tuple[str, bool]
+        (resolved_column_name, was_explicit). *was_explicit* is True when
+        the returned column came from *score_column* rather than auto-detection.
+    """
+    global _score_column_warning_shown
+
+    if score_column is not None:
+        lower_headers = {h.lower(): h for h in headers}
+        if score_column.lower() in lower_headers:
+            return lower_headers[score_column.lower()], True
+        else:
+            if not _score_column_warning_shown:
+                print(
+                    f"WARNING: --score-column '{score_column}' not found in "
+                    f"headers; falling back to auto-detection",
+                    file=sys.stderr,
+                )
+                _score_column_warning_shown = True
+
+    # Auto-detect from SCORE_COLUMNS list
+    col = _find_column(headers, SCORE_COLUMNS)
+    return (col or ""), False
+
+
+def _get_score(
+    row: Dict[str, str],
+    resolved_col: str,
+) -> float:
+    """Extract attribution score from a row using a pre-resolved column.
+
+    Parameters
+    ----------
+    row : Dict[str, str]
+        A single CSV row.
+    resolved_col : str
+        Column name (already resolved by :func:`_resolve_score_column`).
+
+    Returns
+    -------
+    float
+        The numeric score value, or 0.0 on failure.
+    """
+    if resolved_col:
         try:
-            return float(row[score_col])
-        except (ValueError, TypeError):
+            return float(row[resolved_col])
+        except (ValueError, TypeError, KeyError):
             return 0.0
     return 0.0
 
@@ -144,7 +203,10 @@ def _get_field(
     return ""
 
 
-def load_rankings(csv_path: pathlib.Path) -> List[Dict[str, Any]]:
+def load_rankings(
+    csv_path: pathlib.Path,
+    score_column: Optional[str] = None,
+) -> Tuple[List[Dict[str, Any]], str]:
     """
     Load a variant ranking CSV and return a list of dicts sorted by score.
 
@@ -152,16 +214,20 @@ def load_rankings(csv_path: pathlib.Path) -> List[Dict[str, Any]]:
     ----------
     csv_path : pathlib.Path
         Path to a SIEVE variant ranking CSV.
+    score_column : str, optional
+        Explicit column name to use for ranking. When *None*, auto-detects
+        from :data:`SCORE_COLUMNS`.
 
     Returns
     -------
-    List[Dict[str, Any]]
-        Records with keys ``variant_id``, ``score``, ``gene``, ``chrom``,
-        ``pos``, ``rank``.
+    Tuple[List[Dict[str, Any]], str, bool]
+        (records, resolved_column_name, was_explicit). Records have keys
+        ``variant_id``, ``score``, ``gene``, ``chrom``, ``pos``, ``rank``.
     """
     with csv_path.open("r", encoding="utf-8") as fh:
         reader = csv.DictReader(fh)
         headers = reader.fieldnames or []
+        resolved_col, was_explicit = _resolve_score_column(headers, score_column)
         rows: List[Dict[str, Any]] = []
         for row in reader:
             vid = _build_variant_id(row, headers)
@@ -170,7 +236,7 @@ def load_rankings(csv_path: pathlib.Path) -> List[Dict[str, Any]]:
             rows.append(
                 {
                     "variant_id": vid,
-                    "score": _get_score(row, headers),
+                    "score": _get_score(row, resolved_col),
                     "gene": _get_field(row, headers, GENE_COLUMNS),
                     "chrom": _get_field(row, headers, CHROM_COLUMNS),
                     "pos": _get_field(row, headers, POS_COLUMNS),
@@ -181,7 +247,7 @@ def load_rankings(csv_path: pathlib.Path) -> List[Dict[str, Any]]:
     rows.sort(key=lambda r: -r["score"])
     for i, row in enumerate(rows):
         row["rank"] = i + 1
-    return rows
+    return rows, resolved_col, was_explicit
 
 
 def find_ranking_files(ranking_dir: pathlib.Path) -> Dict[str, pathlib.Path]:
@@ -371,7 +437,7 @@ def find_level_specific_variants(
                     "pos": info.get("pos", ""),
                     "specific_to_level": level,
                     "rank_at_specific_level": variant_row["rank"],
-                    "mean_attribution_at_specific_level": variant_row["score"],
+                    "score_at_specific_level": variant_row["score"],
                 }
                 # Cross-level ranks
                 for l in LEVEL_ORDER:
@@ -446,6 +512,18 @@ def parse_args() -> argparse.Namespace:
         default="level_specific_variants.tsv",
         help="Output level-specific variants TSV path",
     )
+    parser.add_argument(
+        "--score-column",
+        type=str,
+        default=None,
+        help=(
+            "Column name to use for ranking variants. "
+            "If not specified, the script auto-detects from a built-in list "
+            "(mean_attribution, score, attribution, ...). "
+            "Use 'z_attribution' when comparing chromosome-normalised rankings "
+            "from correct_chrx_bias.py."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -502,10 +580,26 @@ def main() -> int:
 
     # Load all rankings
     level_rankings: Dict[str, List[Dict[str, Any]]] = {}
+    resolved_score_col = ""
+    score_was_explicit = False
     for level, fpath in level_files.items():
-        level_rankings[level] = load_rankings(fpath)
+        rankings, col_name, was_explicit = load_rankings(
+            fpath, score_column=args.score_column
+        )
+        level_rankings[level] = rankings
+        if not resolved_score_col and col_name:
+            resolved_score_col = col_name
+            score_was_explicit = was_explicit
         print(
             f"  {level}: {len(level_rankings[level])} variants from {fpath.name}",
+            file=sys.stderr,
+        )
+
+    # Log which score column is in use
+    if resolved_score_col:
+        source = "from --score-column" if score_was_explicit else "auto-detected"
+        print(
+            f"Score column: {resolved_score_col} ({source})",
             file=sys.stderr,
         )
 
@@ -559,7 +653,7 @@ def main() -> int:
         "pos",
         "specific_to_level",
         "rank_at_specific_level",
-    ] + rank_cols + ["mean_attribution_at_specific_level"]
+    ] + rank_cols + ["score_at_specific_level"]
 
     with level_specific_path.open("w", encoding="utf-8", newline="") as fh:
         writer = csv.DictWriter(

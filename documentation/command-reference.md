@@ -334,6 +334,7 @@ Compares variant attribution rankings across annotation levels. Computes pairwis
 | `--out-comparison` | path | `ablation_ranking_comparison.yaml` | Output YAML summary |
 | `--out-jaccard` | path | `ablation_jaccard_matrix.tsv` | Output Jaccard matrix TSV |
 | `--out-level-specific` | path | `level_specific_variants.tsv` | Output level-specific variants TSV |
+| `--score-column` | str | None (auto-detect) | Column to rank variants by. Use `z_attribution` for chromosome-normalised rankings from `correct_chrx_bias.py` |
 
 **Example**:
 ```bash
