@@ -100,6 +100,8 @@ If you used sex-aware preprocessing or observe chrX inflation in rankings, run `
 
 By default, the corrected rankings exclude sex chromosomes. Use `--include-sex-chroms` if you want to keep them in the output (they remain flagged).
 
+To use corrected rankings in the ablation comparison, pass `--score-column z_attribution` to `compare_ablation_rankings.py`. This ensures variants are ranked by their chromosome-normalised z-scores rather than raw `mean_attribution`, removing systematic chrX inflation from the cross-level comparison.
+
 #### Gene Rankings
 
 Columns in `sieve_gene_rankings.csv`:
@@ -250,7 +252,7 @@ Variants ranked in the top-100 at one level but outside the top-500 at all other
 | `specific_to_level` | The annotation level where this variant is highly ranked |
 | `rank_at_specific_level` | Rank at the specific level |
 | `rank_at_L0` ... `rank_at_L3` | Rank at each level (for cross-reference) |
-| `mean_attribution_at_specific_level` | Attribution score at the specific level |
+| `score_at_specific_level` | Attribution score at the specific level |
 
 **How to use these**:
 - **L0-specific variants**: Discovered from genotype patterns alone — potentially novel mechanisms invisible to annotation-based methods. Priority candidates for experimental follow-up.
