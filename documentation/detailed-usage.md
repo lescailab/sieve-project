@@ -377,5 +377,46 @@ The level-specific variant detection uses two thresholds:
 
 Tighter thresholds (e.g., `--high-rank-threshold 50 --low-rank-threshold 200`) produce a more selective list; looser thresholds capture more candidates.
 
+#### Using Chromosome-Normalised Rankings
+
+When chrX ploidy bias inflates attributions on sex chromosomes, run `correct_chrx_bias.py` on each level's rankings before comparing:
+
+```bash
+# 1. Normalise each level's rankings by chromosome
+for LEVEL in L0 L1 L2 L3; do
+    python scripts/correct_chrx_bias.py \
+        --rankings results/${LEVEL}_explainability/sieve_variant_rankings.csv \
+        --output-dir results/${LEVEL}_explainability/corrected/ \
+        --include-sex-chroms \
+        --genome-build GRCh37
+done
+
+# 2. Copy corrected files into a comparison directory
+mkdir -p results/ablation/corrected_rankings
+for LEVEL in L0 L1 L2 L3; do
+    cp results/${LEVEL}_explainability/corrected/corrected_variant_rankings.csv \
+       results/ablation/corrected_rankings/${LEVEL}_sieve_variant_rankings.csv
+done
+
+# 3. Compare using z_attribution as the score column
+python scripts/compare_ablation_rankings.py \
+    --ranking-dir results/ablation/corrected_rankings \
+    --score-column z_attribution \
+    --top-k 100,500,1000,2000 \
+    --out-comparison results/ablation/corrected_ablation_ranking_comparison.yaml \
+    --out-jaccard results/ablation/corrected_ablation_jaccard_matrix.tsv \
+    --out-level-specific results/ablation/corrected_level_specific_variants.tsv
+
+# 4. Plot (unchanged — reads from the TSV outputs)
+python scripts/plot_ablation_comparison.py \
+    --jaccard-tsv results/ablation/corrected_ablation_jaccard_matrix.tsv \
+    --level-specific-tsv results/ablation/corrected_level_specific_variants.tsv \
+    --summary-yaml results/ablation/ablation_summary.yaml \
+    --heatmap-top-k 1000 \
+    --output results/ablation/corrected_ablation_comparison.png
+```
+
+Using `--include-sex-chroms` retains chrX/chrY variants in the output (flagged via `is_sex_chrom`) but normalises their scores relative to other variants on the same chromosome. This removes systematic inflation while preserving genuinely important sex-chromosome variants.
+
 ---
 

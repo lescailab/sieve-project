@@ -933,6 +933,47 @@ The level-specific variant detection uses two thresholds:
 
 Tighter thresholds (e.g., `--high-rank-threshold 50 --low-rank-threshold 200`) produce a more selective list; looser thresholds capture more candidates.
 
+#### Using Chromosome-Normalised Rankings
+
+When chrX ploidy bias inflates attributions on sex chromosomes, run `correct_chrx_bias.py` on each level's rankings before comparing:
+
+```bash
+# 1. Normalise each level's rankings by chromosome
+for LEVEL in L0 L1 L2 L3; do
+    python scripts/correct_chrx_bias.py \
+        --rankings results/${LEVEL}_explainability/sieve_variant_rankings.csv \
+        --output-dir results/${LEVEL}_explainability/corrected/ \
+        --include-sex-chroms \
+        --genome-build GRCh37
+done
+
+# 2. Copy corrected files into a comparison directory
+mkdir -p results/ablation/corrected_rankings
+for LEVEL in L0 L1 L2 L3; do
+    cp results/${LEVEL}_explainability/corrected/corrected_variant_rankings.csv \
+       results/ablation/corrected_rankings/${LEVEL}_sieve_variant_rankings.csv
+done
+
+# 3. Compare using z_attribution as the score column
+python scripts/compare_ablation_rankings.py \
+    --ranking-dir results/ablation/corrected_rankings \
+    --score-column z_attribution \
+    --top-k 100,500,1000,2000 \
+    --out-comparison results/ablation/corrected_ablation_ranking_comparison.yaml \
+    --out-jaccard results/ablation/corrected_ablation_jaccard_matrix.tsv \
+    --out-level-specific results/ablation/corrected_level_specific_variants.tsv
+
+# 4. Plot (unchanged — reads from the TSV outputs)
+python scripts/plot_ablation_comparison.py \
+    --jaccard-tsv results/ablation/corrected_ablation_jaccard_matrix.tsv \
+    --level-specific-tsv results/ablation/corrected_level_specific_variants.tsv \
+    --summary-yaml results/ablation/ablation_summary.yaml \
+    --heatmap-top-k 1000 \
+    --output results/ablation/corrected_ablation_comparison.png
+```
+
+Using `--include-sex-chroms` retains chrX/chrY variants in the output (flagged via `is_sex_chrom`) but normalises their scores relative to other variants on the same chromosome. This removes systematic inflation while preserving genuinely important sex-chromosome variants.
+
 ---
 
 ## Command Reference
@@ -1271,6 +1312,7 @@ Compares variant attribution rankings across annotation levels. Computes pairwis
 | `--out-comparison` | path | `ablation_ranking_comparison.yaml` | Output YAML summary |
 | `--out-jaccard` | path | `ablation_jaccard_matrix.tsv` | Output Jaccard matrix TSV |
 | `--out-level-specific` | path | `level_specific_variants.tsv` | Output level-specific variants TSV |
+| `--score-column` | str | None (auto-detect) | Column to rank variants by. Use `z_attribution` for chromosome-normalised rankings from `correct_chrx_bias.py` |
 
 **Example**:
 ```bash
@@ -1479,6 +1521,8 @@ If you used sex-aware preprocessing or observe chrX inflation in rankings, run `
 
 By default, the corrected rankings exclude sex chromosomes. Use `--include-sex-chroms` if you want to keep them in the output (they remain flagged).
 
+To use corrected rankings in the ablation comparison, pass `--score-column z_attribution` to `compare_ablation_rankings.py`. This ensures variants are ranked by their chromosome-normalised z-scores rather than raw `mean_attribution`, removing systematic chrX inflation from the cross-level comparison.
+
 #### Gene Rankings
 
 Columns in `sieve_gene_rankings.csv`:
@@ -1629,7 +1673,7 @@ Variants ranked in the top-100 at one level but outside the top-500 at all other
 | `specific_to_level` | The annotation level where this variant is highly ranked |
 | `rank_at_specific_level` | Rank at the specific level |
 | `rank_at_L0` ... `rank_at_L3` | Rank at each level (for cross-reference) |
-| `mean_attribution_at_specific_level` | Attribution score at the specific level |
+| `score_at_specific_level` | Attribution score at the specific level |
 
 **How to use these**:
 - **L0-specific variants**: Discovered from genotype patterns alone — potentially novel mechanisms invisible to annotation-based methods. Priority candidates for experimental follow-up.
@@ -1895,6 +1939,13 @@ If using `--experiment-dir`, check that `best_model.pt` or `fold_*/best_model.pt
 3. Apply post-hoc correction (`correct_chrx_bias.py`)
 
 **Note**: `correct_chrx_bias.py` excludes sex chromosomes by default; use `--include-sex-chroms` if you need chrX/chrY retained.
+4. Re-run ablation comparison on corrected rankings:
+   ```bash
+   python scripts/compare_ablation_rankings.py \
+       --ranking-dir results/ablation/corrected_rankings \
+       --score-column z_attribution \
+       --out-comparison corrected_ablation_ranking_comparison.yaml
+   ```
 
 #### Very low attributions overall
 
