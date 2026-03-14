@@ -3,12 +3,10 @@
 ### For the Impatient
 
 ```bash
-# 1. Install (conda package)
-conda create -n sieve -c lescailab -c conda-forge sieve
-conda activate sieve
-# Or for development install:
-#   git clone https://github.com/lescailab/sieve-project.git
-#   cd sieve-project && pip install -e .
+# 1. Install
+git clone https://github.com/lescailab/sieve-project.git
+cd sieve-project
+pip install -e .
 
 # 2. (Optional, recommended) Infer genetic sex for ploidy-aware encoding
 python scripts/infer_sex.py \

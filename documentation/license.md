@@ -4,8 +4,8 @@ MIT License - See LICENSE file for details.
 
 ---
 
-**Last Updated**: 2026-03-09
-**Document Version**: 1.3
+**Last Updated**: 2026-02-06
+**Document Version**: 1.1
 **SIEVE Version**: 0.1.0+
 
 
