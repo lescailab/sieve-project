@@ -368,12 +368,19 @@ def compute_cooccurrence(
         cooccur_controls = (
             variant_carriers_control[va] & variant_carriers_control[vb]
         )
+        carrier_count_a = len(carriers_a)
+        carrier_count_b = len(carriers_b)
+        n_cooccur = len(cooccur_all)
+        n_only_a = carrier_count_a - n_cooccur
+        n_only_b = carrier_count_b - n_cooccur
+        n_neither = total_samples - n_cooccur - n_only_a - n_only_b
+        min_cell_count = min(n_cooccur, n_only_a, n_only_b, n_neither)
 
-        freq_a = variant_info[va]["carrier_count"] / total_samples
-        freq_b = variant_info[vb]["carrier_count"] / total_samples
+        freq_a = carrier_count_a / total_samples
+        freq_b = carrier_count_b / total_samples
         expected = freq_a * freq_b * total_samples
 
-        obs_exp = len(cooccur_all) / expected if expected > 0 else float("nan")
+        obs_exp = n_cooccur / expected if expected > 0 else float("nan")
 
         info_a = variant_info[va]
         info_b = variant_info[vb]
@@ -386,9 +393,15 @@ def compute_cooccurrence(
                 "chrom_b": vb[0],
                 "pos_b": vb[1],
                 "gene_b": info_b["gene"],
+                "carrier_count_a": carrier_count_a,
+                "carrier_count_b": carrier_count_b,
                 "freq_a": round(freq_a, 6),
                 "freq_b": round(freq_b, 6),
-                "n_cooccur": len(cooccur_all),
+                "n_cooccur": n_cooccur,
+                "n_only_a": n_only_a,
+                "n_only_b": n_only_b,
+                "n_neither": n_neither,
+                "min_cell_count": min_cell_count,
                 "n_cooccur_cases": len(cooccur_cases),
                 "n_cooccur_controls": len(cooccur_controls),
                 "expected_cooccur": round(expected, 4),
@@ -420,7 +433,7 @@ def summarise_by_maf_bin(
     list of dict
         Summary rows grouped by (maf_bin_a, maf_bin_b).
     """
-    groups: Dict[Tuple[str, str], List[int]] = defaultdict(list)
+    groups: Dict[Tuple[str, str], List[Dict[str, int]]] = defaultdict(list)
     for rec in records:
         bin_a = rec["maf_bin_a"]
         bin_b = rec["maf_bin_b"]
@@ -428,11 +441,17 @@ def summarise_by_maf_bin(
             key = (bin_a, bin_b)
         else:
             key = (bin_b, bin_a)
-        groups[key].append(rec["n_cooccur"])
+        groups[key].append(
+            {
+                "n_cooccur": rec["n_cooccur"],
+                "min_cell_count": rec["min_cell_count"],
+            }
+        )
 
     summaries: List[Dict[str, Any]] = []
-    for (bin_a, bin_b), cooccur_counts in sorted(groups.items()):
-        arr = np.array(cooccur_counts)
+    for (bin_a, bin_b), values in sorted(groups.items()):
+        arr = np.array([value["n_cooccur"] for value in values])
+        min_cell_arr = np.array([value["min_cell_count"] for value in values])
         n_pairs = len(arr)
         summaries.append(
             {
@@ -444,8 +463,14 @@ def summarise_by_maf_bin(
                 "n_zero_cooccur": int(np.sum(arr == 0)),
                 "n_cooccur_gte5": int(np.sum(arr >= 5)),
                 "n_cooccur_gte10": int(np.sum(arr >= 10)),
+                "n_all_cells_gte5": int(np.sum(min_cell_arr >= 5)),
                 "pct_testable": round(
                     float(np.sum(arr >= 5)) / n_pairs * 100, 1
+                )
+                if n_pairs > 0
+                else 0.0,
+                "pct_balanced": round(
+                    float(np.sum(min_cell_arr >= 5)) / n_pairs * 100, 1
                 )
                 if n_pairs > 0
                 else 0.0,
@@ -518,25 +543,27 @@ def write_summary_yaml(
     n_zero = int(np.sum(arr == 0))
     n_testable = int(np.sum(arr >= 5))
     pct_testable = round(n_testable / len(arr) * 100, 1) if len(arr) > 0 else 0.0
+    min_cell_values = np.array([r["min_cell_count"] for r in records]) if records else np.array([0])
+    n_balanced = int(np.sum(min_cell_values >= 5))
+    pct_balanced = round(n_balanced / len(min_cell_values) * 100, 1) if len(min_cell_values) > 0 else 0.0
 
     # Determine headline conclusion
-    if pct_testable >= 30:
+    if pct_testable >= 30 and pct_balanced >= 10:
         conclusion = (
-            "Sufficient co-occurrence for epistasis detection. "
-            f"{pct_testable}% of evaluated pairs have >= 5 co-occurrences."
+            "Substantial within-sample co-occurrence among evaluated pairs, with "
+            f"{pct_balanced}% also showing at least 5 samples in every 2x2 contingency cell."
         )
     elif pct_testable >= 10:
         conclusion = (
-            "Marginal co-occurrence for epistasis detection. "
+            "Co-occurrence is present but often poorly balanced for interaction testing. "
             f"Only {pct_testable}% of evaluated pairs have >= 5 co-occurrences. "
-            "Detection power is limited."
+            f"{pct_balanced}% have >= 5 samples in every 2x2 contingency cell."
         )
     else:
         conclusion = (
-            "Insufficient co-occurrence for epistasis detection. "
+            "Sparse pairwise co-occurrence among evaluated pairs. "
             f"Only {pct_testable}% of evaluated pairs have >= 5 co-occurrences. "
-            "The cohort size and variant frequencies do not support reliable "
-            "pairwise interaction testing."
+            f"{pct_balanced}% have >= 5 samples in every 2x2 contingency cell."
         )
 
     summary = {
@@ -566,6 +593,8 @@ def write_summary_yaml(
             "n_pairs_gte5_cooccur": n_testable,
             "pct_testable": pct_testable,
             "n_pairs_gte10_cooccur": int(np.sum(arr >= 10)),
+            "n_pairs_all_cells_gte5": n_balanced,
+            "pct_balanced_pairs": pct_balanced,
             "distribution": {
                 "min": int(np.min(arr)),
                 "p25": round(float(np.percentile(arr, 25)), 1),
@@ -573,7 +602,12 @@ def write_summary_yaml(
                 "p75": round(float(np.percentile(arr, 75)), 1),
                 "max": int(np.max(arr)),
                 "mean": round(float(np.mean(arr)), 2),
-                "std": round(float(np.std(arr)), 2),
+            "std": round(float(np.std(arr)), 2),
+            },
+            "min_cell_distribution": {
+                "min": int(np.min(min_cell_values)),
+                "median": round(float(np.median(min_cell_values)), 1),
+                "mean": round(float(np.mean(min_cell_values)), 2),
             },
         },
         "conclusion": conclusion,
@@ -700,9 +734,15 @@ def main() -> None:
             "chrom_b",
             "pos_b",
             "gene_b",
+            "carrier_count_a",
+            "carrier_count_b",
             "freq_a",
             "freq_b",
             "n_cooccur",
+            "n_only_a",
+            "n_only_b",
+            "n_neither",
+            "min_cell_count",
             "n_cooccur_cases",
             "n_cooccur_controls",
             "expected_cooccur",
@@ -729,6 +769,8 @@ def main() -> None:
             "n_cooccur_gte5",
             "n_cooccur_gte10",
             "pct_testable",
+            "n_all_cells_gte5",
+            "pct_balanced",
         ],
     )
 

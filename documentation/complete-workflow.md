@@ -306,15 +306,29 @@ python scripts/plot_ablation_comparison.py \
 
 ---
 
-#### Step 6: Epistasis Detection (Optional)
+#### Step 6: Epistasis Analysis (Optional)
 
-**Purpose**: Identify variant pairs with non-additive effects
+**Purpose**: Characterise interactions from both the model's intrinsic attention patterns and its intrinsic attribution outputs.
 
-**Theory**: Epistasis occurs when the combined effect of two variants differs from the sum of their individual effects. SIEVE detects epistasis through:
-1. High attention weights between variant pairs (model looks at them together)
-2. Counterfactual validation (test all four combinations)
+##### Step 6A: Attention-based interaction discovery
 
-**Command**:
+This is the original SIEVE epistasis workflow:
+1. `scripts/explain.py` extracts high-attention variant pairs from the trained model.
+2. `scripts/validate_epistasis.py` tests whether those candidate pairs show non-additive effects by counterfactual perturbation.
+
+This path is especially interesting because the candidate interactions come from the model's own attention mechanism rather than an external interaction scorer. Its main current limitation is that the search is restricted to pairs that appear within the same chunk. An empty `sieve_interactions.csv` therefore means that no pair crossed the discovery heuristic under the current chunking and threshold settings; it does not by itself prove that the cohort lacks interaction structure.
+
+**Commands**:
+```bash
+python scripts/explain.py \
+    --experiment-dir experiments/my_model \
+    --preprocessed-data preprocessed.pt \
+    --output-dir results/explainability \
+    --attention-threshold-mode percentile \
+    --attention-percentile 99.9 \
+    --device cuda
+```
+
 ```bash
 python scripts/validate_epistasis.py \
     --interactions results/explainability/sieve_interactions.csv \
@@ -339,6 +353,46 @@ synergy < -0.05 → Antagonistic (interfere)
 synergy ≈ 0     → Independent
 ```
 
+##### Step 6B: Post-hoc attribution and co-occurrence interaction analysis
+
+This complementary workflow uses attribution signals that are intrinsic to the trained SIEVE model together with observed variant co-occurrence. It is post-hoc in execution, but it is not based on an unrelated external explainer or a weight-only proxy.
+
+Use it to answer three questions that the attention path alone cannot resolve:
+1. Do candidate pairs or genes co-occur often enough to be testable?
+2. Is the cohort powered to detect interaction effects of plausible magnitude?
+3. Can multiple variant-level signals be pooled into gene-gene interaction hypotheses?
+
+**Commands**:
+```bash
+python scripts/audit_cooccurrence.py \
+    --preprocessed-data preprocessed.pt \
+    --output-dir results/epistasis_audit
+```
+
+```bash
+python scripts/aggregate_gene_interactions.py \
+    --preprocessed-data preprocessed.pt \
+    --variant-rankings results/attribution_comparison/corrected_variant_rankings.csv \
+    --gene-rankings results/attribution_comparison/corrected_gene_rankings.csv \
+    --null-rankings results/null_attributions/sieve_variant_rankings.csv \
+    --cooccurrence results/epistasis_audit/cooccurrence_per_pair.csv \
+    --output-dir results/gene_interactions
+```
+
+```bash
+python scripts/epistasis_power_analysis.py \
+    --cooccurrence results/epistasis_audit/cooccurrence_per_pair.csv \
+    --cooccurrence-summary results/epistasis_audit/cooccurrence_by_maf_bin.csv \
+    --real-attributions-npz results/explainability/attributions.npz \
+    --null-attributions-npz results/null_attributions/attributions.npz \
+    --output-dir results/epistasis_power
+```
+
+**Interpretation**:
+- `cooccurrence_summary.yaml` tells you whether joint carriage exists across MAF bins, but not whether the model can see a pair in the same chunk.
+- `power_analysis_summary.yaml` uses the full 2x2 carrier table for each pair, so near-ubiquitous common-common pairs no longer look artificially well-powered.
+- `gene_pair_interactions.csv` ranks gene-gene hypotheses by combining attribution support and observed co-occurrence, which is often more stable than exact variant-pair recurrence in sparse cohorts.
+
 ---
 
 #### Step 7: Biological Validation (Optional)
@@ -361,4 +415,3 @@ python scripts/validate_discoveries.py \
 - **GO Enrichment**: Are genes enriched in specific pathways?
 
 ---
-

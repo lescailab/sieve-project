@@ -91,6 +91,11 @@ def parse_args():
                         help='Number of top interactions to extract')
     parser.add_argument('--attention-threshold', type=float, default=0.1,
                         help='Minimum attention weight for interactions')
+    parser.add_argument('--attention-threshold-mode', type=str, default='absolute',
+                        choices=['absolute', 'percentile'],
+                        help='How to threshold pairwise attention scores')
+    parser.add_argument('--attention-percentile', type=float, default=99.9,
+                        help='Percentile cutoff for attention interactions when using percentile mode')
     parser.add_argument('--is-null-baseline', action='store_true',
                         help='Flag indicating this is a null baseline analysis (for metadata)')
 
@@ -515,10 +520,13 @@ def main():
         analyzer = AttentionAnalyzer(
             model=model,
             device=args.device,
-            attention_threshold=args.attention_threshold
+            attention_threshold=args.attention_threshold,
+            threshold_mode=args.attention_threshold_mode,
+            attention_percentile=args.attention_percentile,
         )
 
         all_interactions = []
+        interactions_by_sample = {}
 
         print("Extracting attention weights...")
         for batch_idx, batch in enumerate(dataloader):
@@ -544,10 +552,14 @@ def main():
                 mask=mask,
                 top_k=args.top_k_interactions,
                 aggregate_layers='mean',
-                aggregate_heads='mean'
+                aggregate_heads='mean',
+                sample_indices=batch['original_sample_indices'],
+                chunk_indices=batch['chunk_indices'],
             )
 
             all_interactions.extend(interactions)
+            for interaction in interactions:
+                interactions_by_sample.setdefault(interaction['sample_idx'], []).append(interaction)
 
             if (batch_idx + 1) % 10 == 0:
                 chunks_done = min((batch_idx + 1) * args.batch_size, total_chunks)
@@ -557,7 +569,7 @@ def main():
 
         # Aggregate across samples
         aggregated_interactions = analyzer.aggregate_interactions_across_samples(
-            all_sample_interactions=[all_interactions],
+            all_sample_interactions=list(interactions_by_sample.values()),
             min_samples=2
         )
 
@@ -581,6 +593,9 @@ def main():
         'max_variants_per_sample': args.max_variants,
         'skip_attention': args.skip_attention,
         'skip_ig': args.skip_ig,
+        'attention_threshold_mode': args.attention_threshold_mode,
+        'attention_threshold': args.attention_threshold,
+        'attention_percentile': args.attention_percentile,
     }
 
     if variant_rankings is not None:

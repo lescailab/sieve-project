@@ -7,7 +7,7 @@ to identify variant-variant interactions (epistasis).
 Author: Francesco Lescai
 """
 
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import torch
 import torch.nn as nn
@@ -47,12 +47,24 @@ class AttentionAnalyzer:
         self,
         model: nn.Module,
         device: str = 'cuda',
-        attention_threshold: float = 0.1
+        attention_threshold: float = 0.1,
+        threshold_mode: str = 'absolute',
+        attention_percentile: float = 99.9,
     ):
         self.model = model.to(device)
         self.model.eval()
         self.device = device
         self.attention_threshold = attention_threshold
+        self.threshold_mode = threshold_mode
+        self.attention_percentile = attention_percentile
+
+        if self.threshold_mode not in {'absolute', 'percentile'}:
+            raise ValueError(
+                f"Unknown threshold_mode: {self.threshold_mode}. "
+                "Expected 'absolute' or 'percentile'."
+            )
+        if not 0.0 <= self.attention_percentile <= 100.0:
+            raise ValueError("attention_percentile must be between 0 and 100.")
 
     def extract_attention_weights(
         self,
@@ -106,7 +118,9 @@ class AttentionAnalyzer:
         mask: Tensor,
         top_k: int = 100,
         aggregate_layers: str = 'mean',
-        aggregate_heads: str = 'mean'
+        aggregate_heads: str = 'mean',
+        sample_indices: Optional[Tensor] = None,
+        chunk_indices: Optional[Tensor] = None,
     ) -> List[Dict]:
         """
         Find top variant-variant interactions based on attention.
@@ -127,6 +141,10 @@ class AttentionAnalyzer:
             How to aggregate across layers: 'mean', 'max', 'last'
         aggregate_heads : str
             How to aggregate across heads: 'mean', 'max'
+        sample_indices : Tensor, optional
+            Original sample indices aligned with the batch dimension.
+        chunk_indices : Tensor, optional
+            Chunk indices aligned with the batch dimension.
 
         Returns
         -------
@@ -179,20 +197,41 @@ class AttentionAnalyzer:
             # Get attention scores for pairs
             pair_scores = attn_matrix[i_upper, j_upper]
 
+            if len(pair_scores) == 0:
+                continue
+
+            if self.threshold_mode == 'absolute':
+                threshold_value = float(self.attention_threshold)
+            else:
+                threshold_value = float(
+                    np.percentile(pair_scores, self.attention_percentile)
+                )
+
             # Filter by threshold
-            significant = pair_scores >= self.attention_threshold
+            significant = pair_scores >= threshold_value
             i_sig = i_upper[significant]
             j_sig = j_upper[significant]
             scores_sig = pair_scores[significant]
 
+            if len(scores_sig) == 0:
+                continue
+
             # Sort by score
             sorted_indices = np.argsort(scores_sig)[::-1][:top_k]
+
+            original_sample_idx = (
+                int(sample_indices[b].item()) if sample_indices is not None else int(b)
+            )
+            chunk_idx = (
+                int(chunk_indices[b].item()) if chunk_indices is not None else 0
+            )
 
             # Collect interactions
             for idx in sorted_indices:
                 i, j = i_sig[idx], j_sig[idx]
                 interaction = {
-                    'sample_idx': b,
+                    'sample_idx': original_sample_idx,
+                    'chunk_idx': chunk_idx,
                     'variant1_idx': int(i),
                     'variant2_idx': int(j),
                     'variant1_pos': int(pos[i]),
@@ -200,6 +239,13 @@ class AttentionAnalyzer:
                     'variant1_gene': int(genes[i]),
                     'variant2_gene': int(genes[j]),
                     'attention_score': float(scores_sig[idx]),
+                    'attention_threshold_mode': self.threshold_mode,
+                    'attention_threshold_value': threshold_value,
+                    'attention_percentile': (
+                        float(self.attention_percentile)
+                        if self.threshold_mode == 'percentile'
+                        else np.nan
+                    ),
                     'same_gene': genes[i] == genes[j],
                     'distance': abs(int(pos[j]) - int(pos[i]))
                 }
@@ -248,25 +294,33 @@ class AttentionAnalyzer:
                 if pair not in pair_stats:
                     pair_stats[pair] = {
                         'scores': [],
+                        'sample_ids': set(),
                         'same_gene': inter['same_gene'],
-                        'distance': inter['distance']
+                        'distance': inter['distance'],
+                        'threshold_mode': inter.get('attention_threshold_mode', 'absolute'),
                     }
 
                 pair_stats[pair]['scores'].append(inter['attention_score'])
+                sample_id = inter.get('sample_idx')
+                if sample_id is not None:
+                    pair_stats[pair]['sample_ids'].add(int(sample_id))
 
         # Filter and aggregate
         aggregated = []
         for pair, stats in pair_stats.items():
-            if len(stats['scores']) >= min_samples:
+            num_samples = len(stats['sample_ids']) if stats['sample_ids'] else len(stats['scores'])
+            if num_samples >= min_samples:
                 (pos1, gene1), (pos2, gene2) = pair
                 aggregated.append({
                     'variant1_pos': pos1,
                     'variant1_gene': gene1,
                     'variant2_pos': pos2,
                     'variant2_gene': gene2,
-                    'num_samples': len(stats['scores']),
+                    'num_samples': num_samples,
+                    'n_occurrences': len(stats['scores']),
                     'mean_attention': float(np.mean(stats['scores'])),
                     'max_attention': float(np.max(stats['scores'])),
+                    'attention_threshold_mode': stats['threshold_mode'],
                     'same_gene': stats['same_gene'],
                     'distance': stats['distance']
                 })
