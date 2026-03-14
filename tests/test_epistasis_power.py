@@ -5,10 +5,12 @@ from scipy import stats
 
 from scripts.epistasis_power_analysis import (
     add_pair_contingency_metrics,
+    build_summary_metric_definitions,
     compute_corrected_alpha,
     compute_effective_n_from_counts,
     compute_mde,
     estimate_sigma_synergy,
+    summarise_mde_detection_rates,
     summarise_power_by_maf_bin,
 )
 
@@ -87,6 +89,22 @@ def test_zero_effective_sample_size_reports_infinite_mde():
     values = compute_mde(np.array([0, 5]), sigma_synergy=0.1, alpha_corrected=0.05)
     assert np.isinf(values[0])
     assert np.isfinite(values[1])
+
+
+def test_summarise_mde_detection_rates_distinguishes_all_vs_finite_pairs():
+    summary = summarise_mde_detection_rates(np.array([0.05, np.inf, 0.2]), threshold=0.1)
+
+    assert summary["n_pairs_with_finite_mde"] == 2
+    assert summary["proportion_testable_pairs_mde_lt_threshold"] == pytest.approx(0.5)
+    assert summary["proportion_all_pairs_mde_lt_threshold"] == pytest.approx(1 / 3)
+    assert summary["median_mde_finite_pairs"] == pytest.approx(0.125)
+
+
+def test_build_summary_metric_definitions_explains_mde():
+    definitions = build_summary_metric_definitions()
+
+    assert "n_pairs_with_finite_mde" in definitions
+    assert "minimum detectable effect" in definitions["median_mde_finite_pairs"].lower()
 
 
 def test_estimate_sigma_synergy_uses_null_attributions_without_real_npz(tmp_path):
