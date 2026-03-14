@@ -541,6 +541,123 @@ def estimate_common_pair_cooccurrence_rate(
     return float(rates.median())
 
 
+def summarise_mde_detection_rates(
+    mde_values: pd.Series | np.ndarray,
+    threshold: float = 0.1,
+) -> Dict[str, float | int | None]:
+    """
+    Summarise detectable-effect rates across all pairs and finite-MDE pairs.
+
+    Parameters
+    ----------
+    mde_values : array-like
+        Per-pair MDE values. Infinite values are treated as non-detectable.
+    threshold : float
+        Detection threshold on the MDE scale.
+
+    Returns
+    -------
+    dict
+        Summary containing counts and proportions for finite-MDE pairs and for
+        all evaluated pairs.
+    """
+    values = np.asarray(mde_values, dtype=float)
+    finite_mask = np.isfinite(values)
+    finite_values = values[finite_mask]
+
+    return {
+        "n_pairs_with_finite_mde": int(finite_mask.sum()),
+        "proportion_testable_pairs_mde_lt_threshold": (
+            float(np.mean(finite_values < threshold))
+            if finite_values.size > 0
+            else 0.0
+        ),
+        "proportion_all_pairs_mde_lt_threshold": float(np.mean(values < threshold)),
+        "median_mde_finite_pairs": (
+            float(np.median(finite_values))
+            if finite_values.size > 0
+            else None
+        ),
+        "mean_mde_finite_pairs": (
+            float(np.mean(finite_values))
+            if finite_values.size > 0
+            else None
+        ),
+    }
+
+
+def build_summary_metric_definitions() -> Dict[str, str]:
+    """Return human-readable explanations for power summary metrics."""
+    return {
+        "noise_estimation_method": (
+            "Source used to estimate the null variability of synergy scores."
+        ),
+        "sigma_synergy": (
+            "Estimated standard deviation of the synergy score under the null model."
+        ),
+        "alpha": (
+            "Requested family-wise significance threshold before multiple-testing correction."
+        ),
+        "correction_method": (
+            "Multiple-testing correction method used to derive the per-pair alpha."
+        ),
+        "alpha_corrected": (
+            "Per-pair significance threshold after multiple-testing correction."
+        ),
+        "testable_pair_definition": (
+            "Criterion used to count a pair as structurally testable for interaction analysis."
+        ),
+        "estimated_total_samples": (
+            "Cohort size inferred from the co-occurrence table."
+        ),
+        "n_total_pairs": (
+            "Number of evaluated variant pairs in the co-occurrence audit."
+        ),
+        "n_testable_pairs": (
+            "Number of pairs meeting the structural testability criterion."
+        ),
+        "n_pairs_with_finite_mde": (
+            "Number of pairs with non-zero effective interaction sample size and therefore a finite MDE."
+        ),
+        "median_min_cell_count": (
+            "Median of min(n11, n10, n01, n00) across all evaluated pairs."
+        ),
+        "median_effective_n": (
+            "Median effective interaction sample size across all evaluated pairs."
+        ),
+        "median_mde_finite_pairs": (
+            "Median minimum detectable effect among pairs with finite MDE only."
+        ),
+        "mean_mde_finite_pairs": (
+            "Mean minimum detectable effect among pairs with finite MDE only."
+        ),
+        "proportion_testable_pairs_mde_lt_0.1": (
+            "Fraction of finite-MDE pairs whose MDE is below 0.1 on the script's synergy scale."
+        ),
+        "proportion_all_pairs_mde_lt_0.1": (
+            "Fraction of all evaluated pairs whose MDE is below 0.1; pairs with infinite MDE count as not detectable."
+        ),
+        "median_common_common_cooccurrence_rate": (
+            "Median joint-carrier fraction n11/N among pairs where both variants have carrier frequency >= 5%."
+        ),
+        "median_common_common_effective_fraction": (
+            "Median effective interaction fraction n_effective/N among common-common pairs; this captures usable contrast rather than mere co-occurrence."
+        ),
+        "min_effective_n_for_effect_0.1": (
+            "Minimum effective interaction sample size needed to detect an effect of 0.1 on the script's synergy scale."
+        ),
+        "min_effective_n_for_effect_0.05": (
+            "Minimum effective interaction sample size needed to detect an effect of 0.05 on the script's synergy scale."
+        ),
+        "min_cohort_for_common_common_effect_0.1": (
+            "Estimated cohort size needed to detect an effect of 0.1 if common-common pairs keep the current median effective fraction."
+        ),
+        "min_cohort_for_common_common_effect_0.05": (
+            "Estimated cohort size needed to detect an effect of 0.05 if common-common pairs keep the current median effective fraction."
+        ),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Plotting
 # ---------------------------------------------------------------------------
@@ -781,8 +898,8 @@ def main() -> None:
     # ------------------------------------------------------------------
     # 6. Headline statistics
     # ------------------------------------------------------------------
+    mde_summary = summarise_mde_detection_rates(per_pair_df["mde"], threshold=0.1)
     finite_mde = per_pair_df["mde"][np.isfinite(per_pair_df["mde"])]
-    prop_detectable = float((finite_mde < 0.1).mean()) if len(finite_mde) > 0 else 0.0
 
     # Minimum effective sample sizes needed for representative common-common pairs
     min_effective_n_01 = minimum_effective_n_for_effect(
@@ -825,17 +942,38 @@ def main() -> None:
         "estimated_total_samples": estimated_total_samples,
         "n_total_pairs": int(len(per_pair_df)),
         "n_testable_pairs": n_testable,
+        "n_pairs_with_finite_mde": mde_summary["n_pairs_with_finite_mde"],
         "median_min_cell_count": float(per_pair_df["min_cell_count"].median()),
         "median_effective_n": float(per_pair_df["n_effective"].median()),
-        "median_mde": float(finite_mde.median()) if len(finite_mde) > 0 else None,
-        "mean_mde": float(finite_mde.mean()) if len(finite_mde) > 0 else None,
-        "proportion_pairs_mde_lt_0.1": float(prop_detectable),
+        "median_mde_finite_pairs": mde_summary["median_mde_finite_pairs"],
+        "mean_mde_finite_pairs": mde_summary["mean_mde_finite_pairs"],
+        "proportion_testable_pairs_mde_lt_0.1": (
+            mde_summary["proportion_testable_pairs_mde_lt_threshold"]
+        ),
+        "proportion_all_pairs_mde_lt_0.1": (
+            mde_summary["proportion_all_pairs_mde_lt_threshold"]
+        ),
         "median_common_common_cooccurrence_rate": common_common_cooccurrence_rate,
         "median_common_common_effective_fraction": common_common_effective_fraction,
         "min_effective_n_for_effect_0.1": min_effective_n_01,
         "min_effective_n_for_effect_0.05": min_effective_n_005,
         "min_cohort_for_common_common_effect_0.1": min_cohort_effect_01,
         "min_cohort_for_common_common_effect_0.05": min_cohort_effect_005,
+        "metric_definitions": build_summary_metric_definitions(),
+        "interpretation_notes": [
+            (
+                "MDE stands for minimum detectable effect. It is reported on the "
+                "synergy-score scale used by this script, not directly on predicted probability."
+            ),
+            (
+                "High co-occurrence alone does not imply high power: near-ubiquitous "
+                "pairs can have large n_cooccur but very small effective interaction fraction."
+            ),
+            (
+                "Finite-MDE statistics are computed only for pairs with non-zero "
+                "effective interaction sample size."
+            ),
+        ],
     }
 
     summary_path = output_dir / "power_analysis_summary.yaml"
@@ -859,11 +997,22 @@ def main() -> None:
     print(f"  Noise method:          {noise_method}")
     print(f"  sigma_synergy:         {sigma_synergy:.6f}")
     print(f"  Testable pairs:        {n_testable:,}")
+    print(f"  Finite-MDE pairs:      {mde_summary['n_pairs_with_finite_mde']:,}")
     print(f"  Median effective N:    {per_pair_df['n_effective'].median():.2f}")
     print(f"  Corrected alpha:       {alpha_corrected:.2e}")
     if len(finite_mde) > 0:
-        print(f"  Median MDE:            {finite_mde.median():.4f}")
-        print(f"  Pairs with MDE < 0.1:  {prop_detectable:.1%}")
+        print(
+            "  Median MDE (finite):   "
+            f"{mde_summary['median_mde_finite_pairs']:.4f}"
+        )
+        print(
+            "  Finite pairs MDE<0.1:  "
+            f"{mde_summary['proportion_testable_pairs_mde_lt_threshold']:.1%}"
+        )
+        print(
+            "  All pairs MDE<0.1:     "
+            f"{mde_summary['proportion_all_pairs_mde_lt_threshold']:.1%}"
+        )
     if min_cohort_effect_01 is not None and min_cohort_effect_005 is not None:
         print(f"  Min cohort for d=0.10: {min_cohort_effect_01:,}")
         print(f"  Min cohort for d=0.05: {min_cohort_effect_005:,}")
