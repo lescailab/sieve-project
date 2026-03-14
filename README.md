@@ -272,8 +272,8 @@ The recommended SIEVE workflow:
   - Columns: position, chromosome, gene_id, mean_attribution, max_attribution, num_samples
 - `sieve_gene_rankings.csv` - Gene-level scores
   - Columns: gene_id, num_variants, gene_score, top_variant_pos
-- `sieve_interactions.csv` - Variant pairs with high attention
-  - Columns: pos1, pos2, gene1, gene2, mean_attention, frequency
+- `sieve_interactions.csv` - High-attention within-chunk variant pairs from the intrinsic attention analysis
+  - Best interpreted as candidate interaction seeds for counterfactual validation, not as an exhaustive catalogue of all cohort interactions
 
 **From Null Comparison:**
 
@@ -284,10 +284,25 @@ The recommended SIEVE workflow:
 - `significant_variants_p01.csv` - Statistically significant discoveries
 - `variant_rankings_with_significance.csv` - All variants with significance flags
 
+**From Post-hoc Interaction Analysis:**
+
+- `cooccurrence_summary.yaml` - Variant-pair co-occurrence audit stratified by allele frequency
+- `power_analysis_summary.yaml` - Detectable interaction effect sizes using null-informed noise and pair contingency tables
+- `gene_pair_interactions.csv` - Gene-gene interaction hypotheses combining co-occurrence and attribution support
+
 **From Ablation Comparison:**
 
 - `ablation_summary.yaml` - Performance (AUC, accuracy, loss) per annotation level
 - `ablation_jaccard_matrix.tsv` - Pairwise ranking overlap at multiple top-k thresholds
+
+### Epistasis Workflows
+
+SIEVE now supports two complementary views of epistasis:
+
+1. **Attention-based discovery**: `scripts/explain.py` extracts high-attention variant pairs and `scripts/validate_epistasis.py` tests them by counterfactual perturbation. This is the most direct and novel interaction signal because it comes from the model's intrinsic attention patterns. Its main current limitation is that interactions are only visible when both variants occur in the same chunk.
+2. **Post-hoc attribution interaction analysis**: `scripts/audit_cooccurrence.py`, `scripts/aggregate_gene_interactions.py`, and `scripts/epistasis_power_analysis.py` analyse co-occurrence, effective interaction sample size, and gene-level interaction structure using the model's intrinsic attribution outputs. This is also not an external post-hoc explainer in the usual sense: it reuses attribution signals that are part of SIEVE's training and interpretation workflow.
+
+An empty `sieve_interactions.csv` therefore means that no pair crossed the attention discovery heuristic under the current chunking and threshold settings. It does not, by itself, prove that the cohort lacks interaction structure.
 - `level_specific_variants.tsv` - Variants uniquely important at one annotation level
 - `ablation_comparison.png` / `.pdf` - Multi-panel publication figure
 

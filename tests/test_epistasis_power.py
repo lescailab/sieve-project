@@ -4,7 +4,9 @@ import pytest
 from scipy import stats
 
 from scripts.epistasis_power_analysis import (
+    add_pair_contingency_metrics,
     compute_corrected_alpha,
+    compute_effective_n_from_counts,
     compute_mde,
     estimate_sigma_synergy,
     summarise_power_by_maf_bin,
@@ -28,12 +30,46 @@ def test_compute_corrected_alpha_bonferroni():
     assert compute_corrected_alpha(0.05, 1000, "bonferroni") == pytest.approx(0.00005)
 
 
+def test_compute_effective_n_requires_all_four_cells():
+    values = compute_effective_n_from_counts(
+        n11=np.array([10, 10]),
+        n10=np.array([10, 0]),
+        n01=np.array([10, 10]),
+        n00=np.array([10, 10]),
+    )
+
+    assert values[0] == pytest.approx(2.5)
+    assert values[1] == 0.0
+
+
+def test_add_pair_contingency_metrics_derives_full_2x2_counts():
+    df = pd.DataFrame(
+        {
+            "freq_a": [0.5],
+            "freq_b": [0.4],
+            "expected_cooccur": [4.0],
+            "n_cooccur": [3],
+        }
+    )
+
+    result = add_pair_contingency_metrics(df, total_samples=20)
+
+    assert result.loc[0, "carrier_count_a"] == 10
+    assert result.loc[0, "carrier_count_b"] == 8
+    assert result.loc[0, "n_only_a"] == 7
+    assert result.loc[0, "n_only_b"] == 5
+    assert result.loc[0, "n_neither"] == 5
+    assert result.loc[0, "min_cell_count"] == 3
+
+
 def test_summarise_power_by_maf_bin_groups_rows_correctly():
     per_pair_df = pd.DataFrame(
         {
             "maf_bin_a": ["1-5%", "1-5%", "5-10%"],
             "maf_bin_b": ["5-10%", "5-10%", "5-10%"],
             "n_cooccur": [4, 8, 10],
+            "min_cell_count": [2, 5, 10],
+            "n_effective": [1.0, 4.0, 8.0],
             "mde": [0.2, 0.1, 0.05],
         }
     )
@@ -43,10 +79,11 @@ def test_summarise_power_by_maf_bin_groups_rows_correctly():
 
     assert grouped.loc[("1-5%", "5-10%"), "n_pairs"] == 2
     assert grouped.loc[("1-5%", "5-10%"), "median_n_cooccur"] == pytest.approx(6.0)
+    assert grouped.loc[("1-5%", "5-10%"), "median_n_effective"] == pytest.approx(2.5)
     assert grouped.loc[("1-5%", "5-10%"), "n_testable_pairs"] == 1
 
 
-def test_zero_cooccurrence_reports_infinite_mde():
+def test_zero_effective_sample_size_reports_infinite_mde():
     values = compute_mde(np.array([0, 5]), sigma_synergy=0.1, alpha_corrected=0.05)
     assert np.isinf(values[0])
     assert np.isfinite(values[1])
