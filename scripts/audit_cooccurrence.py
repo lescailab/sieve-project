@@ -34,6 +34,39 @@ logger = logging.getLogger(__name__)
 VariantKey = Tuple[str, int]  # (chrom, pos)
 
 
+def build_cooccurrence_summary_definitions() -> Dict[str, str]:
+    """Return human-readable explanations for co-occurrence summary fields."""
+    return {
+        "total_pairs_evaluated": (
+            "Number of variant pairs evaluated in the audit."
+        ),
+        "n_zero_cooccurrence": (
+            "Number of evaluated pairs with n11 = 0, meaning no sample carries both variants."
+        ),
+        "pct_zero_cooccurrence": (
+            "Percentage of evaluated pairs with no joint carriers."
+        ),
+        "n_pairs_gte5_cooccur": (
+            "Number of evaluated pairs with n11 >= 5. Here 'gte5' means 'greater than or equal to 5'."
+        ),
+        "pct_testable": (
+            "Percentage of evaluated pairs with n11 >= 5. This shows joint carriage, but not whether the full interaction table is usable."
+        ),
+        "n_pairs_gte10_cooccur": (
+            "Number of evaluated pairs with n11 >= 10."
+        ),
+        "n_pairs_all_cells_gte5": (
+            "Number of evaluated pairs where all four cells of the 2x2 carrier table satisfy >= 5 samples: n11 (both), n10 (A only), n01 (B only), and n00 (neither)."
+        ),
+        "pct_balanced_pairs": (
+            "Percentage of evaluated pairs where all four 2x2 carrier cells have >= 5 samples."
+        ),
+        "min_cell_distribution": (
+            "Distribution of min(n11, n10, n01, n00) across evaluated pairs. This is the limiting cell count for interaction estimation."
+        ),
+    }
+
+
 def parse_args() -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
@@ -611,6 +644,22 @@ def write_summary_yaml(
             },
         },
         "conclusion": conclusion,
+        "metric_definitions": build_cooccurrence_summary_definitions(),
+        "interpretation_notes": [
+            (
+                "A pair can have many joint carriers and still be poor for interaction "
+                "testing if almost no samples fall into one of the other 2x2 cells."
+            ),
+            (
+                "For interaction estimation you need support in all four carrier states: "
+                "both variants, variant A only, variant B only, and neither variant."
+            ),
+            (
+                "If any 2x2 cell is empty, the simple interaction contrast cannot be "
+                "estimated in this framework; the >= 5 threshold is a pragmatic minimum "
+                "for stability, not a mathematical law."
+            ),
+        ],
     }
 
     if bin_summaries:

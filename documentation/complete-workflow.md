@@ -390,6 +390,11 @@ python scripts/epistasis_power_analysis.py \
 
 **Interpretation**:
 - `cooccurrence_summary.yaml` tells you whether joint carriage exists across MAF bins, but not whether the model can see a pair in the same chunk.
+- In `cooccurrence_summary.yaml`, `gte5` means "greater than or equal to 5".
+- `n_pairs_gte5_cooccur` counts pairs with at least 5 joint carriers (`n11 >= 5`), which only tells you that both variants can appear together.
+- `n_pairs_all_cells_gte5` is more important for interaction analysis: it counts pairs where all four cells of the `2x2` carrier table have at least 5 samples (`n11`, `n10`, `n01`, `n00`).
+- This is relevant because estimating a non-additive interaction effect requires comparison across all four carrier states. If one cell is empty, the interaction contrast is not estimable in this framework; if one cell is very small, the estimate is unstable.
+- The `>= 5` rule is a practical minimum-support heuristic, not a mathematical law.
 - `power_analysis_summary.yaml` uses the full 2x2 carrier table for each pair, so near-ubiquitous common-common pairs no longer look artificially well-powered.
 - `gene_pair_interactions.csv` ranks gene-gene hypotheses by combining attribution support and observed co-occurrence, which is often more stable than exact variant-pair recurrence in sparse cohorts.
 
