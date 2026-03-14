@@ -320,15 +320,21 @@ sieve-project/
 
 ## Comparison with Existing Methods
 
-| Feature                       | SIEVE | DeepRVAT | GenNet  | GWAS_NN |
-|-------------------------------|-------|----------|---------|---------|
-| Direct VCF input              | ✓     | ✗        | ✗       | ✗       |
-| Annotation-free discovery     | ✓     | ✗        | ✗       | ✗       |
-| Position-aware                | ✓     | ✗        | ✗       | ✗       |
-| Built-in interpretability     | ✓     | ✗        | Partial | ✗       |
-| Epistasis validation          | ✓     | ✗        | ✗       | ✓       |
-| Null baseline calibration     | ✓     | ✗        | ✗       | ✗       |
-| Common + rare variants        | ✓     | Rare only| All     | Common  |
+| Feature                       | SIEVE | DeepRVAT | GenNet  | GWAS_NN | EpiDetect |
+|-------------------------------|-------|----------|---------|---------|-----------|
+| Direct VCF input              | ✓     | ✗        | ✗       | ✗       | ✗         |
+| Annotation-free discovery     | ✓     | ✗        | ✗       | ✗       | ✗         |
+| Position-aware                | ✓     | ✗        | ✗       | ✗       | ✗         |
+| Built-in interpretability     | ✓     | ✗        | Partial | ✗       | ✗         |
+| Epistasis detection           | ✓     | ✗        | ✗       | ✓       | ✓         |
+| Null baseline calibration     | ✓     | ✗        | ✗       | ✗       | ✗         |
+| Common + rare variants        | ✓     | Rare only| All     | Common  | Common    |
+| Marginal effect filtering     | N/A   | N/A      | N/A     | ✗       | ✓         |
+| Sample-level explanations     | ✓     | ✗        | ✗       | ✗       | ✗         |
+| Weight-based global explain.  | ✗     | ✗        | ✓       | ✗       | ✓         |
+| Network/centrality analysis   | ✗     | ✗        | ✗       | ✗       | ✓         |
+
+EpiDetect is included here as the closest recent epistasis-focused comparator, but it operates in a different regime from SIEVE: a small pre-filtered set of GWAS-significant common SNPs, a shallow MLP for continuous-trait regression, very large cohorts (for example UK Biobank scale), and global weight-based interaction scoring rather than sample-level attribution with null-baseline calibration.
 
 ## Troubleshooting
 
@@ -395,6 +401,7 @@ This project builds on insights from:
 - GenNet (van Hilten et al., 2021, Communications Biology)
 - GWAS_NN (Cui et al., 2022, Communications Biology)
 - DeepCOMBI (Mieth et al., 2021, NAR Genomics and Bioinformatics)
+- EpiDetect (Mastropietro et al., 2026, NAR Genomics and Bioinformatics)
 
 ## Support
 

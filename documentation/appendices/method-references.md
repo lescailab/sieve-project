@@ -16,7 +16,14 @@ This appendix lists key methodological references that motivate recent pipeline 
 
 ### Attention mechanisms
 
-- **Scaled dot-product attention** for modeling interactions:  
+- **Scaled dot-product attention** for modeling interactions:
   Vaswani A, et al. (2017). *Attention Is All You Need.* **NeurIPS**.
+
+### Epistasis detection
+
+- **EpiDetect/EpiCID** for network analysis of epistatic interactions:
+  Mastropietro A, Markopoulos G, Evangelou E, Anagnostopoulos A. (2026). *A novel explainable deep-learning approach for network analysis of epistatic interactions.* **NAR Genomics and Bioinformatics**, 8(1):lqag004.
+- **EpiCID interaction scoring** derives neural feature vectors from learned weights, uses cosine similarity to filter marginal-effect-dominated pairs, and reports first-layer interaction influence as the core explainability signal.
+- **Scope and comparison to SIEVE**: EpiDetect was demonstrated on UK Biobank blood-pressure traits using pre-selected GWAS-significant common SNPs, whereas SIEVE works on common and rare variants directly from VCF-derived tensors and emphasizes sample-level attributions plus counterfactual validation rather than global weight-space similarity alone.
 
 ---
