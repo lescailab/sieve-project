@@ -338,6 +338,11 @@ Use these when you need to understand whether the cohort is structurally able to
 - Tells you how often evaluated pairs co-occur across MAF bins.
 - Useful for diagnosing whether the rare-variant tail is too sparse.
 - Does not solve the within-chunk visibility limit of the attention workflow.
+- The key distinction is between `n_pairs_gte5_cooccur` and `n_pairs_all_cells_gte5`.
+- `n_pairs_gte5_cooccur` only asks whether at least 5 samples carry both variants (`n11 >= 5`).
+- `n_pairs_all_cells_gte5` asks whether the full `2x2` carrier table has support in every cell: `n11` (both), `n10` (A only), `n01` (B only), `n00` (neither).
+- This matters because interaction estimation needs contrast across all four carrier states. If one cell is empty, the simple interaction contrast is not estimable in this framework; if one cell is very small, the estimate becomes unstable.
+- In these field names, `gte5` means "greater than or equal to 5". The threshold of 5 is a pragmatic stability rule, not a mathematical theorem.
 
 `power_analysis_summary.yaml`
 - Uses null-informed attribution noise plus the full `2x2` carrier table for each pair.

@@ -442,6 +442,12 @@ python scripts/audit_cooccurrence.py [OPTIONS]
 | `--seed` | int | 42 | Random seed |
 
 Outputs include `cooccurrence_per_pair.csv`, which now carries the full `2x2` carrier contingency table for each evaluated pair.
+The summary file `cooccurrence_summary.yaml` distinguishes:
+
+- `n_pairs_gte5_cooccur`: pairs with at least 5 joint carriers (`n11 >= 5`)
+- `n_pairs_all_cells_gte5`: pairs where all four carrier states have at least 5 samples (`n11`, `n10`, `n01`, `n00`)
+
+The second metric is the more relevant one for interaction analysis, because estimating a non-additive interaction effect requires support across all four states. In these field names, `gte5` means `>= 5`.
 
 ---
 
