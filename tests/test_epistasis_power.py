@@ -1,0 +1,70 @@
+import numpy as np
+import pandas as pd
+import pytest
+from scipy import stats
+
+from scripts.epistasis_power_analysis import (
+    compute_corrected_alpha,
+    compute_mde,
+    estimate_sigma_synergy,
+    summarise_power_by_maf_bin,
+)
+
+
+def test_compute_mde_matches_closed_form_solution():
+    sigma_synergy = 0.1
+    n_cooccur = np.array([100.0])
+    alpha_corrected = 0.05 / 1000.0
+
+    observed = compute_mde(n_cooccur, sigma_synergy, alpha_corrected)[0]
+    expected = (
+        stats.norm.ppf(1.0 - alpha_corrected / 2.0) + stats.norm.ppf(0.8)
+    ) * sigma_synergy / np.sqrt(100.0)
+
+    assert observed == pytest.approx(expected)
+
+
+def test_compute_corrected_alpha_bonferroni():
+    assert compute_corrected_alpha(0.05, 1000, "bonferroni") == pytest.approx(0.00005)
+
+
+def test_summarise_power_by_maf_bin_groups_rows_correctly():
+    per_pair_df = pd.DataFrame(
+        {
+            "maf_bin_a": ["1-5%", "1-5%", "5-10%"],
+            "maf_bin_b": ["5-10%", "5-10%", "5-10%"],
+            "n_cooccur": [4, 8, 10],
+            "mde": [0.2, 0.1, 0.05],
+        }
+    )
+
+    summary = summarise_power_by_maf_bin(per_pair_df)
+    grouped = summary.set_index(["maf_bin_a", "maf_bin_b"])
+
+    assert grouped.loc[("1-5%", "5-10%"), "n_pairs"] == 2
+    assert grouped.loc[("1-5%", "5-10%"), "median_n_cooccur"] == pytest.approx(6.0)
+    assert grouped.loc[("1-5%", "5-10%"), "n_testable_pairs"] == 1
+
+
+def test_zero_cooccurrence_reports_infinite_mde():
+    values = compute_mde(np.array([0, 5]), sigma_synergy=0.1, alpha_corrected=0.05)
+    assert np.isinf(values[0])
+    assert np.isfinite(values[1])
+
+
+def test_estimate_sigma_synergy_uses_null_attributions_without_real_npz(tmp_path):
+    variant_scores = np.empty(2, dtype=object)
+    variant_scores[0] = np.array([0.1, -0.1])
+    variant_scores[1] = np.array([0.2, -0.2])
+
+    npz_path = tmp_path / "null_attributions.npz"
+    np.savez(npz_path, variant_scores=variant_scores)
+
+    sigma_synergy, method = estimate_sigma_synergy(
+        real_npz=None,
+        null_npz=str(npz_path),
+        epistasis_csv=None,
+    )
+
+    assert method == "null_attributions"
+    assert sigma_synergy == pytest.approx(np.sqrt(3.0) * np.std(np.array([0.1, -0.1, 0.2, -0.2])))
