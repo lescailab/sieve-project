@@ -303,6 +303,7 @@ SIEVE now supports two complementary views of epistasis:
 2. **Post-hoc attribution interaction analysis**: `scripts/audit_cooccurrence.py`, `scripts/aggregate_gene_interactions.py`, and `scripts/epistasis_power_analysis.py` analyse co-occurrence, effective interaction sample size, and gene-level interaction structure using the model's intrinsic attribution outputs. This is also not an external post-hoc explainer in the usual sense: it reuses attribution signals that are part of SIEVE's training and interpretation workflow.
 
 An empty `sieve_interactions.csv` therefore means that no pair crossed the attention discovery heuristic under the current chunking and threshold settings. It does not, by itself, prove that the cohort lacks interaction structure.
+Within the co-occurrence audit, `n_pairs_gte5_cooccur` only means at least 5 joint carriers, while `n_pairs_all_cells_gte5` means all four cells of the `2x2` carrier table have at least 5 samples. The latter is the relevant criterion for interaction estimation because non-additive effects require contrast across all four carrier states.
 - `level_specific_variants.tsv` - Variants uniquely important at one annotation level
 - `ablation_comparison.png` / `.pdf` - Multi-panel publication figure
 
