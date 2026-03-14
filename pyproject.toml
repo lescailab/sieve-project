@@ -47,7 +47,6 @@ dependencies = [
 
     # Genomics
     "cyvcf2>=0.30.0",  # Fast VCF parsing
-    "pysam>=0.21.0",   # Alternative VCF parsing
 
     # Machine learning utilities
     "scikit-learn>=1.3.0",
@@ -55,11 +54,10 @@ dependencies = [
     
     # Configuration and logging
     "pyyaml>=6.0",
-    "tqdm>=4.65.0",
     
     # Visualization (Python side)
     "matplotlib>=3.7.0",
-    "seaborn>=0.12.0",
+    "seaborn>=0.12.0",  # Used by plot_ablation_comparison.py when available
 ]
 
 [project.optional-dependencies]
@@ -72,9 +70,9 @@ dev = [
     "ruff>=0.0.270",
 ]
 docs = [
-    "sphinx>=6.0.0",
-    "sphinx-rtd-theme>=1.2.0",
-    "myst-parser>=1.0.0",
+    "mkdocs>=1.6",
+    "mkdocs-material>=9.5",
+    "pymdown-extensions>=10.0",
 ]
 notebooks = [
     "jupyter>=1.0.0",
