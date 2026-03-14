@@ -12,6 +12,7 @@ from typing import Any, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import numpy as np
 import pandas as pd
 import torch
 import yaml
@@ -21,6 +22,26 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+PAIR_COLUMNS = [
+    "gene_a",
+    "gene_b",
+    "n_cooccur",
+    "n_cooccur_cases",
+    "n_cooccur_controls",
+    "freq_gene_a",
+    "freq_gene_b",
+    "expected_cooccur",
+    "obs_exp_ratio",
+    "gene_score_a",
+    "gene_score_b",
+    "gene_rank_a",
+    "gene_rank_b",
+    "significant_variant_count_a",
+    "significant_variant_count_b",
+    "interaction_score",
+    "same_chrom",
+]
 
 
 def parse_args() -> argparse.Namespace:
@@ -38,13 +59,28 @@ def parse_args() -> argparse.Namespace:
         "--variant-rankings",
         type=Path,
         required=True,
-        help="Path to sieve_variant_rankings.csv.",
+        help=(
+            "Path to variant rankings. Prefer corrected_variant_rankings.csv so "
+            "the interaction score is based on chromosome-normalised z-scores."
+        ),
     )
     parser.add_argument(
         "--gene-rankings",
         type=Path,
         required=True,
-        help="Path to sieve_gene_rankings.csv.",
+        help=(
+            "Path to gene rankings. Prefer corrected_gene_rankings.csv so gene "
+            "selection aligns with chromosome-normalised z-scores."
+        ),
+    )
+    parser.add_argument(
+        "--null-rankings",
+        type=Path,
+        default=None,
+        help=(
+            "Optional null-model variant rankings CSV. When provided, null thresholds "
+            "are recomputed in the same score space as --variant-rankings."
+        ),
     )
     parser.add_argument(
         "--cooccurrence",
@@ -74,70 +110,322 @@ def parse_args() -> argparse.Namespace:
         "--min-gene-score",
         type=float,
         default=0.0,
-        help="Minimum gene_score threshold (default: 0.0).",
+        help="Minimum gene score after all filtering (default: 0.0).",
+    )
+    parser.add_argument(
+        "--significance-threshold",
+        type=str,
+        default="p_0.01",
+        choices=["p_0.05", "p_0.01", "p_0.001"],
+        help="Null-derived significance threshold to use when significance is available.",
+    )
+    parser.add_argument(
+        "--min-significant-variants",
+        type=int,
+        default=1,
+        help=(
+            "Minimum number of null-significant variants a gene must have to be kept "
+            "when significance information is available."
+        ),
+    )
+    parser.add_argument(
+        "--allow-nonsignificant-genes",
+        action="store_true",
+        help=(
+            "Keep genes without null-significant variants. By default the script "
+            "filters to genes supported by the null comparison when that information exists."
+        ),
     )
     return parser.parse_args()
 
 
-def _resolve_gene_symbol_column(
-    gene_rankings_df: pd.DataFrame,
-    variant_rankings_df: pd.DataFrame,
-) -> pd.DataFrame:
+def compute_chromosome_zscores(df: pd.DataFrame) -> pd.DataFrame:
+    """Compute per-chromosome z-scores for a rankings dataframe."""
+    required = {"chromosome", "mean_attribution"}
+    if not required.issubset(df.columns):
+        missing = sorted(required - set(df.columns))
+        raise ValueError(f"Cannot compute z-scores. Missing columns: {missing}")
+
+    corrected = df.copy()
+    corrected["chromosome"] = corrected["chromosome"].astype(str)
+
+    chrom_stats = corrected.groupby("chromosome")["mean_attribution"].agg(["mean", "std"])
+    chrom_stats.columns = ["chromosome_mean", "chromosome_std"]
+    chrom_stats["chromosome_std"] = (
+        chrom_stats["chromosome_std"].replace(0, 1.0).fillna(1.0)
+    )
+    chrom_stats["chromosome_mean"] = chrom_stats["chromosome_mean"].fillna(0.0)
+
+    corrected = corrected.merge(chrom_stats, left_on="chromosome", right_index=True, how="left")
+    corrected["z_attribution"] = (
+        (corrected["mean_attribution"] - corrected["chromosome_mean"])
+        / corrected["chromosome_std"]
+    )
+    return corrected
+
+
+def _resolve_gene_symbol_column(df: pd.DataFrame) -> pd.DataFrame:
     """Resolve a gene-symbol column compatible with preprocessed SampleVariants."""
-    resolved = gene_rankings_df.copy()
+    resolved = df.copy()
 
-    if "gene_name" not in resolved.columns or resolved["gene_name"].isna().all():
-        if {"gene_id", "gene_name"}.issubset(variant_rankings_df.columns):
-            gene_name_map = (
-                variant_rankings_df[["gene_id", "gene_name"]]
-                .dropna(subset=["gene_name"])
-                .drop_duplicates(subset=["gene_id"])
-            )
-            resolved = resolved.merge(gene_name_map, on="gene_id", how="left")
-
+    if "gene_symbol" in resolved.columns and not resolved["gene_symbol"].isna().all():
+        resolved["gene_symbol"] = resolved["gene_symbol"].astype(str)
+        return resolved
     if "gene_name" in resolved.columns and not resolved["gene_name"].isna().all():
         resolved["gene_symbol"] = resolved["gene_name"].astype(str)
-    elif "gene_id" in resolved.columns:
+        return resolved
+    if "gene" in resolved.columns and not resolved["gene"].isna().all():
+        resolved["gene_symbol"] = resolved["gene"].astype(str)
+        return resolved
+    if "gene_id" in resolved.columns:
         resolved["gene_symbol"] = resolved["gene_id"].astype(str)
-    else:
-        raise ValueError("Gene rankings must contain 'gene_name' or 'gene_id'.")
+        return resolved
+    raise ValueError("Input rankings must contain one of: gene_symbol, gene_name, gene, gene_id.")
 
-    return resolved
+
+def standardise_variant_rankings(
+    variant_df: pd.DataFrame,
+    desired_score_column: Optional[str] = None,
+) -> pd.DataFrame:
+    """Standardise variant ranking columns and derive a comparable score column."""
+    df = _resolve_gene_symbol_column(variant_df)
+
+    if "chromosome" not in df.columns or "position" not in df.columns:
+        raise ValueError("Variant rankings must contain 'chromosome' and 'position' columns.")
+    df["chromosome"] = df["chromosome"].astype(str)
+
+    if desired_score_column == "z_attribution" and "z_attribution" not in df.columns:
+        df = compute_chromosome_zscores(df)
+
+    if desired_score_column is None:
+        if "z_attribution" in df.columns:
+            score_column = "z_attribution"
+        elif "mean_attribution" in df.columns:
+            score_column = "mean_attribution"
+        else:
+            raise ValueError("Variant rankings must contain 'z_attribution' or 'mean_attribution'.")
+    else:
+        if desired_score_column not in df.columns:
+            raise ValueError(
+                f"Variant rankings are missing requested score column '{desired_score_column}'."
+            )
+        score_column = desired_score_column
+
+    df["variant_score"] = pd.to_numeric(df[score_column], errors="coerce")
+    df["variant_rank"] = np.nan
+    if "corrected_rank" in df.columns:
+        df["variant_rank"] = pd.to_numeric(df["corrected_rank"], errors="coerce")
+    elif "rank" in df.columns:
+        df["variant_rank"] = pd.to_numeric(df["rank"], errors="coerce")
+
+    return df
+
+
+def annotate_with_null_significance(
+    real_variant_df: pd.DataFrame,
+    null_rankings_path: Optional[Path],
+    significance_threshold: str,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Annotate real variants with null-derived significance in matching score space."""
+    threshold_col = f"exceeds_null_{significance_threshold}"
+    score_column = "variant_score"
+    metadata: dict[str, Any] = {
+        "score_basis": "corrected_z_scores" if "z_attribution" in real_variant_df.columns else "mean_attribution",
+        "significance_source": "none",
+        "threshold_name": significance_threshold,
+    }
+
+    if threshold_col in real_variant_df.columns:
+        annotated = real_variant_df.copy()
+        annotated[threshold_col] = annotated[threshold_col].fillna(False).astype(bool)
+        metadata["significance_source"] = "precomputed_columns"
+        return annotated, metadata
+
+    if null_rankings_path is None:
+        return real_variant_df.copy(), metadata
+
+    null_df = pd.read_csv(null_rankings_path)
+    desired_score_column = "z_attribution" if "z_attribution" in real_variant_df.columns else "mean_attribution"
+    null_df = standardise_variant_rankings(null_df, desired_score_column=desired_score_column)
+
+    thresholds = {
+        "p_0.05": float(np.percentile(null_df[score_column].dropna().values, 95)),
+        "p_0.01": float(np.percentile(null_df[score_column].dropna().values, 99)),
+        "p_0.001": float(np.percentile(null_df[score_column].dropna().values, 99.9)),
+    }
+
+    annotated = real_variant_df.copy()
+    for name, threshold in thresholds.items():
+        annotated[f"null_{name}_threshold"] = threshold
+        annotated[f"exceeds_null_{name}"] = annotated[score_column] > threshold
+
+    metadata["significance_source"] = "null_rankings_recomputed"
+    metadata["null_rankings"] = str(null_rankings_path)
+    metadata["thresholds"] = thresholds
+    return annotated, metadata
+
+
+def summarise_gene_support(
+    variant_df: pd.DataFrame,
+    significance_threshold: str,
+) -> pd.DataFrame:
+    """Summarise per-gene support from corrected variant rankings."""
+    threshold_col = f"exceeds_null_{significance_threshold}"
+    has_significance = threshold_col in variant_df.columns
+    working = variant_df.copy()
+    if has_significance:
+        working[threshold_col] = working[threshold_col].fillna(False).astype(bool)
+
+    rows = []
+    for gene_symbol, gene_variants in working.groupby("gene_symbol", dropna=False):
+        if has_significance:
+            significant = gene_variants[gene_variants[threshold_col]]
+            significant_variant_count = int(len(significant))
+            max_significant_variant_score = (
+                float(significant["variant_score"].max())
+                if not significant.empty
+                else np.nan
+            )
+        else:
+            significant_variant_count = 0
+            max_significant_variant_score = np.nan
+
+        rows.append(
+            {
+                "gene_symbol": str(gene_symbol),
+                "n_ranked_variants": int(len(gene_variants)),
+                "max_variant_score": float(gene_variants["variant_score"].max()),
+                "mean_variant_score": float(gene_variants["variant_score"].mean()),
+                "significant_variant_count": significant_variant_count,
+                "max_significant_variant_score": max_significant_variant_score,
+                "has_significant_variant": bool(significant_variant_count > 0),
+            }
+        )
+
+    return pd.DataFrame(rows)
 
 
 def load_gene_rankings(
     gene_rankings_path: Path,
-    variant_rankings_path: Path,
+    variant_rankings_df: pd.DataFrame,
     top_k: int,
     min_score: float,
-) -> pd.DataFrame:
-    """Load gene rankings, resolve gene symbols, and select top genes."""
+    significance_threshold: str,
+    min_significant_variants: int,
+    allow_nonsignificant_genes: bool,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Load gene rankings, align them to corrected/null-aware variant support, and select genes."""
     gene_df = pd.read_csv(gene_rankings_path)
-    variant_df = pd.read_csv(variant_rankings_path)
     logger.info("Loaded %d genes from %s", len(gene_df), gene_rankings_path)
+    gene_df = _resolve_gene_symbol_column(gene_df)
 
-    gene_df = _resolve_gene_symbol_column(gene_df, variant_df)
+    if (
+        "gene_id" in gene_df.columns
+        and "gene_id" in variant_rankings_df.columns
+        and "gene_name" in variant_rankings_df.columns
+        and (
+            "gene_name" not in gene_df.columns
+            or gene_df["gene_name"].isna().all()
+        )
+    ):
+        gene_name_map = (
+            variant_rankings_df[["gene_id", "gene_name"]]
+            .dropna(subset=["gene_name"])
+            .drop_duplicates(subset=["gene_id"])
+        )
+        gene_df = gene_df.merge(gene_name_map, on="gene_id", how="left")
+        if "gene_name" in gene_df.columns and not gene_df["gene_name"].isna().all():
+            gene_df["gene_symbol"] = gene_df["gene_name"].astype(str)
+
+    if "gene_score" not in gene_df.columns:
+        if "gene_z_score" in gene_df.columns:
+            gene_df["gene_score"] = pd.to_numeric(gene_df["gene_z_score"], errors="coerce")
+        elif "mean_z_score" in gene_df.columns:
+            gene_df["gene_score"] = pd.to_numeric(gene_df["mean_z_score"], errors="coerce")
+        else:
+            raise ValueError(
+                "Gene rankings must contain 'gene_score', 'gene_z_score', or 'mean_z_score'."
+            )
 
     if "gene_rank" not in gene_df.columns:
-        gene_df["gene_rank"] = (
-            gene_df["gene_score"].rank(method="dense", ascending=False).astype(int)
+        gene_df["gene_rank"] = gene_df["gene_score"].rank(
+            method="dense",
+            ascending=False,
+        ).astype(int)
+
+    gene_df["gene_score_raw"] = pd.to_numeric(gene_df["gene_score"], errors="coerce")
+    gene_df["gene_rank_raw"] = pd.to_numeric(gene_df["gene_rank"], errors="coerce")
+
+    support_df = summarise_gene_support(variant_rankings_df, significance_threshold)
+    gene_df = gene_df.merge(support_df, on="gene_symbol", how="left")
+    gene_df["n_ranked_variants"] = gene_df["n_ranked_variants"].fillna(0).astype(int)
+    gene_df["significant_variant_count"] = (
+        gene_df["significant_variant_count"].fillna(0).astype(int)
+    )
+    gene_df["has_significant_variant"] = (
+        gene_df["has_significant_variant"].fillna(False).astype(bool)
+    )
+
+    has_significance = f"exceeds_null_{significance_threshold}" in variant_rankings_df.columns
+    if has_significance:
+        gene_df["gene_score"] = gene_df["max_significant_variant_score"].where(
+            gene_df["significant_variant_count"] > 0,
+            np.nan,
         )
+        gene_df["gene_score_source"] = "max_significant_corrected_variant_score"
+        if allow_nonsignificant_genes:
+            gene_df["gene_score"] = gene_df["gene_score"].fillna(gene_df["gene_score_raw"])
+            gene_df["gene_score_source"] = np.where(
+                gene_df["significant_variant_count"] > 0,
+                "max_significant_corrected_variant_score",
+                "raw_gene_score_fallback",
+            )
+        else:
+            before = len(gene_df)
+            gene_df = gene_df[
+                gene_df["significant_variant_count"] >= min_significant_variants
+            ].copy()
+            logger.info(
+                "Filtered genes by null significance: %d -> %d (threshold=%s, min_significant_variants=%d)",
+                before,
+                len(gene_df),
+                significance_threshold,
+                min_significant_variants,
+            )
+    else:
+        gene_df["gene_score"] = gene_df["gene_score_raw"]
+        gene_df["gene_score_source"] = "raw_gene_rankings"
+
+    gene_df = gene_df[pd.notna(gene_df["gene_score"])].copy()
 
     if min_score > 0.0:
+        before = len(gene_df)
         gene_df = gene_df[gene_df["gene_score"] >= min_score].copy()
         logger.info(
-            "After min_gene_score filter (>= %.4f): %d genes",
+            "After min_gene_score filter (>= %.4f): %d -> %d genes",
             min_score,
+            before,
             len(gene_df),
         )
 
-    gene_df = (
-        gene_df.sort_values(["gene_score", "gene_rank"], ascending=[False, True])
-        .head(top_k)
-        .reset_index(drop=True)
-    )
-    logger.info("Selected top-%d genes by gene_score", len(gene_df))
-    return gene_df
+    gene_df = gene_df.sort_values(
+        ["gene_score", "significant_variant_count", "gene_score_raw", "gene_symbol"],
+        ascending=[False, False, False, True],
+    ).reset_index(drop=True)
+    gene_df["gene_rank"] = range(1, len(gene_df) + 1)
+    gene_df = gene_df.head(top_k).reset_index(drop=True)
+    logger.info("Selected top-%d genes by cleaned gene score", len(gene_df))
+
+    metadata = {
+        "uses_null_significance": has_significance,
+        "significance_threshold": significance_threshold,
+        "allow_nonsignificant_genes": allow_nonsignificant_genes,
+        "min_significant_variants": min_significant_variants,
+        "gene_score_source": (
+            "max_significant_corrected_variant_score" if has_significance else "raw_gene_rankings"
+        ),
+    }
+    return gene_df, metadata
 
 
 def build_carrier_indices(
@@ -183,6 +471,12 @@ def compute_gene_pair_cooccurrence(
     gene_rank_map = dict(
         zip(gene_rankings_df["gene_symbol"], gene_rankings_df["gene_rank"])
     )
+    if "significant_variant_count" in gene_rankings_df.columns:
+        significant_count_map = dict(
+            zip(gene_rankings_df["gene_symbol"], gene_rankings_df["significant_variant_count"])
+        )
+    else:
+        significant_count_map = {}
 
     rows: list[dict[str, Any]] = []
     sorted_genes = sorted(set(top_genes))
@@ -227,13 +521,15 @@ def compute_gene_pair_cooccurrence(
                 "gene_score_b": score_b,
                 "gene_rank_a": rank_a,
                 "gene_rank_b": rank_b,
+                "significant_variant_count_a": int(significant_count_map.get(gene_a, 0)),
+                "significant_variant_count_b": int(significant_count_map.get(gene_b, 0)),
                 "interaction_score": round(interaction_score, 6),
                 "same_chrom": bool(chrom_a and chrom_a == chrom_b),
             }
         )
 
     logger.info("Computed co-occurrence for %d gene pairs", len(rows))
-    return pd.DataFrame(rows)
+    return pd.DataFrame(rows, columns=PAIR_COLUMNS)
 
 
 def _normalise_gene_pair(
@@ -316,7 +612,15 @@ def build_network_outputs(
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Build gene-gene interaction network edge and node tables."""
     edge_columns = ["gene_a", "gene_b", "weight", "n_cooccur"]
-    node_columns = ["gene", "degree", "gene_score", "gene_rank", "n_partners"]
+    node_columns = [
+        "gene",
+        "degree",
+        "gene_score",
+        "gene_rank",
+        "n_partners",
+        "significant_variant_count",
+        "gene_score_source",
+    ]
 
     if pairs_df.empty:
         return pd.DataFrame(columns=edge_columns), pd.DataFrame(columns=node_columns)
@@ -336,6 +640,16 @@ def build_network_outputs(
     gene_rank_map = dict(
         zip(gene_rankings_df["gene_symbol"], gene_rankings_df["gene_rank"])
     )
+    significant_count_map = (
+        dict(zip(gene_rankings_df["gene_symbol"], gene_rankings_df["significant_variant_count"]))
+        if "significant_variant_count" in gene_rankings_df.columns
+        else {}
+    )
+    score_source_map = (
+        dict(zip(gene_rankings_df["gene_symbol"], gene_rankings_df["gene_score_source"]))
+        if "gene_score_source" in gene_rankings_df.columns
+        else {}
+    )
 
     nodes_rows = [
         {
@@ -344,6 +658,8 @@ def build_network_outputs(
             "gene_score": float(gene_score_map.get(gene, 0.0)),
             "gene_rank": int(gene_rank_map.get(gene, -1)),
             "n_partners": deg,
+            "significant_variant_count": int(significant_count_map.get(gene, 0)),
+            "gene_score_source": str(score_source_map.get(gene, "unknown")),
         }
         for gene, deg in sorted(degree.items(), key=lambda item: (-item[1], item[0]))
     ]
@@ -354,6 +670,7 @@ def write_summary(
     pairs_df: pd.DataFrame,
     nodes_df: pd.DataFrame,
     output_path: Path,
+    metadata: dict[str, Any],
 ) -> None:
     """Write a YAML summary of the gene interaction analysis."""
     top_pairs = [
@@ -365,6 +682,8 @@ def write_summary(
             "obs_exp_ratio": float(row["obs_exp_ratio"])
             if pd.notna(row["obs_exp_ratio"])
             else None,
+            "significant_variant_count_a": int(row.get("significant_variant_count_a", 0)),
+            "significant_variant_count_b": int(row.get("significant_variant_count_b", 0)),
         }
         for _, row in pairs_df.head(10).iterrows()
     ]
@@ -374,6 +693,7 @@ def write_summary(
             "gene": row["gene"],
             "degree": int(row["degree"]),
             "gene_score": float(row["gene_score"]),
+            "significant_variant_count": int(row.get("significant_variant_count", 0)),
         }
         for _, row in nodes_df.head(10).iterrows()
     ]
@@ -383,6 +703,7 @@ def write_summary(
         "total_genes_in_network": int(len(nodes_df)),
         "top_10_pairs": top_pairs,
         "hub_genes": hub_genes,
+        "score_basis": metadata,
         "comparison_with_epidetect_style_centrality": (
             "Degree is reported as a simple network-centrality proxy, analogous to the "
             "post-hoc hub analysis used in EpiDetect/EpiCID."
@@ -400,11 +721,22 @@ def main() -> None:
     args = parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
-    gene_rankings_df = load_gene_rankings(
+    real_variant_df = pd.read_csv(args.variant_rankings)
+    real_variant_df = standardise_variant_rankings(real_variant_df)
+    real_variant_df, significance_metadata = annotate_with_null_significance(
+        real_variant_df,
+        null_rankings_path=args.null_rankings,
+        significance_threshold=args.significance_threshold,
+    )
+
+    gene_rankings_df, gene_metadata = load_gene_rankings(
         gene_rankings_path=args.gene_rankings,
-        variant_rankings_path=args.variant_rankings,
+        variant_rankings_df=real_variant_df,
         top_k=args.top_k_genes,
         min_score=args.min_gene_score,
+        significance_threshold=args.significance_threshold,
+        min_significant_variants=args.min_significant_variants,
+        allow_nonsignificant_genes=args.allow_nonsignificant_genes,
     )
 
     logger.info("Loading preprocessed data from %s ...", args.preprocessed_data)
@@ -435,11 +767,12 @@ def main() -> None:
         gene_rankings_df=gene_rankings_df,
     )
 
-    if args.cooccurrence is not None:
+    if args.cooccurrence is not None and not pairs_df.empty:
         pairs_df = enrich_with_variant_cooccurrence(pairs_df, args.cooccurrence)
 
     before = len(pairs_df)
-    pairs_df = pairs_df[pairs_df["n_cooccur"] >= args.min_cooccur_samples].copy()
+    if not pairs_df.empty:
+        pairs_df = pairs_df[pairs_df["n_cooccur"] >= args.min_cooccur_samples].copy()
     logger.info(
         "Filtered gene pairs: %d -> %d (min_cooccur_samples=%d)",
         before,
@@ -447,10 +780,11 @@ def main() -> None:
         args.min_cooccur_samples,
     )
 
-    pairs_df = pairs_df.sort_values(
-        ["interaction_score", "n_cooccur"],
-        ascending=[False, False],
-    ).reset_index(drop=True)
+    if not pairs_df.empty:
+        pairs_df = pairs_df.sort_values(
+            ["interaction_score", "n_cooccur"],
+            ascending=[False, False],
+        ).reset_index(drop=True)
 
     edges_df, nodes_df = build_network_outputs(pairs_df, gene_rankings_df)
 
@@ -466,8 +800,14 @@ def main() -> None:
     nodes_df.to_csv(nodes_path, index=False)
     logger.info("Wrote %d nodes to %s", len(nodes_df), nodes_path)
 
+    summary_metadata = {
+        **significance_metadata,
+        **gene_metadata,
+        "variant_rankings": str(args.variant_rankings),
+        "gene_rankings": str(args.gene_rankings),
+    }
     summary_path = args.output_dir / "gene_interaction_summary.yaml"
-    write_summary(pairs_df, nodes_df, summary_path)
+    write_summary(pairs_df, nodes_df, summary_path, summary_metadata)
     logger.info("Gene interaction aggregation complete.")
 
 

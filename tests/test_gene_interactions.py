@@ -6,10 +6,12 @@ import pytest
 
 from scripts.aggregate_gene_interactions import (
     _normalise_gene_pair,
+    annotate_with_null_significance,
     build_carrier_indices,
     build_network_outputs,
     compute_gene_pair_cooccurrence,
     load_gene_rankings,
+    standardise_variant_rankings,
 )
 
 
@@ -210,11 +212,136 @@ def test_load_gene_rankings_resolves_gene_symbols_from_variant_rankings(tmp_path
         }
     ).to_csv(variant_rankings_path, index=False)
 
-    loaded = load_gene_rankings(
+    variant_df = standardise_variant_rankings(pd.read_csv(variant_rankings_path))
+    loaded, metadata = load_gene_rankings(
         gene_rankings_path=gene_rankings_path,
-        variant_rankings_path=variant_rankings_path,
+        variant_rankings_df=variant_df,
         top_k=10,
         min_score=0.0,
+        significance_threshold="p_0.01",
+        min_significant_variants=1,
+        allow_nonsignificant_genes=True,
     )
 
     assert loaded["gene_symbol"].tolist() == ["GENEA", "GENEB"]
+    assert metadata["uses_null_significance"] is False
+
+
+def test_load_gene_rankings_accepts_corrected_gene_z_scores(tmp_path):
+    gene_rankings_path = tmp_path / "corrected_gene_rankings.csv"
+    variant_rankings_path = tmp_path / "corrected_variant_rankings.csv"
+
+    pd.DataFrame(
+        {
+            "gene_name": ["GENEA", "GENEB"],
+            "gene_z_score": [3.2, 1.5],
+            "gene_rank": [1, 2],
+        }
+    ).to_csv(gene_rankings_path, index=False)
+    pd.DataFrame(
+        {
+            "gene_name": ["GENEA", "GENEB"],
+            "chromosome": ["1", "2"],
+            "position": [100, 200],
+            "z_attribution": [3.2, 1.5],
+        }
+    ).to_csv(variant_rankings_path, index=False)
+
+    variant_df = standardise_variant_rankings(pd.read_csv(variant_rankings_path))
+    loaded, _ = load_gene_rankings(
+        gene_rankings_path=gene_rankings_path,
+        variant_rankings_df=variant_df,
+        top_k=10,
+        min_score=0.0,
+        significance_threshold="p_0.01",
+        min_significant_variants=1,
+        allow_nonsignificant_genes=True,
+    )
+
+    assert loaded["gene_symbol"].tolist() == ["GENEA", "GENEB"]
+    assert loaded["gene_score"].tolist() == pytest.approx([3.2, 1.5])
+
+
+def test_null_significance_is_recomputed_in_corrected_score_space(tmp_path):
+    real_path = tmp_path / "corrected_variant_rankings.csv"
+    null_path = tmp_path / "null_variant_rankings.csv"
+
+    pd.DataFrame(
+        {
+            "gene_name": ["GENEA", "GENEB"],
+            "chromosome": ["1", "2"],
+            "position": [100, 200],
+            "z_attribution": [3.5, 0.2],
+        }
+    ).to_csv(real_path, index=False)
+    pd.DataFrame(
+        {
+            "gene_name": ["GENEA", "GENEB", "GENEC", "GENED"],
+            "chromosome": ["1", "1", "2", "2"],
+            "position": [100, 110, 200, 210],
+            "mean_attribution": [0.0, 1.0, 0.0, 1.0],
+        }
+    ).to_csv(null_path, index=False)
+
+    real_df = standardise_variant_rankings(pd.read_csv(real_path))
+    annotated, metadata = annotate_with_null_significance(
+        real_df,
+        null_rankings_path=null_path,
+        significance_threshold="p_0.01",
+    )
+
+    assert metadata["significance_source"] == "null_rankings_recomputed"
+    assert bool(annotated.loc[annotated["gene_symbol"] == "GENEA", "exceeds_null_p_0.01"].iloc[0]) is True
+    assert bool(annotated.loc[annotated["gene_symbol"] == "GENEB", "exceeds_null_p_0.01"].iloc[0]) is False
+
+
+def test_load_gene_rankings_filters_to_null_significant_genes(tmp_path):
+    gene_rankings_path = tmp_path / "corrected_gene_rankings.csv"
+    variant_rankings_path = tmp_path / "corrected_variant_rankings.csv"
+    null_path = tmp_path / "null_variant_rankings.csv"
+
+    pd.DataFrame(
+        {
+            "gene_name": ["GENEA", "GENEB"],
+            "gene_z_score": [3.5, 2.0],
+            "gene_rank": [1, 2],
+        }
+    ).to_csv(gene_rankings_path, index=False)
+    pd.DataFrame(
+        {
+            "gene_name": ["GENEA", "GENEB"],
+            "chromosome": ["1", "2"],
+            "position": [100, 200],
+            "z_attribution": [3.5, 0.2],
+        }
+    ).to_csv(variant_rankings_path, index=False)
+    pd.DataFrame(
+        {
+            "gene_name": ["GENEA", "GENEB", "GENEC", "GENED"],
+            "chromosome": ["1", "1", "2", "2"],
+            "position": [100, 110, 200, 210],
+            "mean_attribution": [0.0, 1.0, 0.0, 1.0],
+        }
+    ).to_csv(null_path, index=False)
+
+    variant_df = standardise_variant_rankings(pd.read_csv(variant_rankings_path))
+    variant_df, metadata = annotate_with_null_significance(
+        variant_df,
+        null_rankings_path=null_path,
+        significance_threshold="p_0.01",
+    )
+
+    loaded, gene_metadata = load_gene_rankings(
+        gene_rankings_path=gene_rankings_path,
+        variant_rankings_df=variant_df,
+        top_k=10,
+        min_score=0.0,
+        significance_threshold="p_0.01",
+        min_significant_variants=1,
+        allow_nonsignificant_genes=False,
+    )
+
+    assert metadata["significance_source"] == "null_rankings_recomputed"
+    assert gene_metadata["uses_null_significance"] is True
+    assert loaded["gene_symbol"].tolist() == ["GENEA"]
+    assert loaded.iloc[0]["significant_variant_count"] == 1
