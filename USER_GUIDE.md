@@ -49,7 +49,7 @@ Unlike existing methods:
 - **Train** models at multiple annotation levels (genotype-only to full annotations)
 - **Explain** predictions with integrated gradients attribution
 - **Discover** novel variant associations with statistical validation
-- **Detect** epistatic interactions via attention patterns
+- **Detect** epistatic interactions via attention patterns and post-hoc attribution/co-occurrence analysis
 - **Validate** discoveries against ClinVar, GWAS, and GO databases
 
 ---
@@ -498,15 +498,29 @@ python scripts/plot_ablation_comparison.py \
 
 ---
 
-#### Step 6: Epistasis Detection (Optional)
+#### Step 6: Epistasis Analysis (Optional)
 
-**Purpose**: Identify variant pairs with non-additive effects
+**Purpose**: Characterise interactions from both the model's intrinsic attention patterns and its intrinsic attribution outputs.
 
-**Theory**: Epistasis occurs when the combined effect of two variants differs from the sum of their individual effects. SIEVE detects epistasis through:
-1. High attention weights between variant pairs (model looks at them together)
-2. Counterfactual validation (test all four combinations)
+##### Step 6A: Attention-based interaction discovery
 
-**Command**:
+This is the original SIEVE epistasis workflow:
+1. `scripts/explain.py` extracts high-attention variant pairs from the trained model.
+2. `scripts/validate_epistasis.py` tests whether those candidate pairs show non-additive effects by counterfactual perturbation.
+
+This path is especially interesting because the candidate interactions come from the model's own attention mechanism rather than an external interaction scorer. Its main current limitation is that the search is restricted to pairs that appear within the same chunk. An empty `sieve_interactions.csv` therefore means that no pair crossed the discovery heuristic under the current chunking and threshold settings; it does not by itself prove that the cohort lacks interaction structure.
+
+**Commands**:
+```bash
+python scripts/explain.py \
+    --experiment-dir experiments/my_model \
+    --preprocessed-data preprocessed.pt \
+    --output-dir results/explainability \
+    --attention-threshold-mode percentile \
+    --attention-percentile 99.9 \
+    --device cuda
+```
+
 ```bash
 python scripts/validate_epistasis.py \
     --interactions results/explainability/sieve_interactions.csv \
@@ -530,6 +544,46 @@ synergy > 0.05  → Synergistic (work together)
 synergy < -0.05 → Antagonistic (interfere)
 synergy ≈ 0     → Independent
 ```
+
+##### Step 6B: Post-hoc attribution and co-occurrence interaction analysis
+
+This complementary workflow uses attribution signals that are intrinsic to the trained SIEVE model together with observed variant co-occurrence. It is post-hoc in execution, but it is not based on an unrelated external explainer or a weight-only proxy.
+
+Use it to answer three questions that the attention path alone cannot resolve:
+1. Do candidate pairs or genes co-occur often enough to be testable?
+2. Is the cohort powered to detect interaction effects of plausible magnitude?
+3. Can multiple variant-level signals be pooled into gene-gene interaction hypotheses?
+
+**Commands**:
+```bash
+python scripts/audit_cooccurrence.py \
+    --preprocessed-data preprocessed.pt \
+    --output-dir results/epistasis_audit
+```
+
+```bash
+python scripts/aggregate_gene_interactions.py \
+    --preprocessed-data preprocessed.pt \
+    --variant-rankings results/attribution_comparison/corrected_variant_rankings.csv \
+    --gene-rankings results/attribution_comparison/corrected_gene_rankings.csv \
+    --null-rankings results/null_attributions/sieve_variant_rankings.csv \
+    --cooccurrence results/epistasis_audit/cooccurrence_per_pair.csv \
+    --output-dir results/gene_interactions
+```
+
+```bash
+python scripts/epistasis_power_analysis.py \
+    --cooccurrence results/epistasis_audit/cooccurrence_per_pair.csv \
+    --cooccurrence-summary results/epistasis_audit/cooccurrence_by_maf_bin.csv \
+    --real-attributions-npz results/explainability/attributions.npz \
+    --null-attributions-npz results/null_attributions/attributions.npz \
+    --output-dir results/epistasis_power
+```
+
+**Interpretation**:
+- `cooccurrence_summary.yaml` tells you whether joint carriage exists across MAF bins, but not whether the model can see a pair in the same chunk.
+- `power_analysis_summary.yaml` uses the full 2x2 carrier table for each pair, so near-ubiquitous common-common pairs no longer look artificially well-powered.
+- `gene_pair_interactions.csv` ranks gene-gene hypotheses by combining attribution support and observed co-occurrence, which is often more stable than exact variant-pair recurrence in sparse cohorts.
 
 ---
 
@@ -1156,6 +1210,8 @@ python scripts/explain.py [OPTIONS]
 | `--top-k-variants` | int | 100 | Number of top variants |
 | `--top-k-interactions` | int | 100 | Number of top interactions |
 | `--attention-threshold` | float | 0.1 | Min attention weight |
+| `--attention-threshold-mode` | str | absolute | Interaction threshold mode [`absolute`, `percentile`] |
+| `--attention-percentile` | float | 99.9 | Percentile cutoff when using percentile thresholding |
 | `--is-null-baseline` | flag | False | Flag for null baseline analysis |
 | `--device` | str | cuda | Device [cuda, cpu] |
 | `--genome-build` | str | GRCh37 | Reference genome build |
@@ -1167,6 +1223,8 @@ python scripts/explain.py \
     --preprocessed-data preprocessed.pt \
     --output-dir results/explainability \
     --n-steps 50 \
+    --attention-threshold-mode percentile \
+    --attention-percentile 99.9 \
     --device cuda
 ```
 
@@ -1395,6 +1453,73 @@ python scripts/validate_epistasis.py [OPTIONS]
 | `--synergy-threshold` | float | 0.05 | Minimum significant synergy |
 | `--device` | str | cuda | Device [cuda, cpu] |
 | `--genome-build` | str | GRCh37 | Reference genome build |
+
+`validate_epistasis.py` validates candidate pairs from `sieve_interactions.csv`. Those candidates are limited to pairs visible within the same chunk during `explain.py`.
+
+---
+
+### audit_cooccurrence.py
+
+```bash
+python scripts/audit_cooccurrence.py [OPTIONS]
+```
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--preprocessed-data` | path | required | Preprocessed data file |
+| `--output-dir` | path | required | Output directory |
+| `--maf-bins` | str | `0.001,0.01,0.05,0.1,0.5` | Carrier-frequency bin edges |
+| `--max-pairs` | int | 100000 | Maximum number of evaluated pairs |
+| `--top-k-variants` | int | 500 | Evaluate all pairs among the top-K carrier variants before adding low-frequency samples |
+| `--seed` | int | 42 | Random seed |
+
+Outputs include `cooccurrence_per_pair.csv`, which now carries the full `2x2` carrier contingency table for each evaluated pair.
+
+---
+
+### aggregate_gene_interactions.py
+
+```bash
+python scripts/aggregate_gene_interactions.py [OPTIONS]
+```
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--preprocessed-data` | path | required | Preprocessed data file |
+| `--variant-rankings` | path | required | Variant rankings CSV (raw or chrX-corrected) |
+| `--gene-rankings` | path | required | Gene rankings CSV (raw or corrected) |
+| `--null-rankings` | path | - | Null baseline variant rankings for significance-aware filtering |
+| `--cooccurrence` | path | - | Per-pair co-occurrence CSV for variant-level enrichment |
+| `--output-dir` | path | required | Output directory |
+| `--min-cooccur-samples` | int | 5 | Minimum gene-pair co-occurrence |
+| `--top-k-genes` | int | 50 | Top genes to include |
+| `--min-gene-score` | float | 0.0 | Minimum gene score |
+| `--significance-threshold` | str | `p_0.05` | Null-derived significance threshold to enforce when available |
+| `--min-significant-variants` | int | 1 | Minimum number of significant variants required for a gene |
+| `--allow-nonsignificant-genes` | flag | False | Allow genes with no null-significant variants |
+
+This script is the preferred gene-level interaction workflow when you have null-comparison and chrX-corrected attribution outputs available.
+
+---
+
+### epistasis_power_analysis.py
+
+```bash
+python scripts/epistasis_power_analysis.py [OPTIONS]
+```
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--cooccurrence` | path | required | Per-pair co-occurrence CSV from `audit_cooccurrence.py` |
+| `--cooccurrence-summary` | path | required | MAF-bin summary CSV from `audit_cooccurrence.py` |
+| `--real-attributions-npz` | path | - | Real-model attributions archive |
+| `--null-attributions-npz` | path | - | Null-model attributions archive |
+| `--epistasis-results` | path | - | `epistasis_validation.csv` if available |
+| `--output-dir` | path | required | Output directory |
+| `--alpha` | float | 0.05 | Family-wise significance level |
+| `--correction` | str | bonferroni | Multiple-testing correction [`bonferroni`, `fdr`] |
+
+Power is computed from the full `2x2` carrier table for each pair, not just the joint-carrier count. This avoids overstating power for near-ubiquitous common-common pairs.
 
 ---
 
@@ -1696,6 +1821,22 @@ The figure produced by `plot_ablation_comparison.py` contains four panels:
 
 ### Epistasis Results
 
+SIEVE now provides two complementary interaction views:
+
+1. **Attention-based discovery**: high-attention variant pairs from `sieve_interactions.csv`, optionally followed by counterfactual validation in `epistasis_validation.csv`.
+2. **Post-hoc attribution interaction analysis**: co-occurrence, power, and gene-gene aggregation from `audit_cooccurrence.py`, `epistasis_power_analysis.py`, and `aggregate_gene_interactions.py`.
+
+#### Attention Discovery Output (`sieve_interactions.csv`)
+
+This file contains variant pairs that exceeded the attention discovery threshold in `explain.py`. They are best treated as candidate interactions for follow-up, not as a complete interaction catalogue.
+
+Key points:
+
+- These pairs are discovered from the model's intrinsic attention mechanism, which is a distinctive feature of SIEVE.
+- Discovery is currently restricted to pairs that occur within the same chunk.
+- `--attention-threshold-mode percentile` is often more informative than a fixed absolute threshold when attention is diffuse across many variants.
+- An empty `sieve_interactions.csv` means no pair crossed the current heuristic. It does not by itself prove an absence of interaction structure in the cohort.
+
 #### Validation Output (`epistasis_validation.csv`)
 
 Columns:
@@ -1734,6 +1875,25 @@ Columns:
 1. **Synergistic in same gene**: Potential compound heterozygosity
 2. **Synergistic across genes**: Gene-gene interaction
 3. **Antagonistic**: Compensatory mechanism or regulatory feedback
+
+#### Post-hoc Interaction Outputs
+
+Use these when you need to understand whether the cohort is structurally able to support interaction detection even when the attention-based discovery file is sparse.
+
+`cooccurrence_summary.yaml`
+- Tells you how often evaluated pairs co-occur across MAF bins.
+- Useful for diagnosing whether the rare-variant tail is too sparse.
+- Does not solve the within-chunk visibility limit of the attention workflow.
+
+`power_analysis_summary.yaml`
+- Uses null-informed attribution noise plus the full `2x2` carrier table for each pair.
+- The critical quantity is the effective interaction sample size, not just `n_cooccur`.
+- Near-ubiquitous common-common pairs can have high co-occurrence but still low incremental interaction information.
+
+`gene_pair_interactions.csv`
+- Aggregates variant-level attribution support and co-occurrence at the gene-pair level.
+- Useful when exact variant-pair recurrence is sparse but multiple variants implicate the same genes.
+- Still grounded in the model's intrinsic attribution outputs rather than an external weight-only interaction score.
 
 ---
 

@@ -103,7 +103,13 @@ def test_compute_cooccurrence_expected_and_flags():
     )
 
     first = records[0]
+    assert first["carrier_count_a"] == 3
+    assert first["carrier_count_b"] == 4
     assert first["n_cooccur"] == 2
+    assert first["n_only_a"] == 1
+    assert first["n_only_b"] == 2
+    assert first["n_neither"] == 0
+    assert first["min_cell_count"] == 0
     assert first["n_cooccur_cases"] == 1
     assert first["n_cooccur_controls"] == 1
     assert first["expected_cooccur"] == pytest.approx(2.4)

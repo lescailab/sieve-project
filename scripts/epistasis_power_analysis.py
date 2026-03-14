@@ -237,7 +237,7 @@ def estimate_sigma_synergy(
 # ---------------------------------------------------------------------------
 
 def compute_mde(
-    n_cooccur: np.ndarray,
+    n_effective: np.ndarray,
     sigma_synergy: float,
     alpha_corrected: float,
     power: float = 0.8,
@@ -247,8 +247,8 @@ def compute_mde(
 
     Parameters
     ----------
-    n_cooccur : np.ndarray
-        Effective sample sizes (co-occurrence counts).
+    n_effective : np.ndarray
+        Effective sample sizes for interaction testing.
     sigma_synergy : float
         Standard deviation of synergy scores under the null.
     alpha_corrected : float
@@ -259,17 +259,47 @@ def compute_mde(
     Returns
     -------
     np.ndarray
-        Minimum detectable effect sizes, same shape as *n_cooccur*.
+        Minimum detectable effect sizes, same shape as *n_effective*.
     """
     z_alpha = stats.norm.ppf(1.0 - alpha_corrected / 2.0)
     z_power = stats.norm.ppf(power)
 
-    n = np.asarray(n_cooccur, dtype=float)
+    n = np.asarray(n_effective, dtype=float)
     with np.errstate(divide="ignore", invalid="ignore"):
         mde = (z_alpha + z_power) * sigma_synergy / np.sqrt(n)
     # Where n <= 0, MDE is undefined
     mde = np.where(n > 0, mde, np.inf)
     return mde
+
+
+def compute_effective_n_from_counts(
+    n11: np.ndarray,
+    n10: np.ndarray,
+    n01: np.ndarray,
+    n00: np.ndarray,
+) -> np.ndarray:
+    """
+    Approximate the effective sample size for a 2x2 interaction contrast.
+
+    Uses the harmonic-style combination of the four contingency-table cells.
+    If any cell is empty, the interaction contrast is not estimable and the
+    effective sample size is reported as 0.
+    """
+    n11 = np.asarray(n11, dtype=float)
+    n10 = np.asarray(n10, dtype=float)
+    n01 = np.asarray(n01, dtype=float)
+    n00 = np.asarray(n00, dtype=float)
+
+    positive = (n11 > 0) & (n10 > 0) & (n01 > 0) & (n00 > 0)
+    effective_n = np.zeros_like(n11, dtype=float)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        effective_n[positive] = 1.0 / (
+            (1.0 / n11[positive])
+            + (1.0 / n10[positive])
+            + (1.0 / n01[positive])
+            + (1.0 / n00[positive])
+        )
+    return effective_n
 
 
 def compute_corrected_alpha(
@@ -305,7 +335,7 @@ def compute_corrected_alpha(
         raise ValueError(f"Unknown correction method: {method}")
 
 
-def minimum_cohort_for_effect(
+def minimum_effective_n_for_effect(
     effect_size: float,
     sigma_synergy: float,
     alpha_corrected: float,
@@ -334,6 +364,75 @@ def minimum_cohort_for_effect(
     return int(np.ceil(n))
 
 
+def add_pair_contingency_metrics(
+    cooccur_df: pd.DataFrame,
+    total_samples: Optional[int] = None,
+) -> pd.DataFrame:
+    """
+    Add 2x2 contingency counts and effective sample size to a co-occurrence table.
+
+    Prefers exact columns written by ``audit_cooccurrence.py``. For legacy files,
+    falls back to reconstructing carrier counts from frequencies and cohort size.
+    """
+    df = cooccur_df.copy()
+
+    if total_samples is None:
+        total_samples = infer_total_samples_from_cooccurrence(df)
+
+    if "carrier_count_a" not in df.columns:
+        if total_samples is None or "freq_a" not in df.columns:
+            raise ValueError(
+                "Cannot derive carrier_count_a. Provide a cooccurrence file generated "
+                "by the updated audit script or one containing freq_a plus inferable "
+                "total sample size."
+            )
+        df["carrier_count_a"] = np.rint(df["freq_a"] * total_samples).astype(int)
+
+    if "carrier_count_b" not in df.columns:
+        if total_samples is None or "freq_b" not in df.columns:
+            raise ValueError(
+                "Cannot derive carrier_count_b. Provide a cooccurrence file generated "
+                "by the updated audit script or one containing freq_b plus inferable "
+                "total sample size."
+            )
+        df["carrier_count_b"] = np.rint(df["freq_b"] * total_samples).astype(int)
+
+    if "n_only_a" not in df.columns:
+        df["n_only_a"] = (
+            df["carrier_count_a"].astype(int) - df["n_cooccur"].astype(int)
+        ).clip(lower=0)
+    if "n_only_b" not in df.columns:
+        df["n_only_b"] = (
+            df["carrier_count_b"].astype(int) - df["n_cooccur"].astype(int)
+        ).clip(lower=0)
+    if "n_neither" not in df.columns:
+        if total_samples is None:
+            raise ValueError(
+                "Cannot derive n_neither without exact contingency columns or an "
+                "inferable total sample size."
+            )
+        df["n_neither"] = (
+            total_samples
+            - df["n_cooccur"].astype(int)
+            - df["n_only_a"].astype(int)
+            - df["n_only_b"].astype(int)
+        ).clip(lower=0)
+
+    df["min_cell_count"] = df[
+        ["n_cooccur", "n_only_a", "n_only_b", "n_neither"]
+    ].min(axis=1)
+    df["n_effective"] = compute_effective_n_from_counts(
+        df["n_cooccur"].values,
+        df["n_only_a"].values,
+        df["n_only_b"].values,
+        df["n_neither"].values,
+    )
+    if total_samples is not None and total_samples > 0:
+        df["cooccurrence_rate"] = df["n_cooccur"] / float(total_samples)
+        df["effective_fraction"] = df["n_effective"] / float(total_samples)
+    return df
+
+
 def infer_total_samples_from_cooccurrence(
     cooccur_df: pd.DataFrame,
 ) -> Optional[int]:
@@ -356,18 +455,20 @@ def infer_total_samples_from_cooccurrence(
 
 def summarise_power_by_maf_bin(
     per_pair_df: pd.DataFrame,
-    cooccur_col: str = "n_cooccur",
+    effective_col: str = "n_effective",
     threshold: float = 0.1,
 ) -> pd.DataFrame:
     """Summarise co-occurrence and MDE by MAF-bin combination."""
     if not {"maf_bin_a", "maf_bin_b"}.issubset(per_pair_df.columns):
         return pd.DataFrame(
             {
-                "median_n_cooccur": [float(per_pair_df[cooccur_col].median())],
+                "median_n_cooccur": [float(per_pair_df["n_cooccur"].median())],
+                "median_min_cell_count": [float(per_pair_df["min_cell_count"].median())],
+                "median_n_effective": [float(per_pair_df[effective_col].median())],
                 "median_mde": [float(per_pair_df["mde"].replace(np.inf, np.nan).median())],
                 "mean_mde": [float(per_pair_df["mde"].replace(np.inf, np.nan).mean())],
                 "n_pairs": [int(len(per_pair_df))],
-                "n_testable_pairs": [int((per_pair_df[cooccur_col] >= 5).sum())],
+                "n_testable_pairs": [int((per_pair_df["min_cell_count"] >= 5).sum())],
                 "proportion_mde_lt_threshold": [float((per_pair_df["mde"] < threshold).mean())],
             }
         )
@@ -375,10 +476,14 @@ def summarise_power_by_maf_bin(
     summary = (
         per_pair_df.groupby(["maf_bin_a", "maf_bin_b"], dropna=False)
         .agg(
-            n_pairs=(cooccur_col, "count"),
-            median_n_cooccur=(cooccur_col, "median"),
-            mean_n_cooccur=(cooccur_col, "mean"),
-            n_testable_pairs=(cooccur_col, lambda values: int((values >= 5).sum())),
+            n_pairs=(effective_col, "count"),
+            median_n_cooccur=("n_cooccur", "median"),
+            mean_n_cooccur=("n_cooccur", "mean"),
+            median_min_cell_count=("min_cell_count", "median"),
+            mean_min_cell_count=("min_cell_count", "mean"),
+            median_n_effective=(effective_col, "median"),
+            mean_n_effective=(effective_col, "mean"),
+            n_testable_pairs=("min_cell_count", lambda values: int((values >= 5).sum())),
             median_mde=("mde", lambda values: float(np.nanmedian(np.where(np.isfinite(values), values, np.nan)))),
             mean_mde=("mde", lambda values: float(np.nanmean(np.where(np.isfinite(values), values, np.nan)))),
             proportion_mde_lt_threshold=("mde", lambda values: float(np.mean(values < threshold))),
@@ -388,15 +493,14 @@ def summarise_power_by_maf_bin(
     return summary
 
 
-def estimate_common_pair_cooccurrence_rate(
+def estimate_common_pair_effective_fraction(
     per_pair_df: pd.DataFrame,
     total_samples: Optional[int],
-    cooccur_col: str = "n_cooccur",
 ) -> Optional[float]:
-    """Estimate the observed co-occurrence rate for common-common pairs."""
+    """Estimate the effective-information fraction for common-common pairs."""
     if total_samples is None or total_samples <= 0:
         return None
-    if not {"freq_a", "freq_b", cooccur_col}.issubset(per_pair_df.columns):
+    if not {"freq_a", "freq_b", "n_effective"}.issubset(per_pair_df.columns):
         return None
 
     common_pairs = per_pair_df[
@@ -406,7 +510,31 @@ def estimate_common_pair_cooccurrence_rate(
     if common_pairs.empty:
         return None
 
-    rates = common_pairs[cooccur_col] / float(total_samples)
+    rates = common_pairs["n_effective"] / float(total_samples)
+    rates = rates[np.isfinite(rates) & (rates > 0)]
+    if rates.empty:
+        return None
+    return float(rates.median())
+
+
+def estimate_common_pair_cooccurrence_rate(
+    per_pair_df: pd.DataFrame,
+    total_samples: Optional[int],
+) -> Optional[float]:
+    """Estimate the joint-carrier fraction for common-common pairs."""
+    if total_samples is None or total_samples <= 0:
+        return None
+    if not {"freq_a", "freq_b", "n_cooccur"}.issubset(per_pair_df.columns):
+        return None
+
+    common_pairs = per_pair_df[
+        (per_pair_df["freq_a"] >= 0.05)
+        & (per_pair_df["freq_b"] >= 0.05)
+    ]
+    if common_pairs.empty:
+        return None
+
+    rates = common_pairs["n_cooccur"] / float(total_samples)
     rates = rates[np.isfinite(rates) & (rates > 0)]
     if rates.empty:
         return None
@@ -465,17 +593,22 @@ def create_power_plot(
     else:
         # Fallback: scatter of n_cooccur vs MDE
         if "median_n_cooccur" in summary_df.columns:
+            x_values = (
+                summary_df["median_n_effective"]
+                if "median_n_effective" in summary_df.columns
+                else summary_df["median_n_cooccur"]
+            )
             ax.scatter(
-                summary_df["median_n_cooccur"],
+                x_values,
                 summary_df["median_mde"].clip(upper=2.0),
                 alpha=0.7,
                 edgecolors="grey",
             )
             ax.axhline(bio_threshold, color="black", linestyle="--", linewidth=1.2,
                         label=f"Bio. threshold ({bio_threshold})")
-            ax.set_xlabel("Median co-occurrence count")
+            ax.set_xlabel("Median effective sample size")
             ax.set_ylabel("Median MDE")
-            ax.set_title("Minimum Detectable Epistatic Effect vs Co-occurrence")
+            ax.set_title("Minimum Detectable Epistatic Effect vs Effective Sample Size")
         else:
             ax.text(0.5, 0.5, "Insufficient data for plot",
                     ha="center", va="center", transform=ax.transAxes)
@@ -595,17 +728,23 @@ def main() -> None:
             )
             sys.exit(1)
 
-    # Testable pairs: n_cooccur >= 5
-    testable_mask = cooccur_df[cooccur_col] >= 5
+    estimated_total_samples = infer_total_samples_from_cooccurrence(cooccur_df)
+    per_pair_df = add_pair_contingency_metrics(
+        cooccur_df,
+        total_samples=estimated_total_samples,
+    )
+
+    # Testable pairs: all cells in the 2x2 table have support
+    testable_mask = per_pair_df["min_cell_count"] >= 5
     n_testable = int(testable_mask.sum())
-    print(f"  Testable pairs (n_cooccur >= 5): {n_testable:,}")
+    print(f"  Testable pairs (all four cells >= 5): {n_testable:,}")
 
     # ------------------------------------------------------------------
     # 3. Corrected alpha
     # ------------------------------------------------------------------
     if n_testable == 0:
         logger.warning(
-            "No pairs met the n_cooccur >= 5 threshold. Using uncorrected alpha for "
+            "No pairs met the all-cells >= 5 threshold. Using uncorrected alpha for "
             "descriptive MDE calculations."
         )
     alpha_corrected = compute_corrected_alpha(
@@ -619,9 +758,8 @@ def main() -> None:
     # 4. Per-pair MDE
     # ------------------------------------------------------------------
     print("\nComputing per-pair MDE...")
-    per_pair_df = cooccur_df.copy()
     per_pair_df["mde"] = compute_mde(
-        per_pair_df[cooccur_col].values,
+        per_pair_df["n_effective"].values,
         sigma_synergy,
         alpha_corrected,
     )
@@ -634,7 +772,7 @@ def main() -> None:
     # 5. MAF-bin stratified summary
     # ------------------------------------------------------------------
     print("\nComputing MAF-bin stratified summary...")
-    maf_summary = summarise_power_by_maf_bin(per_pair_df, cooccur_col=cooccur_col)
+    maf_summary = summarise_power_by_maf_bin(per_pair_df, effective_col="n_effective")
 
     maf_bin_path = output_dir / "power_analysis_by_maf_bin.csv"
     maf_summary.to_csv(maf_bin_path, index=False)
@@ -645,33 +783,35 @@ def main() -> None:
     # ------------------------------------------------------------------
     finite_mde = per_pair_df["mde"][np.isfinite(per_pair_df["mde"])]
     prop_detectable = float((finite_mde < 0.1).mean()) if len(finite_mde) > 0 else 0.0
-    estimated_total_samples = infer_total_samples_from_cooccurrence(per_pair_df)
 
-    # Minimum co-occurrence counts needed for representative common-common pairs
-    min_cooccur_effect_01 = minimum_cohort_for_effect(
+    # Minimum effective sample sizes needed for representative common-common pairs
+    min_effective_n_01 = minimum_effective_n_for_effect(
         effect_size=0.1,
         sigma_synergy=sigma_synergy,
         alpha_corrected=alpha_corrected,
     )
-    min_cooccur_effect_005 = minimum_cohort_for_effect(
+    min_effective_n_005 = minimum_effective_n_for_effect(
         effect_size=0.05,
         sigma_synergy=sigma_synergy,
         alpha_corrected=alpha_corrected,
     )
 
-    common_common_rate = estimate_common_pair_cooccurrence_rate(
+    common_common_cooccurrence_rate = estimate_common_pair_cooccurrence_rate(
         per_pair_df,
         total_samples=estimated_total_samples,
-        cooccur_col=cooccur_col,
+    )
+    common_common_effective_fraction = estimate_common_pair_effective_fraction(
+        per_pair_df,
+        total_samples=estimated_total_samples,
     )
     min_cohort_effect_01 = (
-        int(np.ceil(min_cooccur_effect_01 / common_common_rate))
-        if common_common_rate
+        int(np.ceil(min_effective_n_01 / common_common_effective_fraction))
+        if common_common_effective_fraction
         else None
     )
     min_cohort_effect_005 = (
-        int(np.ceil(min_cooccur_effect_005 / common_common_rate))
-        if common_common_rate
+        int(np.ceil(min_effective_n_005 / common_common_effective_fraction))
+        if common_common_effective_fraction
         else None
     )
 
@@ -681,15 +821,19 @@ def main() -> None:
         "alpha": float(args.alpha),
         "correction_method": args.correction,
         "alpha_corrected": float(alpha_corrected),
+        "testable_pair_definition": "all four cells in the 2x2 carrier contingency table have >= 5 samples",
         "estimated_total_samples": estimated_total_samples,
         "n_total_pairs": int(len(per_pair_df)),
         "n_testable_pairs": n_testable,
+        "median_min_cell_count": float(per_pair_df["min_cell_count"].median()),
+        "median_effective_n": float(per_pair_df["n_effective"].median()),
         "median_mde": float(finite_mde.median()) if len(finite_mde) > 0 else None,
         "mean_mde": float(finite_mde.mean()) if len(finite_mde) > 0 else None,
         "proportion_pairs_mde_lt_0.1": float(prop_detectable),
-        "median_common_common_cooccurrence_rate": common_common_rate,
-        "min_cooccurrence_for_effect_0.1": min_cooccur_effect_01,
-        "min_cooccurrence_for_effect_0.05": min_cooccur_effect_005,
+        "median_common_common_cooccurrence_rate": common_common_cooccurrence_rate,
+        "median_common_common_effective_fraction": common_common_effective_fraction,
+        "min_effective_n_for_effect_0.1": min_effective_n_01,
+        "min_effective_n_for_effect_0.05": min_effective_n_005,
         "min_cohort_for_common_common_effect_0.1": min_cohort_effect_01,
         "min_cohort_for_common_common_effect_0.05": min_cohort_effect_005,
     }
@@ -715,6 +859,7 @@ def main() -> None:
     print(f"  Noise method:          {noise_method}")
     print(f"  sigma_synergy:         {sigma_synergy:.6f}")
     print(f"  Testable pairs:        {n_testable:,}")
+    print(f"  Median effective N:    {per_pair_df['n_effective'].median():.2f}")
     print(f"  Corrected alpha:       {alpha_corrected:.2e}")
     if len(finite_mde) > 0:
         print(f"  Median MDE:            {finite_mde.median():.4f}")

@@ -178,6 +178,8 @@ python scripts/explain.py [OPTIONS]
 | `--top-k-variants` | int | 100 | Number of top variants |
 | `--top-k-interactions` | int | 100 | Number of top interactions |
 | `--attention-threshold` | float | 0.1 | Min attention weight |
+| `--attention-threshold-mode` | str | absolute | Interaction threshold mode [`absolute`, `percentile`] |
+| `--attention-percentile` | float | 99.9 | Percentile cutoff when using percentile thresholding |
 | `--is-null-baseline` | flag | False | Flag for null baseline analysis |
 | `--device` | str | cuda | Device [cuda, cpu] |
 | `--genome-build` | str | GRCh37 | Reference genome build |
@@ -189,6 +191,8 @@ python scripts/explain.py \
     --preprocessed-data preprocessed.pt \
     --output-dir results/explainability \
     --n-steps 50 \
+    --attention-threshold-mode percentile \
+    --attention-percentile 99.9 \
     --device cuda
 ```
 
@@ -418,6 +422,73 @@ python scripts/validate_epistasis.py [OPTIONS]
 | `--device` | str | cuda | Device [cuda, cpu] |
 | `--genome-build` | str | GRCh37 | Reference genome build |
 
+`validate_epistasis.py` validates candidate pairs from `sieve_interactions.csv`. Those candidates are limited to pairs visible within the same chunk during `explain.py`.
+
+---
+
+### audit_cooccurrence.py
+
+```bash
+python scripts/audit_cooccurrence.py [OPTIONS]
+```
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--preprocessed-data` | path | required | Preprocessed data file |
+| `--output-dir` | path | required | Output directory |
+| `--maf-bins` | str | `0.001,0.01,0.05,0.1,0.5` | Carrier-frequency bin edges |
+| `--max-pairs` | int | 100000 | Maximum number of evaluated pairs |
+| `--top-k-variants` | int | 500 | Evaluate all pairs among the top-K carrier variants before adding low-frequency samples |
+| `--seed` | int | 42 | Random seed |
+
+Outputs include `cooccurrence_per_pair.csv`, which now carries the full `2x2` carrier contingency table for each evaluated pair.
+
+---
+
+### aggregate_gene_interactions.py
+
+```bash
+python scripts/aggregate_gene_interactions.py [OPTIONS]
+```
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--preprocessed-data` | path | required | Preprocessed data file |
+| `--variant-rankings` | path | required | Variant rankings CSV (raw or chrX-corrected) |
+| `--gene-rankings` | path | required | Gene rankings CSV (raw or corrected) |
+| `--null-rankings` | path | - | Null baseline variant rankings for significance-aware filtering |
+| `--cooccurrence` | path | - | Per-pair co-occurrence CSV for variant-level enrichment |
+| `--output-dir` | path | required | Output directory |
+| `--min-cooccur-samples` | int | 5 | Minimum gene-pair co-occurrence |
+| `--top-k-genes` | int | 50 | Top genes to include |
+| `--min-gene-score` | float | 0.0 | Minimum gene score |
+| `--significance-threshold` | str | `p_0.05` | Null-derived significance threshold to enforce when available |
+| `--min-significant-variants` | int | 1 | Minimum number of significant variants required for a gene |
+| `--allow-nonsignificant-genes` | flag | False | Allow genes with no null-significant variants |
+
+This script is the preferred gene-level interaction workflow when you have null-comparison and chrX-corrected attribution outputs available.
+
+---
+
+### epistasis_power_analysis.py
+
+```bash
+python scripts/epistasis_power_analysis.py [OPTIONS]
+```
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--cooccurrence` | path | required | Per-pair co-occurrence CSV from `audit_cooccurrence.py` |
+| `--cooccurrence-summary` | path | required | MAF-bin summary CSV from `audit_cooccurrence.py` |
+| `--real-attributions-npz` | path | - | Real-model attributions archive |
+| `--null-attributions-npz` | path | - | Null-model attributions archive |
+| `--epistasis-results` | path | - | `epistasis_validation.csv` if available |
+| `--output-dir` | path | required | Output directory |
+| `--alpha` | float | 0.05 | Family-wise significance level |
+| `--correction` | str | bonferroni | Multiple-testing correction [`bonferroni`, `fdr`] |
+
+Power is computed from the full `2x2` carrier table for each pair, not just the joint-carrier count. This avoids overstating power for near-ubiquitous common-common pairs.
+
 ---
 
 ### validate_discoveries.py
@@ -440,4 +511,3 @@ python scripts/validate_discoveries.py [OPTIONS]
 | `--genome-build` | str | GRCh37 | Reference genome build |
 
 ---
-

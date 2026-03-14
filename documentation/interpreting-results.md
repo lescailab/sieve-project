@@ -275,6 +275,22 @@ The figure produced by `plot_ablation_comparison.py` contains four panels:
 
 ### Epistasis Results
 
+SIEVE now provides two complementary interaction views:
+
+1. **Attention-based discovery**: high-attention variant pairs from `sieve_interactions.csv`, optionally followed by counterfactual validation in `epistasis_validation.csv`.
+2. **Post-hoc attribution interaction analysis**: co-occurrence, power, and gene-gene aggregation from `audit_cooccurrence.py`, `epistasis_power_analysis.py`, and `aggregate_gene_interactions.py`.
+
+#### Attention Discovery Output (`sieve_interactions.csv`)
+
+This file contains variant pairs that exceeded the attention discovery threshold in `explain.py`. They are best treated as candidate interactions for follow-up, not as a complete interaction catalogue.
+
+Key points:
+
+- These pairs are discovered from the model's intrinsic attention mechanism, which is a distinctive feature of SIEVE.
+- Discovery is currently restricted to pairs that occur within the same chunk.
+- `--attention-threshold-mode percentile` is often more informative than a fixed absolute threshold when attention is diffuse across many variants.
+- An empty `sieve_interactions.csv` means no pair crossed the current heuristic. It does not by itself prove an absence of interaction structure in the cohort.
+
 #### Validation Output (`epistasis_validation.csv`)
 
 Columns:
@@ -314,5 +330,23 @@ Columns:
 2. **Synergistic across genes**: Gene-gene interaction
 3. **Antagonistic**: Compensatory mechanism or regulatory feedback
 
----
+#### Post-hoc Interaction Outputs
 
+Use these when you need to understand whether the cohort is structurally able to support interaction detection even when the attention-based discovery file is sparse.
+
+`cooccurrence_summary.yaml`
+- Tells you how often evaluated pairs co-occur across MAF bins.
+- Useful for diagnosing whether the rare-variant tail is too sparse.
+- Does not solve the within-chunk visibility limit of the attention workflow.
+
+`power_analysis_summary.yaml`
+- Uses null-informed attribution noise plus the full `2x2` carrier table for each pair.
+- The critical quantity is the effective interaction sample size, not just `n_cooccur`.
+- Near-ubiquitous common-common pairs can have high co-occurrence but still low incremental interaction information.
+
+`gene_pair_interactions.csv`
+- Aggregates variant-level attribution support and co-occurrence at the gene-pair level.
+- Useful when exact variant-pair recurrence is sparse but multiple variants implicate the same genes.
+- Still grounded in the model's intrinsic attribution outputs rather than an external weight-only interaction score.
+
+---
