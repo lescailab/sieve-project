@@ -1,4 +1,4 @@
-{% set version = "0.1.0" %}
+{% set version = "1.0.0" %}
 
 package:
   name: sieve
@@ -8,7 +8,6 @@ source:
   path: ..
 
 build:
-  noarch: python
   number: 0
   script: "{{ PYTHON }} -m pip install . --no-deps -vv"
 
@@ -50,6 +49,12 @@ test:
     - sieve-correct-chrx-bias --help
     - sieve-validate-discoveries --help
     - sieve-validate-epistasis --help
+    - sieve-compare-ablation-rankings --help
+    - sieve-ablation-compare --help
+    - sieve-plot-ablation-comparison --help
+    - sieve-audit-cooccurrence --help
+    - sieve-epistasis-power-analysis --help
+    - sieve-aggregate-gene-interactions --help
 
 about:
   home: https://github.com/lescailab/sieve-project
@@ -58,7 +63,8 @@ about:
     SIEVE is a deep learning framework for variant discovery in exome
     case-control cohorts. This conda recipe installs core dependencies and
     exposes end-to-end CLI commands for preprocessing, training, explainability,
-    null baseline calibration, and biological validation workflows.
+    null baseline calibration, biological validation, ablation comparison, and
+    epistasis analysis workflows.
   license: MIT
   license_file: documentation/license.md
   dev_url: https://github.com/lescailab/sieve-project
