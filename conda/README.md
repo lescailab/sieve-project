@@ -26,8 +26,23 @@ CONDA_SOLVER=libmamba conda build conda \
 
 ### arm64 / linux-aarch64
 
-Run the identical commands above on an arm64 machine. The resulting package will
-be tagged `linux-aarch64` and can be uploaded to the same channel.
+Run the identical commands above on a Linux arm64 machine. The resulting package
+will be tagged `linux-aarch64` and can be uploaded to the same channel.
+
+### osx-arm64 (macOS Apple Silicon)
+
+On a Mac with Apple Silicon, omit the `pytorch` and `nvidia` channels. The
+conda-forge channel provides PyTorch builds compiled against NumPy 2.x with
+Metal/MPS support included automatically.
+
+```bash
+conda create -n sieve-build -c conda-forge python=3.11 conda>=26 conda-build>=26
+conda activate sieve-build
+conda build conda \
+    -c conda-forge \
+    --no-anaconda-upload \
+    --croot /tmp/sieve-conda-bld
+```
 
 ## Upload to Anaconda
 
@@ -39,18 +54,30 @@ anaconda upload \
     --channel sieve
 ```
 
-Replace `linux-64` with `linux-aarch64` when uploading the arm64 build.
+Replace `linux-64` with `linux-aarch64` or `osx-arm64` when uploading other
+architecture builds.
 
 ## Install from the channel
+
+### Linux (amd64 / aarch64)
 
 ```bash
 conda create -n sieve -c pytorch -c nvidia -c lescailab -c conda-forge python=3.11
 conda install -n sieve -c pytorch -c nvidia -c lescailab -c conda-forge sieve
 ```
 
+### macOS (Apple Silicon)
+
+```bash
+conda create -n sieve -c lescailab -c conda-forge python=3.12
+conda install -n sieve -c lescailab -c conda-forge sieve
+```
+
+Metal/MPS GPU acceleration is available out of the box via PyTorch's MPS backend.
+
 ## Maintenance checklist
 
 1. Keep `requirements: run` in `meta.yaml` aligned with `[project.dependencies]` in `pyproject.toml` where possible. If conda-forge/pytorch channel compatibility requires divergence (for example NumPy/Cython ABI constraints), document the reason in the recipe history.
 2. Bump `version` in `meta.yaml` **and** `pyproject.toml` when the project version changes.
 3. Keep command tests in `meta.yaml` aligned with `[project.scripts]` entry points.
-4. Build and upload a package for each supported architecture (amd64, arm64) before announcing a release.
+4. Build and upload a package for each supported architecture (linux-64, linux-aarch64, osx-arm64) before announcing a release.
