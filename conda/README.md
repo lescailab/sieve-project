@@ -16,10 +16,10 @@ time. Run the build on the target machine for each architecture.
 ### amd64 / linux-64
 
 ```bash
-conda create -n sieve-build -c conda-forge python=3.11 conda>=26 conda-build>=26
+conda create -n sieve-build -c conda-forge python=3.11 conda>=26 conda-build>=26 anaconda-client
 conda activate sieve-build
-CONDA_SOLVER=libmamba conda build conda \
-    -c pytorch -c nvidia -c conda-forge \
+conda build conda \
+    -c pytorch -c nvidia -c bioconda -c conda-forge \
     --no-anaconda-upload \
     --croot /tmp/sieve-conda-bld
 ```
@@ -49,22 +49,36 @@ conda build conda \
 ```bash
 # Requires ANACONDA_API_TOKEN to be set in the environment (e.g. via ~/.bashrc)
 anaconda upload \
-    /tmp/sieve-conda-bld/linux-64/sieve-1.0.0-py311_0.tar.bz2 \
+    /tmp/sieve-conda-bld/linux-64/sieve-1.0.0-*.conda \
     --user lescailab \
-    --channel sieve
+    --label main
 ```
+
+**Important:** use only `--label main`. Do **not** pass `--channel` — on
+anaconda.org `--channel` is an alias for `--label` and will create unwanted
+extra labels.
 
 Replace `linux-64` with `linux-aarch64` or `osx-arm64` when uploading other
 architecture builds.
 
 ## Install from the channel
 
+The recommended way to install is via the `environment.yml` at the repository
+root, which pins PyTorch to the pytorch channel (for CUDA support) while
+letting all other dependencies resolve from conda-forge/bioconda:
+
 ### Linux (amd64 / aarch64)
 
 ```bash
-conda create -n sieve -c pytorch -c nvidia -c lescailab -c conda-forge python=3.11
-conda install -n sieve -c pytorch -c nvidia -c lescailab -c conda-forge sieve
+micromamba env create -f environment.yml
+# or
+conda env create -f environment.yml
 ```
+
+The explicit `pytorch::` channel pins in the environment file are required
+because the pytorch channel carries old tqdm builds that, under strict channel
+priority, block conda-forge's working versions and prevent the solver from
+finding a solution.
 
 ### macOS (Apple Silicon)
 
