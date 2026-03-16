@@ -79,6 +79,7 @@ The `environment.yml` contains:
 
 ```yaml
 name: sieve
+channel_priority: flexible
 channels:
   - conda-forge
   - bioconda
@@ -90,12 +91,12 @@ dependencies:
   - pytorch::pytorch-cuda>=11.8
 ```
 
-The pytorch channel is deliberately **not** listed under `channels:` because
-conda-forge also carries PyTorch (CPU-only) and strict channel priority would
-block the CUDA build. Instead, the `pytorch::` prefix in `dependencies:`
-fetches PyTorch directly from the pytorch channel without entering the
-priority ordering. General dependencies (tqdm, libdeflate, etc.) resolve
-cleanly from conda-forge.
+`channel_priority: flexible` is required because conda-forge and the pytorch
+channel both carry PyTorch builds. Under the default strict priority,
+whichever channel is listed first blocks the other entirely. Flexible priority
+allows the solver to pick the best match across all channels, while the
+explicit `pytorch::` pins ensure the CUDA build is selected from the pytorch
+channel.
 
 ### macOS (Apple Silicon)
 

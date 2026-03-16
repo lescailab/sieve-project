@@ -1,4 +1,5 @@
 name: sieve
+channel_priority: flexible
 channels:
   - conda-forge
   - bioconda
