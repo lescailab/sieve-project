@@ -75,10 +75,25 @@ micromamba env create -f environment.yml
 conda env create -f environment.yml
 ```
 
-The explicit `pytorch::` channel pins in the environment file are required
-because the pytorch channel carries old tqdm builds that, under strict channel
-priority, block conda-forge's working versions and prevent the solver from
-finding a solution.
+The `environment.yml` contains:
+
+```yaml
+name: sieve
+channels:
+  - nvidia
+  - pytorch
+  - bioconda
+  - conda-forge
+  - lescailab
+dependencies:
+  - lescailab::sieve
+  - pytorch::pytorch>=2.0.0
+  - pytorch::pytorch-cuda>=11.8
+```
+
+The explicit `pytorch::` channel pins are required because the pytorch channel
+carries old tqdm builds that, under strict channel priority, block
+conda-forge's working versions and prevent the solver from finding a solution.
 
 ### macOS (Apple Silicon)
 
