@@ -83,7 +83,6 @@ channels:
   - conda-forge
   - bioconda
   - nvidia
-  - pytorch
   - lescailab
 dependencies:
   - lescailab::sieve
@@ -91,10 +90,12 @@ dependencies:
   - pytorch::pytorch-cuda>=11.8
 ```
 
-conda-forge must be listed first so that general dependencies (tqdm,
-libdeflate, etc.) resolve from conda-forge rather than being blocked by
-broken builds in the pytorch/nvidia channels. PyTorch is explicitly pinned
-to the pytorch channel with `pytorch::` to ensure the CUDA build is used.
+The pytorch channel is deliberately **not** listed under `channels:` because
+conda-forge also carries PyTorch (CPU-only) and strict channel priority would
+block the CUDA build. Instead, the `pytorch::` prefix in `dependencies:`
+fetches PyTorch directly from the pytorch channel without entering the
+priority ordering. General dependencies (tqdm, libdeflate, etc.) resolve
+cleanly from conda-forge.
 
 ### macOS (Apple Silicon)
 
