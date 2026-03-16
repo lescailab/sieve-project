@@ -89,11 +89,13 @@ dependencies:
   - lescailab::sieve
   - pytorch::pytorch>=2.0.0
   - pytorch::pytorch-cuda>=11.8
+  - conda-forge::tqdm>=4.65.0
 ```
 
-The explicit `pytorch::` channel pins are required because the pytorch channel
-carries old tqdm builds that, under strict channel priority, block
-conda-forge's working versions and prevent the solver from finding a solution.
+The explicit channel pins (`pytorch::`, `conda-forge::`) are required because
+the pytorch channel carries old tqdm builds that, under strict channel
+priority, block conda-forge's working versions and prevent the solver from
+finding a solution.
 
 ### macOS (Apple Silicon)
 
