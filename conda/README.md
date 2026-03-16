@@ -80,22 +80,21 @@ The `environment.yml` contains:
 ```yaml
 name: sieve
 channels:
+  - conda-forge
+  - bioconda
   - nvidia
   - pytorch
-  - bioconda
-  - conda-forge
   - lescailab
 dependencies:
   - lescailab::sieve
   - pytorch::pytorch>=2.0.0
   - pytorch::pytorch-cuda>=11.8
-  - conda-forge::tqdm>=4.65.0
 ```
 
-The explicit channel pins (`pytorch::`, `conda-forge::`) are required because
-the pytorch channel carries old tqdm builds that, under strict channel
-priority, block conda-forge's working versions and prevent the solver from
-finding a solution.
+conda-forge must be listed first so that general dependencies (tqdm,
+libdeflate, etc.) resolve from conda-forge rather than being blocked by
+broken builds in the pytorch/nvidia channels. PyTorch is explicitly pinned
+to the pytorch channel with `pytorch::` to ensure the CUDA build is used.
 
 ### macOS (Apple Silicon)
 
