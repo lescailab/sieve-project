@@ -95,8 +95,44 @@ pip install -e ".[dev]"
 
 SIEVE requires:
 
-- Multi-sample VCF file annotated with VEP (`.vcf.gz` with index)
+- Multi-sample VCF file **annotated with Ensembl VEP** (`.vcf.gz` with tabix index)
 - Phenotype file mapping samples to case/control labels
+
+#### Annotate your VCF with VEP
+
+If your VCF is not already annotated, you **must** run Ensembl VEP first.
+SIEVE will refuse to preprocess an unannotated VCF.
+
+```bash
+# Install VEP and download cache (once)
+conda install -c bioconda ensembl-vep
+vep_install -a cf -s homo_sapiens -y GRCh37 -c /path/to/vep_cache
+
+# Annotate
+vep \
+    --input_file variants.vcf.gz \
+    --output_file variants_vep.vcf.gz \
+    --vcf \
+    --compress_output bgzip \
+    --symbol \
+    --canonical \
+    --sift b \
+    --polyphen b \
+    --assembly GRCh37 \
+    --offline \
+    --cache \
+    --dir_cache /path/to/vep_cache \
+    --fork 4
+
+# Index
+tabix -p vcf variants_vep.vcf.gz
+```
+
+> **Important**: Do not use a custom `--fields` argument. SIEVE expects VEP's
+> default CSQ field order. See the [User Guide](USER_GUIDE.md) for details on
+> which fields are used and why.
+
+#### Phenotype file
 
 ```bash
 # Example phenotype file format (TSV)
@@ -371,6 +407,25 @@ If training is too slow:
 - Increase `--batch-size` if GPU memory allows
 - Reduce `--n-steps` for integrated gradients (e.g., 50 → 25)
 - Use `--skip-attention` in explain.py if only need variant rankings
+
+### Preprocessing Fails with "does not contain VEP CSQ annotations"
+
+Your VCF has not been annotated with Ensembl VEP. Run `vep` as described in the
+Quick Start section before calling `sieve-preprocess`. See the
+[User Guide](USER_GUIDE.md#how-to-annotate-your-vcf-with-ensembl-vep) for the
+full command and required flags.
+
+### Preprocessing Fails with "zero variant-sample assignments"
+
+The VCF header declares a CSQ field, but no variants were loaded. The error
+message includes diagnostics; the most common causes are:
+
+- **All CSQ values are empty**: The VCF was re-header'd or filtered after VEP
+  annotation, stripping the actual CSQ values while keeping the header line.
+- **Allele mismatch**: VEP's allele representation in CSQ doesn't match the
+  VCF ALT field (can happen with post-VEP normalisation tools).
+- **All genotypes filtered**: Every genotype fell below the GQ threshold
+  (default 20). Try `--min-gq 0` to test.
 
 ### Model Not Learning
 
