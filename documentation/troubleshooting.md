@@ -26,17 +26,60 @@ python scripts/train.py \
 
 ### Data Preparation Issues
 
-#### VCF parsing fails
+#### "does not contain VEP CSQ annotations"
 
-**Symptom**: `KeyError: 'CSQ'` or `ValueError: No VEP annotations found`
+**Symptom**: `ValueError: VCF file '...' does not contain VEP CSQ annotations.`
 
-**Solution**: Your VCF is not VEP-annotated. Run VEP:
+**Cause**: Your VCF has not been annotated with Ensembl VEP, or uses a different
+annotation format (e.g. SnpEff `ANN` field).
+
+**Solution**: Run VEP before preprocessing. See the
+[Detailed Usage](detailed-usage.md#how-to-annotate-your-vcf-with-ensembl-vep)
+page for the full command and required flags. The minimal command is:
+
 ```bash
-vep --input_file your.vcf \
-    --output_file annotated.vcf \
-    --vcf --symbol --sift b --polyphen b \
-    --assembly GRCh37
+vep \
+    --input_file your.vcf.gz \
+    --output_file annotated.vcf.gz \
+    --vcf \
+    --compress_output bgzip \
+    --symbol \
+    --canonical \
+    --sift b \
+    --polyphen b \
+    --assembly GRCh37 \
+    --offline \
+    --cache \
+    --dir_cache /path/to/vep_cache
+tabix -p vcf annotated.vcf.gz
 ```
+
+!!! warning "Do not use `--fields`"
+    SIEVE expects VEP's **default CSQ field order** (hardcoded indices).
+    Passing a custom `--fields` argument will break parsing silently.
+
+#### "zero variant-sample assignments"
+
+**Symptom**: `ValueError: Preprocessing produced zero variant-sample assignments
+from N VCF records.`
+
+**Cause**: The VCF header declares a CSQ field, but no variant data was loaded.
+The error message includes diagnostics; the most common causes are:
+
+- **All CSQ values empty**: The VCF was re-header'd or filtered after VEP
+  annotation, stripping the actual CSQ values while keeping the header line.
+- **Allele mismatch**: VEP's allele representation in CSQ doesn't match the
+  VCF ALT field (can happen with post-VEP normalisation tools).
+- **All genotypes filtered**: Every genotype fell below the GQ threshold
+  (default 20). Try `--min-gq 0` to test.
+
+**Verify** your CSQ values exist:
+```bash
+bcftools query -f '%INFO/CSQ\n' your.vcf.gz | head -3
+```
+
+If this prints empty lines or `.`, the CSQ values are missing despite the
+header declaring the field.
 
 #### Sample name mismatch
 

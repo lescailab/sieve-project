@@ -15,20 +15,99 @@ Your VCF must be:
 4. **Contig naming may be either style** (e.g., `1` or `chr1`; harmonised internally)
 5. **Bgzipped and indexed** (`.vcf.gz` + `.vcf.gz.tbi`)
 
-#### Running VEP
+#### How to Annotate Your VCF with Ensembl VEP
 
-If your VCF is not annotated:
+SIEVE requires VCF files annotated with [Ensembl VEP](https://www.ensembl.org/vep)
+so that variant consequences, gene symbols, and functional scores are available
+in the `CSQ` INFO field. **If your VCF is not VEP-annotated, preprocessing will
+fail with a clear error message.**
+
+##### Installing VEP (bioconda)
 
 ```bash
-vep --input_file variants.vcf \
-    --output_file variants_annotated.vcf \
+# Install VEP from bioconda
+conda install -c bioconda ensembl-vep
+
+# Download the VEP cache for your genome build (required for --offline mode)
+# GRCh37:
+vep_install -a cf -s homo_sapiens -y GRCh37 -c /path/to/vep_cache
+# GRCh38:
+vep_install -a cf -s homo_sapiens -y GRCh38 -c /path/to/vep_cache
+```
+
+The cache download may take a while (~15 GB for human). You only need to do this
+once.
+
+##### Running VEP
+
+```bash
+vep \
+    --input_file variants.vcf.gz \
+    --output_file variants_vep.vcf.gz \
     --vcf \
+    --compress_output bgzip \
     --symbol \
+    --canonical \
     --sift b \
     --polyphen b \
     --assembly GRCh37 \
     --offline \
-    --cache /path/to/vep_cache
+    --cache \
+    --dir_cache /path/to/vep_cache \
+    --fork 4 \
+    --no_stats
+```
+
+After annotation, create a tabix index:
+
+```bash
+tabix -p vcf variants_vep.vcf.gz
+```
+
+##### Required VEP Flags Explained
+
+SIEVE relies on specific CSQ sub-fields at **hardcoded positions** in VEP's
+default field order. **Do not use a custom `--fields` argument** — the default
+VEP output order is expected.
+
+| Flag | CSQ index | Why SIEVE needs it |
+|------|-----------|-------------------|
+| `--vcf` | — | Output must remain VCF format with CSQ in the INFO field |
+| `--compress_output bgzip` | — | SIEVE expects `.vcf.gz` input; tabix index also required |
+| `--symbol` | 3 | Gene symbol — used for gene-level aggregation |
+| `--canonical` | 24 | Marks canonical transcript — used to select the representative annotation per variant |
+| `--sift b` | 36 | SIFT prediction + score (e.g. `deleterious(0.01)`) — required for L3/L4 annotation levels |
+| `--polyphen b` | 37 | PolyPhen prediction + score (e.g. `probably_damaging(0.999)`) — required for L3/L4 annotation levels |
+| `--assembly` | — | Must match your reference build (GRCh37 or GRCh38) |
+| `--offline --cache` | — | Use local cache; no internet required at runtime |
+| `--fork N` | — | Optional; parallelise for speed |
+| `--no_stats` | — | Optional; skip HTML stats report for faster runs |
+
+The `b` option for `--sift` and `--polyphen` outputs both the prediction label
+and the numeric score in `prediction(score)` format, which SIEVE's parser
+extracts.
+
+##### What Happens Without VEP Annotation
+
+If you pass an unannotated VCF to `sieve-preprocess`, the parser will detect the
+missing `CSQ` header and raise an error:
+
+```
+ValueError: VCF file 'variants.vcf.gz' does not contain VEP CSQ annotations.
+SIEVE requires VCF files annotated with Ensembl VEP.
+...
+```
+
+##### Verifying Your VEP Annotation
+
+You can verify the CSQ field is present and correctly formatted:
+
+```bash
+# Check the header for CSQ definition
+bcftools view -h variants_vep.vcf.gz | grep '##INFO=<ID=CSQ'
+
+# Inspect a few CSQ values
+bcftools query -f '%CHROM\t%POS\t%ALT\t%INFO/CSQ\n' variants_vep.vcf.gz | head -3
 ```
 
 #### Phenotype File Format

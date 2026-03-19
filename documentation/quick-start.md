@@ -8,15 +8,37 @@ git clone https://github.com/lescailab/sieve-project.git
 cd sieve-project
 pip install -e .
 
-# 2. (Optional, recommended) Infer genetic sex for ploidy-aware encoding
+# 2. Annotate your VCF with Ensembl VEP (if not already done)
+#    Install VEP and download cache (once):
+conda install -c bioconda ensembl-vep
+vep_install -a cf -s homo_sapiens -y GRCh37 -c /path/to/vep_cache
+
+#    Run annotation:
+vep \
+    --input_file your_data.vcf.gz \
+    --output_file your_data_vep.vcf.gz \
+    --vcf \
+    --compress_output bgzip \
+    --symbol \
+    --canonical \
+    --sift b \
+    --polyphen b \
+    --assembly GRCh37 \
+    --offline \
+    --cache \
+    --dir_cache /path/to/vep_cache \
+    --fork 4
+tabix -p vcf your_data_vep.vcf.gz
+
+# 3. (Optional, recommended) Infer genetic sex for ploidy-aware encoding
 python scripts/infer_sex.py \
-    --vcf your_data.vcf.gz \
+    --vcf your_data_vep.vcf.gz \
     --output-dir results/sex_inference \
     --genome-build GRCh37
 
-# 3. Preprocess (once)
+# 4. Preprocess (once)
 python scripts/preprocess.py \
-    --vcf your_data.vcf.gz \
+    --vcf your_data_vep.vcf.gz \
     --phenotypes phenotypes.tsv \
     --output preprocessed.pt \
     --sex-map results/sex_inference/sample_sex.tsv \
