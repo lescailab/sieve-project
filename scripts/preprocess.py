@@ -141,6 +141,14 @@ def main():
     else:
         print(f"  Variants per sample: 0 (no variants found)")
 
+    # Refuse to save empty data
+    total_variants = sum(variant_counts)
+    if total_variants == 0:
+        print("\nERROR: No variants were loaded for any sample.")
+        print("This typically means the VCF file is not annotated with VEP.")
+        print("See the SIEVE documentation for VEP annotation instructions.")
+        sys.exit(1)
+
     # Save preprocessed data
     print(f"\nSaving preprocessed data...")
     output_path = Path(args.output)

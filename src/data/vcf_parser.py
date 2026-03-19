@@ -492,6 +492,34 @@ def parse_vcf_cyvcf2(
     vcf = cyvcf2.VCF(str(vcf_path))
     samples = vcf.samples
 
+    # -------------------------------------------------------------------
+    # Validate that VCF contains VEP CSQ annotations in the header
+    # -------------------------------------------------------------------
+    has_csq = False
+    for header_line in vcf.raw_header.split('\n'):
+        if header_line.startswith('##INFO=<ID=CSQ'):
+            has_csq = True
+            break
+
+    if not has_csq:
+        available_info = [
+            line.split('ID=')[1].split(',')[0]
+            for line in vcf.raw_header.split('\n')
+            if line.startswith('##INFO=<ID=')
+        ]
+        raise ValueError(
+            f"VCF file '{vcf_path}' does not contain VEP CSQ annotations.\n"
+            f"SIEVE requires VCF files annotated with Ensembl VEP.\n"
+            f"Run VEP before preprocessing:\n"
+            f"\n"
+            f"  vep --input_file {vcf_path} \\\n"
+            f"      --output_file annotated.vcf \\\n"
+            f"      --vcf --symbol --canonical --sift b --polyphen b \\\n"
+            f"      --assembly GRCh37 --offline --cache\n"
+            f"\n"
+            f"Available INFO fields in this VCF: {available_info}"
+        )
+
     # Validate that all samples have phenotypes
     missing_phenotypes = [s for s in samples if s not in phenotypes]
     if missing_phenotypes:
@@ -509,6 +537,9 @@ def parse_vcf_cyvcf2(
 
     # Iterate through variants
     variant_count = 0
+    csq_missing_count = 0
+    csq_allele_mismatch_count = 0
+    assigned_count = 0
     ploidy_corrections = 0
     skipped_female_y = 0
     for variant in vcf:
@@ -527,8 +558,10 @@ def parse_vcf_cyvcf2(
         try:
             csq_raw = variant.INFO.get('CSQ')
             if not csq_raw:
+                csq_missing_count += 1
                 continue  # Skip variants without VEP annotation
         except KeyError:
+            csq_missing_count += 1
             continue
 
         # Process each alternate allele
@@ -537,6 +570,7 @@ def parse_vcf_cyvcf2(
             csq_annotations = parse_csq_field(csq_raw, alt)
 
             if not csq_annotations:
+                csq_allele_mismatch_count += 1
                 continue  # No annotations for this allele
 
             # Select canonical annotation
@@ -612,11 +646,49 @@ def parse_vcf_cyvcf2(
                 )
 
                 sample_variants[sample].append(var_record)
+                assigned_count += 1
 
     print(f"Processed {variant_count} variants from VCF")
+    print(f"  Variants without CSQ annotation: {csq_missing_count}")
+    print(f"  Allele mismatches in CSQ: {csq_allele_mismatch_count}")
+    print(f"  Variant-sample assignments: {assigned_count}")
     if sex_map:
         print(f"  Ploidy corrections applied: {ploidy_corrections}")
         print(f"  Female Y variants skipped: {skipped_female_y}")
+
+    # -------------------------------------------------------------------
+    # Fail fast if no variants were assigned to any sample
+    # -------------------------------------------------------------------
+    if assigned_count == 0:
+        diagnostics = []
+        if csq_missing_count == variant_count:
+            diagnostics.append(
+                "ALL variants lacked CSQ values despite the header declaring "
+                "the field. The VCF may have been filtered or re-header'd "
+                "after VEP annotation."
+            )
+        elif csq_missing_count > 0:
+            diagnostics.append(
+                f"{csq_missing_count}/{variant_count} variants had no CSQ "
+                f"annotation (partial VEP run?)."
+            )
+        if csq_allele_mismatch_count > 0:
+            diagnostics.append(
+                f"{csq_allele_mismatch_count} alleles had CSQ annotations "
+                f"that did not match the ALT allele. This may indicate an "
+                f"allele representation mismatch between VEP and the VCF."
+            )
+        if csq_missing_count == 0 and csq_allele_mismatch_count == 0:
+            diagnostics.append(
+                "CSQ annotations were parsed successfully but all genotypes "
+                "were either reference (0/0) or below the GQ threshold "
+                f"(min_gq={min_gq})."
+            )
+        raise ValueError(
+            f"Preprocessing produced zero variant-sample assignments from "
+            f"{variant_count} VCF records.\n"
+            + "\n".join(f"  - {d}" for d in diagnostics)
+        )
 
     # Yield SampleVariants for each sample
     for sample in samples:
