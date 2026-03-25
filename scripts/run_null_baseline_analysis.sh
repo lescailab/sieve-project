@@ -20,6 +20,9 @@
 #   REAL_RESULTS=/path/to/results/explainability \
 #   OUTPUT_BASE=/path/to/output \
 #   bash scripts/run_null_baseline_analysis.sh
+#
+# Optional:
+#   NULL_DATA=/path/to/permuted.pt \   # Skip permutation step if already generated
 
 set -e  # Exit on error
 
@@ -39,6 +42,7 @@ INPUT_DATA="${INPUT_DATA:-}"
 REAL_EXPERIMENT="${REAL_EXPERIMENT:-}"
 REAL_RESULTS="${REAL_RESULTS:-}"
 OUTPUT_BASE="${OUTPUT_BASE:-}"
+NULL_DATA="${NULL_DATA:-}"
 DEVICE="${DEVICE:-cuda}"
 
 echo "=============================================="
@@ -48,6 +52,7 @@ echo "Input data:       $INPUT_DATA"
 echo "Real experiment:  $REAL_EXPERIMENT"
 echo "Real results:     $REAL_RESULTS"
 echo "Output base:      $OUTPUT_BASE"
+echo "Null data:        ${NULL_DATA:-<will be generated>}"
 echo ""
 
 # -------------------------------------------------------------------
@@ -173,16 +178,24 @@ if [ -n "$CFG_SEX_MAP" ] && [ ! -f "$CFG_SEX_MAP" ]; then
 fi
 
 # -------------------------------------------------------------------
-# Step 1: Create permuted dataset
+# Step 1: Create permuted dataset (or use pre-existing one)
 # -------------------------------------------------------------------
-echo "[Step 1/4] Creating permuted dataset..."
-INPUT_BASENAME="$(basename "$INPUT_DATA" .pt)"
-NULL_DATA="${OUTPUT_BASE}/data/${INPUT_BASENAME}_NULL.pt"
+if [ -n "$NULL_DATA" ]; then
+    if [ ! -f "$NULL_DATA" ]; then
+        echo "ERROR: NULL_DATA was set but file not found at: $NULL_DATA"
+        exit 1
+    fi
+    echo "[Step 1/4] Using pre-existing permuted dataset: $NULL_DATA"
+else
+    echo "[Step 1/4] Creating permuted dataset..."
+    INPUT_BASENAME="$(basename "$INPUT_DATA" .pt)"
+    NULL_DATA="${OUTPUT_BASE}/data/${INPUT_BASENAME}_NULL.pt"
 
-"$PYTHON" "$REPO_ROOT/scripts/create_null_baseline.py" \
-    --input "$INPUT_DATA" \
-    --output "$NULL_DATA" \
-    --seed "$CFG_SEED"
+    "$PYTHON" "$REPO_ROOT/scripts/create_null_baseline.py" \
+        --input "$INPUT_DATA" \
+        --output "$NULL_DATA" \
+        --seed "$CFG_SEED"
+fi
 
 echo ""
 
