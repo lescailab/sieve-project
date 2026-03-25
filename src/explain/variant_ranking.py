@@ -44,6 +44,140 @@ class VariantRanker:
         if aggregation not in ['mean', 'max', 'rank_average']:
             raise ValueError(f"Unknown aggregation: {aggregation}")
 
+        # Internal accumulator for incremental sample feeding
+        self._accumulated_scores: Optional[Dict] = None
+        self._case_indices: set = set()
+        self._control_indices: set = set()
+
+    def accumulate_sample(
+        self,
+        variant_scores: np.ndarray,
+        positions: np.ndarray,
+        gene_ids: np.ndarray,
+        chromosomes: np.ndarray,
+        sample_idx: int,
+        is_case: Optional[bool] = None
+    ) -> None:
+        """
+        Incrementally accumulate scores from a single sample.
+
+        This performs the same logic as the inner loop of rank_variants(),
+        but for one sample at a time. Call finalize_rankings() after all
+        samples have been accumulated to produce the final DataFrame.
+
+        Parameters
+        ----------
+        variant_scores : np.ndarray
+            Aggregated variant attribution scores (1D), shape (num_variants,)
+        positions : np.ndarray
+            Genomic positions, shape (num_variants,)
+        gene_ids : np.ndarray
+            Gene assignments, shape (num_variants,)
+        chromosomes : np.ndarray
+            Chromosome labels, shape (num_variants,)
+        sample_idx : int
+            Index of this sample
+        is_case : Optional[bool]
+            True if case, False if control, None if unknown
+        """
+        if self._accumulated_scores is None:
+            self._accumulated_scores = defaultdict(lambda: {
+                'attributions': [],
+                'case_attributions': [],
+                'control_attributions': [],
+                'samples': []
+            })
+
+        abs_attr = np.abs(variant_scores)
+        if abs_attr.ndim > 1:
+            abs_attr = np.linalg.norm(abs_attr, ord=2, axis=1)
+
+        for i, (pos, gene) in enumerate(zip(positions, gene_ids)):
+            chrom = chromosomes[i]
+            key = (str(chrom), int(pos), int(gene))
+            score = float(abs_attr[i])
+
+            self._accumulated_scores[key]['attributions'].append(score)
+            self._accumulated_scores[key]['samples'].append(sample_idx)
+
+            if is_case is True:
+                self._accumulated_scores[key]['case_attributions'].append(score)
+            elif is_case is False:
+                self._accumulated_scores[key]['control_attributions'].append(score)
+
+    def finalize_rankings(self) -> pd.DataFrame:
+        """
+        Build final ranked DataFrame from accumulated scores.
+
+        Produces identical output to rank_variants() — same columns,
+        same ranking logic, same scores.
+
+        Returns
+        -------
+        rankings : pd.DataFrame
+            Ranked variants (same format as rank_variants output)
+        """
+        if self._accumulated_scores is None:
+            raise ValueError("No samples accumulated. Call accumulate_sample() first.")
+
+        variant_scores = self._accumulated_scores
+
+        # Build DataFrame — identical logic to rank_variants()
+        records = []
+        for (chrom, pos, gene), scores in variant_scores.items():
+            attrs = np.array(scores['attributions'])
+
+            variant_info = self.variant_info_map.get((chrom, pos, gene), {})
+            gene_name = variant_info.get('gene_name', f'GENE_{gene}')
+
+            record = {
+                'chromosome': chrom,
+                'position': pos,
+                'gene_name': gene_name,
+                'gene_id': gene,
+                'mean_attribution': float(np.mean(attrs)),
+                'max_attribution': float(np.max(attrs)),
+                'median_attribution': float(np.median(attrs)),
+                'std_attribution': float(np.std(attrs)),
+                'num_samples': len(attrs),
+            }
+
+            if scores['case_attributions']:
+                record['case_attribution'] = float(np.mean(scores['case_attributions']))
+                record['case_num_samples'] = len(scores['case_attributions'])
+
+            if scores['control_attributions']:
+                record['control_attribution'] = float(np.mean(scores['control_attributions']))
+                record['control_num_samples'] = len(scores['control_attributions'])
+
+            if scores['case_attributions'] and scores['control_attributions']:
+                record['case_control_diff'] = (
+                    record['case_attribution'] - record['control_attribution']
+                )
+
+            records.append(record)
+
+        df = pd.DataFrame(records)
+
+        # Compute final ranking — identical logic to rank_variants()
+        if self.aggregation == 'mean':
+            df['score'] = df['mean_attribution']
+        elif self.aggregation == 'max':
+            df['score'] = df['max_attribution']
+        elif self.aggregation == 'rank_average':
+            df['rank_mean'] = rankdata(-df['mean_attribution'])
+            df['rank_max'] = rankdata(-df['max_attribution'])
+            df['rank_samples'] = rankdata(-df['num_samples'])
+            df['score'] = (df['rank_mean'] + df['rank_max'] + df['rank_samples']) / 3
+
+        df['rank'] = rankdata(df['score']).astype(int)
+        df = df.sort_values('rank')
+
+        # Reset accumulator
+        self._accumulated_scores = None
+
+        return df
+
     def rank_variants(
         self,
         attributions: List[np.ndarray],
