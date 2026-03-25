@@ -31,6 +31,9 @@ Author: Francesco Lescai
 """
 
 import argparse
+import gc
+import shutil
+from collections import Counter
 from pathlib import Path
 import yaml
 import torch
@@ -267,125 +270,7 @@ def main():
         print(f"  Chunk size: {chunk_size}")
         print(f"  Processing ALL chunks per sample for FULL GENOME coverage")
 
-        # Process each sample's chunks and combine attributions
-        all_attributions = []
-        all_variant_scores = []
-        all_metadata = []
-
-        num_samples = len(all_samples)
-        print(f"\nProcessing {num_samples} samples (chunk-by-chunk)...")
-
-        for sample_idx in range(num_samples):
-            if (sample_idx + 1) % 10 == 0 or (sample_idx + 1) == num_samples:
-                print(f"  Sample {sample_idx + 1}/{num_samples}...")
-
-            # Get all chunks for this sample
-            chunk_indices = dataset.get_chunks_for_sample(sample_idx)
-
-            # Process each chunk
-            chunk_attributions = []
-            chunk_positions = []
-            chunk_gene_ids = []
-            chunk_chromosomes = []  # NEW: Track chromosomes for each variant
-
-            for chunk_idx in chunk_indices:
-                chunk = dataset[chunk_idx]
-
-                # Get chunk info to map back to original variants
-                chunk_info = dataset.chunk_info[chunk_idx]
-                start_idx = chunk_info['start_idx']
-                end_idx = chunk_info['end_idx']
-                original_variants = all_samples[sample_idx].variants[start_idx:end_idx]
-
-                # Move to device
-                features = chunk['features'].unsqueeze(0).to(args.device)
-                positions = chunk['positions'].unsqueeze(0).to(args.device)
-                gene_ids = chunk['gene_ids'].unsqueeze(0).to(args.device)
-                mask = chunk['mask'].unsqueeze(0).to(args.device)
-
-                # Compute attributions for this chunk
-                attr = explainer.attribute(features, positions, gene_ids, mask)
-
-                # Extract valid variants (non-padded)
-                valid_mask = mask[0].cpu().numpy()
-                attr_valid = attr[0][valid_mask].cpu().numpy()
-
-                # Get chromosomes from original variants (matching valid positions)
-                valid_chroms = np.array([v.chrom for v in original_variants])[valid_mask]
-
-                chunk_attributions.append(attr_valid)
-                chunk_positions.append(positions[0][valid_mask].cpu().numpy())
-                chunk_gene_ids.append(gene_ids[0][valid_mask].cpu().numpy())
-                chunk_chromosomes.append(valid_chroms)
-
-            # Combine all chunks for this sample
-            sample_attributions = np.concatenate(chunk_attributions, axis=0)
-            sample_positions = np.concatenate(chunk_positions, axis=0)
-            sample_gene_ids = np.concatenate(chunk_gene_ids, axis=0)
-            sample_chromosomes = np.concatenate(chunk_chromosomes, axis=0)  # NEW
-
-            # Aggregate to variant scores (L2 norm across features)
-            if sample_attributions.ndim > 1:
-                sample_variant_scores = np.linalg.norm(sample_attributions, ord=2, axis=1)
-            else:
-                sample_variant_scores = np.abs(sample_attributions)
-
-            # Store for this sample
-            all_attributions.append(sample_attributions)
-            all_variant_scores.append(sample_variant_scores)
-            all_metadata.append({
-                'positions': sample_positions,
-                'gene_ids': sample_gene_ids,
-                'chromosomes': sample_chromosomes,  # NEW: Include chromosomes
-                'sample_idx': sample_idx,
-                'sample_id': all_samples[sample_idx].sample_id,
-                'label': all_samples[sample_idx].label
-            })
-
-        attributions = all_attributions
-        variant_scores = all_variant_scores
-        metadata = all_metadata
-
-        print(f"\nComputed attributions for {len(attributions)} samples")
-        print(f"CRITICAL: All chunks processed - FULL GENOME coverage achieved!")
-
-        # Diagnostic: Check what variants are in the metadata
-        print(f"\nDiagnostic: Checking metadata variant distribution...")
-        metadata_variant_count = sum(len(m['positions']) for m in metadata)
-        print(f"  Total variants in metadata across all samples: {metadata_variant_count:,}")
-
-        # Check chromosome distribution in metadata
-        from collections import Counter
-        all_chroms = []
-        for sample in all_samples:
-            for variant in sample.variants:
-                all_chroms.append(variant.chrom)
-
-        chrom_dist = Counter(all_chroms)
-        print(f"  Chromosomes in original data: {len(chrom_dist)}")
-        for chrom in sorted(chrom_dist.keys(), key=lambda x: (not x.isdigit(), int(x) if x.isdigit() else 999, x))[:10]:
-            print(f"    Chr {chrom}: {chrom_dist[chrom]:,} variants")
-        if len(chrom_dist) > 10:
-            print(f"    ... and {len(chrom_dist) - 10} more chromosomes")
-
-        # Check a sample of positions and genes from metadata
-        if len(metadata) > 0 and len(metadata[0]['positions']) > 0:
-            sample_meta = metadata[0]
-            print(f"\n  First sample has {len(sample_meta['positions']):,} variants in attributions")
-            print(f"  First 5 positions: {sample_meta['positions'][:5].tolist()}")
-            print(f"  First 5 gene_ids: {sample_meta['gene_ids'][:5].tolist()}")
-
-        # Save raw attributions
-        attributions_path = output_dir / 'attributions.npz'
-        np.savez(
-            attributions_path,
-            attributions=np.array(attributions, dtype=object),
-            variant_scores=np.array(variant_scores, dtype=object),
-            metadata=np.array(metadata, dtype=object)
-        )
-        print(f"Saved attributions to {attributions_path}")
-
-        # === BUILD VARIANT INFO MAP ===
+        # === BUILD VARIANT INFO MAP (before IG loop, needed for ranker) ===
         # Map (chrom, position, gene_id) -> {gene_name} for annotation
         # CRITICAL: Include chromosome in key to prevent position collisions!
         # Same position number can exist on different chromosomes.
@@ -429,26 +314,181 @@ def main():
         if len(chrom_counts) > 10:
             print(f"  ... and {len(chrom_counts) - 10} more chromosomes")
 
-        # === VARIANT RANKING ===
+        # === PREPARE INCREMENTAL PROCESSING ===
+        # Create ranker upfront for incremental sample accumulation
+        ranker = VariantRanker(aggregation='rank_average', variant_info_map=variant_info_map)
+
+        # Determine case/control sets upfront
+        case_indices = set(i for i in range(len(all_samples)) if all_samples[i].label == 1)
+        control_indices = set(i for i in range(len(all_samples)) if all_samples[i].label == 0)
+        print(f"Cases: {len(case_indices)}, Controls: {len(control_indices)}")
+
+        # Temp directory for incremental attribution saving (avoids holding all in RAM)
+        tmp_dir = output_dir / '_tmp_attributions'
+        tmp_dir.mkdir(exist_ok=True)
+
+        # Lightweight metadata list (small 1D arrays + scalars per sample)
+        all_metadata = []
+
+        num_samples = len(all_samples)
+        metadata_variant_count = 0
+        print(f"\nProcessing {num_samples} samples (chunk-by-chunk)...")
+
+        for sample_idx in range(num_samples):
+            if (sample_idx + 1) % 10 == 0 or (sample_idx + 1) == num_samples:
+                print(f"  Sample {sample_idx + 1}/{num_samples}...")
+
+            # Get all chunks for this sample
+            chunk_indices = dataset.get_chunks_for_sample(sample_idx)
+
+            # Process each chunk
+            chunk_attributions = []
+            chunk_positions = []
+            chunk_gene_ids = []
+            chunk_chromosomes = []
+
+            for chunk_idx in chunk_indices:
+                chunk = dataset[chunk_idx]
+
+                # Get chunk info to map back to original variants
+                chunk_info = dataset.chunk_info[chunk_idx]
+                start_idx = chunk_info['start_idx']
+                end_idx = chunk_info['end_idx']
+                original_variants = all_samples[sample_idx].variants[start_idx:end_idx]
+
+                # Move to device
+                features = chunk['features'].unsqueeze(0).to(args.device)
+                positions = chunk['positions'].unsqueeze(0).to(args.device)
+                gene_ids = chunk['gene_ids'].unsqueeze(0).to(args.device)
+                mask = chunk['mask'].unsqueeze(0).to(args.device)
+
+                # Compute attributions for this chunk
+                attr = explainer.attribute(features, positions, gene_ids, mask)
+
+                # Extract valid variants (non-padded) to CPU numpy immediately
+                valid_mask = mask[0].cpu().numpy()
+                attr_valid = attr[0][valid_mask].cpu().numpy()
+
+                # Get chromosomes from original variants (matching valid positions)
+                valid_chroms = np.array([v.chrom for v in original_variants])[valid_mask]
+
+                chunk_attributions.append(attr_valid)
+                chunk_positions.append(positions[0][valid_mask].cpu().numpy())
+                chunk_gene_ids.append(gene_ids[0][valid_mask].cpu().numpy())
+                chunk_chromosomes.append(valid_chroms)
+
+                # Free GPU tensors immediately after extracting to CPU
+                del features, positions, gene_ids, mask, attr
+
+            # Combine all chunks for this sample
+            sample_attributions = np.concatenate(chunk_attributions, axis=0)
+            sample_positions = np.concatenate(chunk_positions, axis=0)
+            sample_gene_ids = np.concatenate(chunk_gene_ids, axis=0)
+            sample_chromosomes = np.concatenate(chunk_chromosomes, axis=0)
+
+            # Aggregate to variant scores (L2 norm across features)
+            if sample_attributions.ndim > 1:
+                sample_variant_scores = np.linalg.norm(sample_attributions, ord=2, axis=1)
+            else:
+                sample_variant_scores = np.abs(sample_attributions)
+
+            # Save this sample's full data to disk immediately (freed from RAM after)
+            np.savez(
+                tmp_dir / f'sample_{sample_idx}.npz',
+                attributions=sample_attributions,
+                variant_scores=sample_variant_scores,
+            )
+
+            # Feed scores into ranker incrementally (then discard per-sample arrays)
+            is_case = True if sample_idx in case_indices else (
+                False if sample_idx in control_indices else None
+            )
+            ranker.accumulate_sample(
+                variant_scores=sample_variant_scores,
+                positions=sample_positions,
+                gene_ids=sample_gene_ids,
+                chromosomes=sample_chromosomes,
+                sample_idx=sample_idx,
+                is_case=is_case,
+            )
+
+            # Keep only lightweight metadata (small 1D arrays + scalars)
+            sample_meta = {
+                'positions': sample_positions,
+                'gene_ids': sample_gene_ids,
+                'chromosomes': sample_chromosomes,
+                'sample_idx': sample_idx,
+                'sample_id': all_samples[sample_idx].sample_id,
+                'label': all_samples[sample_idx].label
+            }
+            all_metadata.append(sample_meta)
+            metadata_variant_count += len(sample_positions)
+
+            # Free per-sample arrays (full attributions + scores now on disk)
+            del sample_attributions, sample_variant_scores
+            del chunk_attributions, chunk_positions, chunk_gene_ids, chunk_chromosomes
+
+            # Periodic garbage collection to reclaim Python overhead
+            if (sample_idx + 1) % 50 == 0:
+                gc.collect()
+                if args.device == 'cuda':
+                    torch.cuda.empty_cache()
+
+        print(f"\nComputed attributions for {num_samples} samples")
+        print(f"CRITICAL: All chunks processed - FULL GENOME coverage achieved!")
+
+        # Diagnostic: Check what variants are in the metadata
+        print(f"\nDiagnostic: Checking metadata variant distribution...")
+        print(f"  Total variants in metadata across all samples: {metadata_variant_count:,}")
+
+        # Check chromosome distribution in original data
+        chrom_dist = Counter()
+        for sample in all_samples:
+            for variant in sample.variants:
+                chrom_dist[variant.chrom] += 1
+
+        print(f"  Chromosomes in original data: {len(chrom_dist)}")
+        for chrom in sorted(chrom_dist.keys(), key=lambda x: (not x.isdigit(), int(x) if x.isdigit() else 999, x))[:10]:
+            print(f"    Chr {chrom}: {chrom_dist[chrom]:,} variants")
+        if len(chrom_dist) > 10:
+            print(f"    ... and {len(chrom_dist) - 10} more chromosomes")
+
+        # Check a sample of positions and genes from metadata
+        if len(all_metadata) > 0 and len(all_metadata[0]['positions']) > 0:
+            sample_meta = all_metadata[0]
+            print(f"\n  First sample has {len(sample_meta['positions']):,} variants in attributions")
+            print(f"  First 5 positions: {sample_meta['positions'][:5].tolist()}")
+            print(f"  First 5 gene_ids: {sample_meta['gene_ids'][:5].tolist()}")
+
+        # Recombine temp files into final attributions.npz (identical format)
+        print("\nSaving attributions (recombining from temp files)...")
+        all_attributions = []
+        all_variant_scores = []
+        for sidx in range(num_samples):
+            data = np.load(tmp_dir / f'sample_{sidx}.npz', allow_pickle=True)
+            all_attributions.append(data['attributions'])
+            all_variant_scores.append(data['variant_scores'])
+
+        attributions_path = output_dir / 'attributions.npz'
+        np.savez(
+            attributions_path,
+            attributions=np.array(all_attributions, dtype=object),
+            variant_scores=np.array(all_variant_scores, dtype=object),
+            metadata=np.array(all_metadata, dtype=object)
+        )
+        print(f"Saved attributions to {attributions_path}")
+
+        # Cleanup temp files and free recombination arrays
+        shutil.rmtree(tmp_dir)
+        del all_attributions, all_variant_scores
+        gc.collect()
+
+        # === VARIANT RANKING (from incremental accumulation) ===
         print("\n" + "="*60)
         print("Ranking Variants")
         print("="*60)
 
-        ranker = VariantRanker(aggregation='rank_average', variant_info_map=variant_info_map)
-
-        # Separate cases and controls
-        case_indices = [i for i, m in enumerate(metadata) if m.get('label') == 1]
-        control_indices = [i for i, m in enumerate(metadata) if m.get('label') == 0]
-
-        print(f"Cases: {len(case_indices)}, Controls: {len(control_indices)}")
-
-        # Rank variants
-        variant_rankings = ranker.rank_variants(
-            attributions=variant_scores,
-            metadata=metadata,
-            case_indices=case_indices,
-            control_indices=control_indices
-        )
+        variant_rankings = ranker.finalize_rankings()
 
         print(f"Ranked {len(variant_rankings)} unique variants")
 
@@ -561,6 +601,11 @@ def main():
             for interaction in interactions:
                 interactions_by_sample.setdefault(interaction['sample_idx'], []).append(interaction)
 
+            # Free GPU tensors after each batch
+            del features, positions, gene_ids, mask, attention_weights
+            if args.device == 'cuda':
+                torch.cuda.empty_cache()
+
             if (batch_idx + 1) % 10 == 0:
                 chunks_done = min((batch_idx + 1) * args.batch_size, total_chunks)
                 print(f"  Processed {chunks_done}/{total_chunks} chunks ({num_samples} samples)")
@@ -581,6 +626,10 @@ def main():
         interactions_path = output_dir / 'sieve_interactions.csv'
         interactions_df.to_csv(interactions_path, index=False)
         print(f"Saved interactions to {interactions_path}")
+
+        # Free attention analysis data
+        del all_interactions, interactions_by_sample, aggregated_interactions
+        gc.collect()
 
     # === SAVE ANALYSIS METADATA ===
     analysis_metadata = {
