@@ -260,9 +260,11 @@ class TestChunkedModelSexCovariate:
     def test_train_step_with_sex(self, chunked_model_with_cov, sample_batch_with_sex, device):
         chunked_model_with_cov.to(device)
         criterion = SIEVELoss(lambda_attr=0.0)
-        loss, preds = chunked_model_with_cov.train_step(
+        loss_output, preds = chunked_model_with_cov.train_step(
             sample_batch_with_sex, criterion, device
         )
+        # SIEVELoss returns a dict with 'total' key
+        loss = loss_output['total'] if isinstance(loss_output, dict) else loss_output
         assert loss.requires_grad
         assert preds.shape[0] == 3  # 3 unique samples
         loss.backward()
@@ -281,8 +283,10 @@ class TestChunkedModelSexCovariate:
             'original_sample_indices': torch.tensor([0, 1, 2], dtype=torch.long),
         }
         criterion = SIEVELoss(lambda_attr=0.0)
-        loss, preds = chunked_model_no_cov.train_step(batch, criterion, device)
+        loss_output, preds = chunked_model_no_cov.train_step(batch, criterion, device)
         assert preds.shape[0] == 3
+        # SIEVELoss returns a dict with 'total' key
+        loss = loss_output['total'] if isinstance(loss_output, dict) else loss_output
         loss.backward()
 
     def test_train_step_no_sex_in_batch(self, chunked_model_with_cov, device):
