@@ -1,0 +1,67 @@
+name: Unit Tests
+
+on:
+  pull_request:
+    branches:
+      - dev
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Attention Analysis
+            test-file: tests/test_attention_analysis.py
+          - name: Chunked SIEVE Model
+            test-file: tests/test_chunked_sieve.py
+          - name: Co-occurrence Audit
+            test-file: tests/test_cooccurrence_audit.py
+          - name: Epistasis Power Analysis
+            test-file: tests/test_epistasis_power.py
+          - name: Fold Config Saving
+            test-file: tests/test_fold_config_saving.py
+          - name: Gene Interactions
+            test-file: tests/test_gene_interactions.py
+          - name: Genome Build
+            test-file: tests/test_genome_build.py
+          - name: Null Baseline
+            test-file: tests/test_null_baseline.py
+          - name: Phase 3 Explainability
+            test-file: tests/test_phase3_explain.py
+          - name: Ploidy-Aware Dosage
+            test-file: tests/test_ploidy_aware_dosage.py
+            system-deps: libcurl4-openssl-dev
+          - name: Sex Covariate
+            test-file: tests/test_sex_covariate.py
+          - name: Utilities
+            test-file: tests/test_utilities.py
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install system dependencies
+        if: matrix.system-deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ${{ matrix.system-deps }}
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Run tests
+        run: pytest ${{ matrix.test-file }} -v --no-header -o "addopts="
+        env:
+          PYTHONPATH: ${{ github.workspace }}
