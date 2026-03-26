@@ -460,28 +460,32 @@ def main():
             print(f"  First 5 positions: {sample_meta['positions'][:5].tolist()}")
             print(f"  First 5 gene_ids: {sample_meta['gene_ids'][:5].tolist()}")
 
-        # Recombine temp files into final attributions.npz (identical format)
-        print("\nSaving attributions (recombining from temp files)...")
-        all_attributions = []
+        # Recombine only lightweight variant_scores + metadata into attributions.npz
+        # Raw per-feature attributions stay in per-sample files (too large to fit in RAM together)
+        print("\nSaving variant scores and metadata...")
         all_variant_scores = []
         for sidx in range(num_samples):
             data = np.load(tmp_dir / f'sample_{sidx}.npz', allow_pickle=True)
-            all_attributions.append(data['attributions'])
             all_variant_scores.append(data['variant_scores'])
 
         attributions_path = output_dir / 'attributions.npz'
         np.savez(
             attributions_path,
-            attributions=np.array(all_attributions, dtype=object),
             variant_scores=np.array(all_variant_scores, dtype=object),
-            metadata=np.array(all_metadata, dtype=object)
+            metadata=np.array(all_metadata, dtype=object),
         )
-        print(f"Saved attributions to {attributions_path}")
+        print(f"Saved variant scores + metadata to {attributions_path}")
 
-        # Cleanup temp files and free recombination arrays
-        shutil.rmtree(tmp_dir)
-        del all_attributions, all_variant_scores
+        del all_variant_scores
         gc.collect()
+
+        # Promote temp dir to permanent per-sample output (rename, no copy)
+        per_sample_dir = output_dir / 'attributions_per_sample'
+        if per_sample_dir.exists():
+            shutil.rmtree(per_sample_dir)
+        tmp_dir.rename(per_sample_dir)
+        print(f"Per-sample raw attributions preserved in {per_sample_dir}/")
+        print(f"  {num_samples} files, each containing 'attributions' and 'variant_scores' arrays")
 
         # === VARIANT RANKING (from incremental accumulation) ===
         print("\n" + "="*60)
