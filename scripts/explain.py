@@ -465,8 +465,8 @@ def main():
         print("\nSaving variant scores and metadata...")
         all_variant_scores = []
         for sidx in range(num_samples):
-            data = np.load(tmp_dir / f'sample_{sidx}.npz', allow_pickle=True)
-            all_variant_scores.append(data['variant_scores'])
+            with np.load(tmp_dir / f'sample_{sidx}.npz', allow_pickle=False) as data:
+                all_variant_scores.append(data['variant_scores'])
 
         attributions_path = output_dir / 'attributions.npz'
         np.savez(
@@ -476,7 +476,7 @@ def main():
         )
         print(f"Saved variant scores + metadata to {attributions_path}")
 
-        del all_variant_scores
+        del all_variant_scores, all_metadata
         gc.collect()
 
         # Promote temp dir to permanent per-sample output (rename, no copy)
