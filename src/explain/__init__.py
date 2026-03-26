@@ -41,10 +41,12 @@ def load_sample_attributions(per_sample_dir: str | Path, sample_idx: int) -> dic
         ``'variant_scores'`` (shape ``(n_variants,)``).
     """
     path = Path(per_sample_dir) / f'sample_{sample_idx}.npz'
-    data = np.load(path, allow_pickle=True)
+    with np.load(path, allow_pickle=False) as data:
+        attributions = data['attributions']
+        variant_scores = data['variant_scores']
     return {
-        'attributions': data['attributions'],
-        'variant_scores': data['variant_scores'],
+        'attributions': attributions,
+        'variant_scores': variant_scores,
     }
 
 
