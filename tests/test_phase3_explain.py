@@ -411,3 +411,57 @@ def test_validate_epistasis_no_data():
         
     finally:
         Path(header_only_file).unlink(missing_ok=True)
+
+
+class TestLoadSampleAttributions:
+    """Test the load_sample_attributions helper function."""
+
+    def test_load_single_sample(self, tmp_path):
+        """Test loading a single sample's attributions from per-sample directory."""
+        from src.explain import load_sample_attributions
+
+        # Create mock per-sample directory
+        per_sample_dir = tmp_path / 'attributions_per_sample'
+        per_sample_dir.mkdir()
+
+        # Save mock data for 3 samples
+        for i in range(3):
+            n_variants = 10 + i * 5
+            input_dim = 6
+            attrs = np.random.randn(n_variants, input_dim).astype(np.float32)
+            scores = np.linalg.norm(attrs, ord=2, axis=1)
+            np.savez(per_sample_dir / f'sample_{i}.npz',
+                     attributions=attrs, variant_scores=scores)
+
+        # Load sample 1
+        result = load_sample_attributions(per_sample_dir, 1)
+
+        assert 'attributions' in result
+        assert 'variant_scores' in result
+        assert result['attributions'].shape == (15, 6)
+        assert result['variant_scores'].shape == (15,)
+
+    def test_load_nonexistent_sample_raises(self, tmp_path):
+        """Test that loading a nonexistent sample raises FileNotFoundError."""
+        from src.explain import load_sample_attributions
+
+        per_sample_dir = tmp_path / 'attributions_per_sample'
+        per_sample_dir.mkdir()
+
+        with pytest.raises(FileNotFoundError):
+            load_sample_attributions(per_sample_dir, 999)
+
+    def test_scores_match_attributions(self, tmp_path):
+        """Test that variant_scores are the L2 norm of raw attributions."""
+        from src.explain import load_sample_attributions
+
+        per_sample_dir = tmp_path / 'attributions_per_sample'
+        per_sample_dir.mkdir()
+
+        attrs = np.array([[1.0, 0.0], [3.0, 4.0], [0.0, 0.0]], dtype=np.float32)
+        scores = np.linalg.norm(attrs, ord=2, axis=1)
+        np.savez(per_sample_dir / 'sample_0.npz',
+                 attributions=attrs, variant_scores=scores)
+
+        result = load_sample_attributions(per_sample_dir, 0)
+        np.testing.assert_allclose(result['variant_scores'], [1.0, 5.0, 0.0])
