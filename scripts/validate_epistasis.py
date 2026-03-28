@@ -25,6 +25,7 @@ import pandas as pd
 
 from src.encoding import VariantDataset, get_feature_dimension, AnnotationLevel
 from src.models.sieve import create_sieve_model
+from src.models import ChunkedSIEVEModel
 from src.explain.shap_epistasis import SHAPEpistasisDetector
 
 
@@ -151,8 +152,20 @@ def main():
     if 'input_dim' not in config:
         config['input_dim'] = get_feature_dimension(annotation_level)
 
-    model = create_sieve_model(config, num_genes=dataset.num_genes)
-    model.load_state_dict(checkpoint['model_state_dict'])
+    base_model = create_sieve_model(config, num_genes=dataset.num_genes)
+
+    # Check if checkpoint has chunked model (base_model. prefix) or plain model
+    state_dict = checkpoint['model_state_dict']
+    if any(k.startswith('base_model.') for k in state_dict.keys()):
+        model = ChunkedSIEVEModel(
+            base_model=base_model,
+            aggregation_method=config.get('aggregation_method', 'mean')
+        )
+        model.load_state_dict(state_dict)
+    else:
+        model = base_model
+        model.load_state_dict(state_dict)
+
     model = model.to(args.device)
     model.eval()
 
