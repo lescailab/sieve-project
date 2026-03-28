@@ -517,3 +517,108 @@ python scripts/validate_discoveries.py [OPTIONS]
 | `--genome-build` | str | GRCh37 | Reference genome build |
 
 ---
+
+### generate_sieve_gene_list.py
+
+```bash
+python scripts/generate_sieve_gene_list.py [OPTIONS]
+```
+
+Aggregates variant-level SIEVE rankings to a gene-level TSV for cross-cohort burden validation.
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--variant-rankings` | path | required | Corrected variant rankings CSV |
+| `--output` | path | required | Output gene list TSV |
+| `--score-column` | str | `z_attribution` | Column to use for scoring |
+| `--exclude-sex-chroms` | flag | True | Exclude sex chromosome genes |
+| `--include-sex-chroms` | flag | False | Include sex chromosome genes (overrides --exclude-sex-chroms) |
+| `--min-null-threshold` | str | None | Only include genes with variants exceeding this null threshold (`p05`, `p01`, `p001`) |
+| `--aggregation` | str | `max` | How to aggregate variant scores per gene: `max` or `mean` |
+| `--ablation-level` | str | None | Prefix output filename with level label (e.g. `L0`) |
+
+**Example**:
+```bash
+python scripts/generate_sieve_gene_list.py \
+    --variant-rankings results/attribution_comparison/variant_rankings_corrected.csv \
+    --output validation/sieve_gene_lists/sieve_genes.tsv \
+    --score-column z_attribution \
+    --aggregation max
+```
+
+---
+
+### extract_validation_burden.py
+
+```bash
+python scripts/extract_validation_burden.py [OPTIONS]
+```
+
+Parses a validation VCF and computes per-sample burden counts within SIEVE gene sets. Optionally builds a full gene-level burden matrix for permutation testing.
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--vcf` | path | required | Validation VCF (bgzipped, tabix-indexed) |
+| `--phenotypes` | path | required | Phenotype TSV (sample_id, phenotype: 1=ctrl, 2=case) |
+| `--sieve-genes` | path | required | SIEVE gene list TSV |
+| `--output-dir` | path | required | Output directory |
+| `--genome-build` | str | `GRCh37` | Reference genome build |
+| `--min-gq` | int | 20 | Minimum genotype quality |
+| `--top-k` | int list | `50 100 200` | Gene set sizes to test |
+| `--consequence-stratify` | flag | False | Compute burden stratified by consequence class |
+| `--include-sex-chroms` | flag | False | Include sex chromosome variants |
+| `--from-variant-rankings` | flag | False | Input is a variant rankings CSV (aggregate internally) |
+| `--compute-full-gene-matrix` | flag | False | Build full gene-level burden matrix for permutation testing |
+
+**Example**:
+```bash
+python scripts/extract_validation_burden.py \
+    --vcf /path/to/validation_cohort.vcf.gz \
+    --phenotypes /path/to/phenotypes.tsv \
+    --sieve-genes validation/sieve_gene_lists/sieve_genes.tsv \
+    --output-dir validation/cohort_b \
+    --top-k 50 100 200 \
+    --consequence-stratify \
+    --compute-full-gene-matrix
+```
+
+---
+
+### test_burden_enrichment.py
+
+```bash
+python scripts/test_burden_enrichment.py [OPTIONS]
+```
+
+Permutation-based enrichment test comparing SIEVE gene sets against random gene sets of the same size. Requires the gene burden matrix from `extract_validation_burden.py --compute-full-gene-matrix`.
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--burden-dir` | path | required | Directory with burden files from `extract_validation_burden.py` |
+| `--gene-matrix` | path | None | Path to gene burden matrix Parquet (default: `<burden-dir>/gene_burden_matrix.parquet`) |
+| `--background-genes` | path | None | Text file listing background gene symbols (default: all genes in matrix) |
+| `--validation-vcf` | path | None | Validation VCF (only if background genes not available) |
+| `--phenotypes` | path | None | Phenotype file (only if not derivable from burden files) |
+| `--sieve-genes` | path | required | SIEVE gene list TSV |
+| `--output-dir` | path | required | Output directory |
+| `--n-permutations` | int | 10000 | Number of random gene set permutations |
+| `--genome-build` | str | `GRCh37` | Genome build |
+| `--seed` | int | 42 | Random seed |
+| `--top-k` | int list | `50 100 200` | Gene set sizes to test |
+| `--ablation-levels` | str list | None | Run analysis per ablation level |
+| `--covariates` | path | None | TSV with covariates for logistic regression |
+| `--consequence-types` | str list | `total` | Burden types to test: `total`, `missense`, `lof`, `synonymous` |
+
+**Example**:
+```bash
+python scripts/test_burden_enrichment.py \
+    --burden-dir validation/cohort_b \
+    --sieve-genes validation/sieve_gene_lists/sieve_genes.tsv \
+    --output-dir validation/cohort_b/enrichment \
+    --n-permutations 10000 \
+    --top-k 50 100 200 \
+    --consequence-types total missense lof \
+    --seed 42
+```
+
+---
