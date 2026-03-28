@@ -334,7 +334,7 @@ class TestBurdenExtraction:
         target_genes = set(gene_df["gene_name"].str.upper())
         target_gene_sets = {5: target_genes}
 
-        burden_dfs, summaries, _, _ = extract_burden_from_vcf(
+        burden_dfs, summaries, _, _, _ = extract_burden_from_vcf(
             vcf_path=TEST_VCF,
             phenotypes=phenotypes,
             target_gene_sets=target_gene_sets,
@@ -360,7 +360,7 @@ class TestBurdenExtraction:
         target_genes = set(gene_df["gene_name"].str.upper())
         target_gene_sets = {5: target_genes}
 
-        burden_dfs, _, _, _ = extract_burden_from_vcf(
+        burden_dfs, _, _, _, _ = extract_burden_from_vcf(
             vcf_path=TEST_VCF,
             phenotypes=phenotypes,
             target_gene_sets=target_gene_sets,
@@ -380,7 +380,7 @@ class TestBurdenExtraction:
         target_genes = set(gene_df["gene_name"].str.upper())
         target_gene_sets = {5: target_genes}
 
-        _, _, full_matrix, metadata = extract_burden_from_vcf(
+        _, _, full_matrix, metadata, _ = extract_burden_from_vcf(
             vcf_path=TEST_VCF,
             phenotypes=phenotypes,
             target_gene_sets=target_gene_sets,
@@ -400,7 +400,7 @@ class TestBurdenExtraction:
         fake_genes = {"FAKEGENE1", "FAKEGENE2", "NMNAT1"}
         target_gene_sets = {3: fake_genes}
 
-        _, summaries, _, _ = extract_burden_from_vcf(
+        _, summaries, _, _, _ = extract_burden_from_vcf(
             vcf_path=TEST_VCF,
             phenotypes=phenotypes,
             target_gene_sets=target_gene_sets,
@@ -420,7 +420,7 @@ class TestBurdenExtraction:
         target_gene_sets = {5: target_genes}
 
         # Run with and without sex chroms
-        _, _, matrix_excl, _ = extract_burden_from_vcf(
+        _, _, matrix_excl, _, _ = extract_burden_from_vcf(
             vcf_path=TEST_VCF,
             phenotypes=phenotypes,
             target_gene_sets=target_gene_sets,
@@ -428,7 +428,7 @@ class TestBurdenExtraction:
             compute_full_matrix=True,
         )
 
-        _, _, matrix_incl, _ = extract_burden_from_vcf(
+        _, _, matrix_incl, _, _ = extract_burden_from_vcf(
             vcf_path=TEST_VCF,
             phenotypes=phenotypes,
             target_gene_sets=target_gene_sets,
@@ -469,7 +469,7 @@ class TestIntegration:
             10: set(g.upper() for g in known_genes),
         }
 
-        burden_dfs, summaries, full_matrix, metadata = extract_burden_from_vcf(
+        burden_dfs, summaries, full_matrix, metadata, _ = extract_burden_from_vcf(
             vcf_path=TEST_VCF,
             phenotypes=phenotypes,
             target_gene_sets=target_gene_sets,

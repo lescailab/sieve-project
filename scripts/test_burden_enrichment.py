@@ -7,6 +7,7 @@ to avoid re-parsing the VCF for each permutation.
 """
 
 import argparse
+import logging
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
@@ -19,8 +20,9 @@ import pandas as pd
 import yaml
 from scipy import stats
 
-from src.data.genome import get_genome_build, is_sex_chrom
 from src.data.vcf_parser import load_phenotypes
+
+logger = logging.getLogger(__name__)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -43,20 +45,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--background-genes",
         type=Path,
         default=None,
-        help="Text file listing all gene symbols in validation exome (one per line). "
-        "If not provided, derived from the gene burden matrix.",
-    )
-    parser.add_argument(
-        "--validation-vcf",
-        type=Path,
-        default=None,
-        help="Validation VCF (only needed to extract background genes if no matrix/list)",
+        help=(
+            "Text file listing all gene symbols in the validation cohort (one per line). "
+            "If not provided, background genes are derived from the gene burden matrix."
+        ),
     )
     parser.add_argument(
         "--phenotypes",
         type=Path,
         default=None,
-        help="Phenotype file (only needed if extracting background from VCF)",
+        help="Phenotype file (only needed if burden TSVs are not available in --burden-dir)",
     )
     parser.add_argument(
         "--sieve-genes",
@@ -77,11 +75,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Number of random gene set permutations (default: 10000)",
     )
     parser.add_argument(
-        "--genome-build",
-        default="GRCh37",
-        help="Genome build (default: GRCh37)",
-    )
-    parser.add_argument(
         "--seed",
         type=int,
         default=42,
@@ -93,12 +86,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         nargs="+",
         default=[50, 100, 200],
         help="Gene set sizes to test (default: 50 100 200)",
-    )
-    parser.add_argument(
-        "--ablation-levels",
-        nargs="+",
-        default=None,
-        help="Run analysis per ablation level (e.g. L0 L1 L2 L3)",
     )
     parser.add_argument(
         "--covariates",
@@ -139,7 +126,10 @@ def logistic_regression_z(
     p_value : float
         Two-sided p-value.
     """
+    import warnings
+
     import statsmodels.api as sm
+    from statsmodels.tools.sm_exceptions import PerfectSeparationError
 
     if covariates is not None:
         X = np.column_stack([burden, covariates])
@@ -150,12 +140,21 @@ def logistic_regression_z(
 
     try:
         model = sm.Logit(labels, X)
-        result = model.fit(disp=0, maxiter=100)
-        # Burden coefficient is at index 1 (index 0 is intercept)
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=RuntimeWarning)
+            warnings.filterwarnings(
+                "ignore", message=".*Perfect separation.*"
+            )
+            warnings.filterwarnings(
+                "ignore", message=".*Maximum Likelihood optimization failed.*"
+            )
+            result = model.fit(disp=0, maxiter=100)
         z_stat = result.tvalues[1]
         p_value = result.pvalues[1]
-    except Exception:
-        # Perfect separation or convergence failure
+        if np.isnan(z_stat) or np.isnan(p_value):
+            z_stat = 0.0
+            p_value = 1.0
+    except (PerfectSeparationError, np.linalg.LinAlgError):
         z_stat = 0.0
         p_value = 1.0
 
@@ -195,6 +194,8 @@ def compute_burden_for_gene_set(
     """
     Sum burden across columns matching the gene set.
 
+    Uses Index.get_indexer_for for O(k) lookup instead of scanning all columns.
+
     Parameters
     ----------
     gene_matrix : pd.DataFrame
@@ -207,10 +208,15 @@ def compute_burden_for_gene_set(
     np.ndarray
         Per-sample total burden, shape (n_samples,).
     """
-    matching_cols = [c for c in gene_matrix.columns if c in gene_set]
-    if not matching_cols:
+    if not gene_set:
         return np.zeros(len(gene_matrix), dtype=np.float64)
-    return gene_matrix[matching_cols].sum(axis=1).values
+
+    idx = gene_matrix.columns.get_indexer_for(list(gene_set))
+    valid_idx = idx[idx != -1]
+    if valid_idx.size == 0:
+        return np.zeros(len(gene_matrix), dtype=np.float64)
+
+    return gene_matrix.iloc[:, valid_idx].sum(axis=1).values
 
 
 def run_enrichment_test(
@@ -419,15 +425,32 @@ def main(argv: list[str] | None = None) -> None:
     print(f"  Samples with phenotypes: {len(common_samples)} "
           f"({(labels == 1).sum()} cases, {(labels == 0).sum()} controls)")
 
-    # Background gene universe
-    if args.background_genes and args.background_genes.exists():
-        bg_genes = [g.strip().upper() for g in args.background_genes.read_text().splitlines() if g.strip()]
-    else:
-        bg_genes = [c.upper() for c in gene_matrix.columns]
-    print(f"  Background gene universe: {len(bg_genes)} genes")
-
-    # Upper-case matrix columns for matching
+    # Normalise matrix gene names for matching
     gene_matrix.columns = [c.upper() for c in gene_matrix.columns]
+
+    # Background gene universe — must be restricted to genes actually in the matrix
+    matrix_gene_set: Set[str] = set(gene_matrix.columns)
+    if args.background_genes and args.background_genes.exists():
+        raw_bg = [
+            g.strip().upper()
+            for g in args.background_genes.read_text().splitlines()
+            if g.strip()
+        ]
+        bg_genes = [g for g in raw_bg if g in matrix_gene_set]
+        dropped = len(raw_bg) - len(bg_genes)
+        if dropped > 0:
+            print(
+                f"  WARNING: {dropped} background genes not found in burden matrix "
+                f"and will be ignored."
+            )
+    else:
+        bg_genes = list(gene_matrix.columns)
+
+    if not bg_genes:
+        print("ERROR: No background genes overlap with burden matrix columns.")
+        sys.exit(1)
+
+    print(f"  Background gene universe: {len(bg_genes)} genes")
 
     # Load SIEVE gene list
     sep = "\t"
@@ -451,15 +474,20 @@ def main(argv: list[str] | None = None) -> None:
 
     for k in args.top_k:
         actual_k = min(k, len(sieve_df))
-        sieve_genes = set(sieve_df.head(actual_k)["gene_name"].str.upper())
+        sieve_genes_all = set(sieve_df.head(actual_k)["gene_name"].str.upper())
 
-        # Check how many SIEVE genes are in the matrix
-        found_in_matrix = sieve_genes & set(gene_matrix.columns)
-        missing = sieve_genes - found_in_matrix
+        # Restrict to genes actually present in the burden matrix so that
+        # observed and permuted gene sets are comparable
+        found_in_matrix = sieve_genes_all & matrix_gene_set
+        missing = sieve_genes_all - found_in_matrix
+        sieve_genes = found_in_matrix
 
-        print(f"\n--- Top-{k} ({len(found_in_matrix)} of {len(sieve_genes)} genes found in matrix) ---")
+        print(f"\n--- Top-{k} ({len(sieve_genes)} of {len(sieve_genes_all)} genes found in matrix) ---")
         if missing:
             print(f"  Missing genes: {sorted(missing)[:10]}{'...' if len(missing) > 10 else ''}")
+        if not sieve_genes:
+            print("  Skipping: no SIEVE genes present in the burden matrix.")
+            continue
 
         # Run each consequence type
         for csq_type in args.consequence_types:

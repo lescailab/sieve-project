@@ -597,15 +597,12 @@ Permutation-based enrichment test comparing SIEVE gene sets against random gene 
 | `--burden-dir` | path | required | Directory with burden files from `extract_validation_burden.py` |
 | `--gene-matrix` | path | None | Path to gene burden matrix Parquet (default: `<burden-dir>/gene_burden_matrix.parquet`) |
 | `--background-genes` | path | None | Text file listing background gene symbols (default: all genes in matrix) |
-| `--validation-vcf` | path | None | Validation VCF (only if background genes not available) |
 | `--phenotypes` | path | None | Phenotype file (only if not derivable from burden files) |
 | `--sieve-genes` | path | required | SIEVE gene list TSV |
 | `--output-dir` | path | required | Output directory |
 | `--n-permutations` | int | 10000 | Number of random gene set permutations |
-| `--genome-build` | str | `GRCh37` | Genome build |
 | `--seed` | int | 42 | Random seed |
 | `--top-k` | int list | `50 100 200` | Gene set sizes to test |
-| `--ablation-levels` | str list | None | Run analysis per ablation level |
 | `--covariates` | path | None | TSV with covariates for logistic regression |
 | `--consequence-types` | str list | `total` | Burden types to test: `total`, `missense`, `lof`, `synonymous` |
 
