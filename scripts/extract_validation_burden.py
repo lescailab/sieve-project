@@ -171,6 +171,7 @@ def extract_burden_from_vcf(
     Dict[int, dict],
     Optional[pd.DataFrame],
     Optional[dict],
+    Optional[Dict[str, pd.DataFrame]],
 ]:
     """
     Parse validation VCF and compute per-sample burden counts.
@@ -203,7 +204,11 @@ def extract_burden_from_vcf(
     full_matrix : pd.DataFrame or None
         Full gene burden matrix (samples × genes) if compute_full_matrix.
     matrix_metadata : dict or None
-        Metadata for the full matrix.
+        Serializable metadata for the full matrix.
+    consequence_matrices : Dict[str, pd.DataFrame] or None
+        Consequence-stratified burden matrices keyed by type
+        ('missense', 'lof', 'synonymous', 'other'). Only populated when
+        both compute_full_matrix and consequence_stratify are True.
     """
     build = get_genome_build(genome_build_name)
     vcf = cyvcf2.VCF(str(vcf_path))
@@ -231,9 +236,8 @@ def extract_burden_from_vcf(
 
     print(f"Matched {len(sample_indices)} samples with phenotypes")
 
-    # Identify the largest top-k to determine which genes we care about
-    max_k = max(target_gene_sets.keys())
-    all_target_genes = target_gene_sets[max_k]
+    # Collect all target genes across all top-k sets (they may not be strictly nested)
+    all_target_genes: Set[str] = set().union(*target_gene_sets.values())
 
     # Initialise per-sample burden counters for each top-k
     # Structure: {k: {sample_id: {burden_type: count}}}
@@ -405,6 +409,7 @@ def extract_burden_from_vcf(
     # Build full gene matrix if requested
     full_matrix = None
     matrix_metadata = None
+    consequence_matrices: Optional[Dict[str, pd.DataFrame]] = None
     if compute_full_matrix and full_gene_counts is not None:
         sorted_genes = sorted(all_vcf_genes)
         sorted_samples = sorted(sample_indices.values())
@@ -436,6 +441,7 @@ def extract_burden_from_vcf(
 
         # Build consequence-stratified matrices if requested
         if consequence_stratify and full_gene_consequence is not None:
+            consequence_matrices = {}
             for csq_type in ["missense", "lof", "synonymous", "other"]:
                 csq_data = np.zeros(
                     (len(sorted_samples), len(sorted_genes)), dtype=np.int32,
@@ -450,11 +456,11 @@ def extract_burden_from_vcf(
                     csq_data, index=sorted_samples, columns=sorted_genes,
                 )
                 csq_df.index.name = "sample_id"
-                matrix_metadata[f"matrix_{csq_type}"] = csq_df
+                consequence_matrices[csq_type] = csq_df
 
         print(f"Built full gene burden matrix: {full_matrix.shape}")
 
-    return burden_dfs, summaries, full_matrix, matrix_metadata
+    return burden_dfs, summaries, full_matrix, matrix_metadata, consequence_matrices
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -479,7 +485,7 @@ def main(argv: list[str] | None = None) -> None:
         print(f"  top-{k}: {len(top_genes)} genes")
 
     # Extract burden
-    burden_dfs, summaries, full_matrix, matrix_metadata = extract_burden_from_vcf(
+    burden_dfs, summaries, full_matrix, matrix_metadata, csq_matrices = extract_burden_from_vcf(
         vcf_path=args.vcf,
         phenotypes=phenotypes,
         target_gene_sets=target_gene_sets,
@@ -506,10 +512,8 @@ def main(argv: list[str] | None = None) -> None:
         full_matrix.to_parquet(args.output_dir / "gene_burden_matrix.parquet")
 
         # Save consequence-stratified matrices
-        for key in list(matrix_metadata.keys()):
-            if key.startswith("matrix_"):
-                csq_type = key.replace("matrix_", "")
-                csq_df = matrix_metadata.pop(key)
+        if csq_matrices:
+            for csq_type, csq_df in csq_matrices.items():
                 csq_df.to_parquet(
                     args.output_dir / f"gene_burden_matrix_{csq_type}.parquet"
                 )

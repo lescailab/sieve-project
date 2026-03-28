@@ -11,6 +11,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from src.data.genome import get_genome_build, is_sex_chrom, normalise_chrom
+
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -102,11 +104,15 @@ def generate_gene_list(
     if "chromosome" not in df.columns and "chrom" in df.columns:
         df = df.rename(columns={"chrom": "chromosome"})
 
-    # Filter sex chromosomes
+    # Filter sex chromosomes using centralised genome build logic
     if exclude_sex_chroms:
-        sex_chroms = {"X", "Y", "chrX", "chrY", "23", "24"}
+        build = get_genome_build("GRCh37")
         before = len(df)
-        df = df[~df["chromosome"].astype(str).isin(sex_chroms)]
+        df = df[
+            ~df["chromosome"]
+            .astype(str)
+            .apply(lambda c: is_sex_chrom(normalise_chrom(c, build), build))
+        ]
         n_removed = before - len(df)
         if n_removed > 0:
             print(f"Excluded {n_removed} sex chromosome variants")
