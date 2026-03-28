@@ -115,6 +115,15 @@ def main():
 
     print(f"Loaded {len(interactions_df)} interactions")
 
+    # Validate required columns
+    required_cols = {'variant1_pos', 'variant2_pos', 'variant1_gene', 'variant2_gene'}
+    missing_cols = required_cols - set(interactions_df.columns)
+    if missing_cols:
+        print(f"ERROR: Interactions CSV missing required columns: {', '.join(sorted(missing_cols))}")
+        print("Expected columns from explain.py attention analysis: "
+              "variant1_pos, variant2_pos, variant1_gene, variant2_gene")
+        return
+
     # Sort by attention and take top K
     if 'mean_attention' in interactions_df.columns:
         interactions_df = interactions_df.sort_values('mean_attention', ascending=False)
@@ -179,19 +188,31 @@ def main():
 
     validation_results = []
 
-    # Pre-load all sample positions and gene_ids for efficient lookup
-    # Match on both position AND gene_id to avoid collisions across chromosomes
+    # Build a (pos, gene_id) -> list of sample indices inverted index from
+    # raw sample data, avoiding full feature encoding for every sample upfront.
     print("Building position index across samples...")
-    sample_data = []
-    for i in range(len(dataset)):
-        sample = dataset[i]
-        pos_list = sample['positions'].tolist()
-        gene_list = sample['gene_ids'].tolist()
-        # Build a dict of (pos, gene_id) -> tensor index for fast lookup
+    from collections import defaultdict
+    variant_key_to_samples = defaultdict(set)
+    # Also store per-sample (pos, gene_id) -> tensor index for later lookup
+    sample_pg_to_idx = []
+    gene_index = dataset.gene_index
+    for si, sv in enumerate(dataset.samples):
         pg_to_idx = {}
-        for ti, (p, g) in enumerate(zip(pos_list, gene_list)):
-            pg_to_idx[(p, g)] = ti
-        sample_data.append(pg_to_idx)
+        for ti, variant in enumerate(sv.variants):
+            gene_id = gene_index.get(variant.gene, -1)
+            if gene_id < 0:
+                continue
+            key = (variant.pos, gene_id)
+            if key in pg_to_idx:
+                # Multi-allelic site: same (pos, gene_id) already seen in sample.
+                # Mark as ambiguous (-1) so we skip rather than pick the wrong index.
+                pg_to_idx[key] = -1
+            else:
+                pg_to_idx[key] = ti
+                variant_key_to_samples[key].add(si)
+        sample_pg_to_idx.append(pg_to_idx)
+
+    last_reported = 0
 
     for idx, interaction in top_interactions.iterrows():
         v1_pos = int(interaction['variant1_pos'])
@@ -199,50 +220,61 @@ def main():
         v1_gene = int(interaction['variant1_gene'])
         v2_gene = int(interaction['variant2_gene'])
 
-        # Find a sample that carries both variants (matched on position + gene)
+        v1_key = (v1_pos, v1_gene)
+        v2_key = (v2_pos, v2_gene)
+
+        # Intersect candidate samples that carry both variants
+        candidates_v1 = variant_key_to_samples.get(v1_key, set())
+        candidates_v2 = variant_key_to_samples.get(v2_key, set())
+        candidate_samples = candidates_v1 & candidates_v2
+
         validated = False
-        for sample_idx, pg_to_idx in enumerate(sample_data):
-            v1_key = (v1_pos, v1_gene)
-            v2_key = (v2_pos, v2_gene)
-            if v1_key in pg_to_idx and v2_key in pg_to_idx:
-                v1_idx = pg_to_idx[v1_key]
-                v2_idx = pg_to_idx[v2_key]
+        for sample_idx in sorted(candidate_samples):
+            pg_to_idx = sample_pg_to_idx[sample_idx]
+            v1_idx = pg_to_idx[v1_key]
+            v2_idx = pg_to_idx[v2_key]
 
-                sample = dataset[sample_idx]
-                try:
-                    validation = detector.validate_interaction_with_perturbation(
-                        features=sample['features'],
-                        positions=sample['positions'],
-                        gene_ids=sample['gene_ids'],
-                        mask=sample['mask'],
-                        variant1_idx=v1_idx,
-                        variant2_idx=v2_idx
-                    )
+            # Skip if either variant is ambiguous (multi-allelic)
+            if v1_idx < 0 or v2_idx < 0:
+                print(f"Warning: Multi-allelic ambiguity for interaction {idx} "
+                      f"in sample {sample_idx}, trying next sample")
+                continue
 
-                    result = {
-                        'sample_idx': sample_idx,
-                        'variant1_pos': v1_pos,
-                        'variant2_pos': v2_pos,
-                        'variant1_gene': v1_gene,
-                        'variant2_gene': v2_gene,
-                        'same_gene': interaction.get('same_gene', False),
-                        **validation
-                    }
+            sample = dataset[sample_idx]
+            try:
+                validation = detector.validate_interaction_with_perturbation(
+                    features=sample['features'],
+                    positions=sample['positions'],
+                    gene_ids=sample['gene_ids'],
+                    mask=sample['mask'],
+                    variant1_idx=v1_idx,
+                    variant2_idx=v2_idx
+                )
 
-                    validation_results.append(result)
-                    validated = True
-                    break
+                result = {
+                    'sample_idx': sample_idx,
+                    'variant1_pos': v1_pos,
+                    'variant2_pos': v2_pos,
+                    'variant1_gene': v1_gene,
+                    'variant2_gene': v2_gene,
+                    'same_gene': interaction.get('same_gene', False),
+                    **validation
+                }
 
-                except Exception as e:
-                    print(f"Warning: Could not validate interaction {idx} on sample {sample_idx}: {e}")
-                    continue
+                validation_results.append(result)
+                validated = True
+
+                if len(validation_results) % 10 == 0 and len(validation_results) > last_reported:
+                    last_reported = len(validation_results)
+                    print(f"  Validated {len(validation_results)} interactions...")
+                break
+
+            except Exception as e:
+                print(f"Warning: Could not validate interaction {idx} on sample {sample_idx}: {e}")
+                continue
 
         if not validated:
             print(f"Warning: No sample found carrying both variants for interaction {idx}, skipping")
-
-        # Print progress
-        if (len(validation_results)) % 10 == 0 and len(validation_results) > 0:
-            print(f"  Validated {len(validation_results)} interactions...")
 
     print(f"\nCompleted validation of {len(validation_results)} interactions")
 
