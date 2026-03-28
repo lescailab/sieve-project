@@ -24,8 +24,10 @@ import torch
 import pandas as pd
 
 from src.encoding import VariantDataset, get_feature_dimension, AnnotationLevel
+from src.encoding.sparse_tensor import build_variant_tensor
 from src.models.sieve import create_sieve_model
 from src.models import ChunkedSIEVEModel
+from src.data import SampleVariants
 from src.explain.shap_epistasis import SHAPEpistasisDetector
 
 
@@ -57,6 +59,9 @@ def parse_args():
     parser.add_argument('--device', type=str, default='cuda',
                         choices=['cuda', 'cpu'],
                         help='Device to use')
+    parser.add_argument('--chunk-size', type=int, default=3000,
+                        help='Max variants per forward pass (default: 3000, '
+                             'matching training chunk size)')
 
     # Genome build
     parser.add_argument('--genome-build', type=str, default='GRCh37',
@@ -137,6 +142,8 @@ def main():
     print("\nLoading model...")
     with open(args.config) as f:
         config = yaml.safe_load(f)
+
+    chunk_size = config.get('chunk_size', args.chunk_size)
 
     checkpoint = torch.load(args.checkpoint, map_location='cpu', weights_only=False)
 
@@ -228,8 +235,15 @@ def main():
         candidates_v2 = variant_key_to_samples.get(v2_key, set())
         candidate_samples = candidates_v1 & candidates_v2
 
+        # Sort candidates by variant count (fewest first) to prefer smaller
+        # samples that are cheaper for the O(n²) attention computation.
+        sorted_candidates = sorted(
+            candidate_samples,
+            key=lambda si: len(dataset.samples[si].variants)
+        )
+
         validated = False
-        for sample_idx in sorted(candidate_samples):
+        for sample_idx in sorted_candidates:
             pg_to_idx = sample_pg_to_idx[sample_idx]
             v1_idx = pg_to_idx[v1_key]
             v2_idx = pg_to_idx[v2_key]
@@ -240,15 +254,70 @@ def main():
                       f"in sample {sample_idx}, trying next sample")
                 continue
 
-            sample = dataset[sample_idx]
+            sv = dataset.samples[sample_idx]
+            n_variants = len(sv.variants)
+
+            # For large samples, extract a chunk around the two target variants
+            # to keep attention O(n²) manageable.  This is an approximation:
+            # with global attention, excluded variants can influence the target
+            # pair's embeddings.  In practice the effect is small because the
+            # synergy formula is a second-order difference and most distant
+            # context is shared across all 4 perturbation conditions.
+            if n_variants > chunk_size:
+                # Ensure both target indices stay inside the window
+                lo = min(v1_idx, v2_idx)
+                hi = max(v1_idx, v2_idx)
+                span = hi - lo + 1
+
+                if span > chunk_size:
+                    # Target variants are further apart than chunk_size in the
+                    # variant list — cannot fit both in one chunk, skip sample.
+                    print(f"Warning: Interaction {idx} variants are {span} apart "
+                          f"in sample {sample_idx} (chunk_size={chunk_size}), "
+                          f"trying next sample")
+                    continue
+
+                # Centre the window around the pair
+                pad = (chunk_size - span) // 2
+                start = max(0, lo - pad)
+                end = min(n_variants, start + chunk_size)
+                start = max(0, end - chunk_size)  # adjust if we hit the right edge
+
+                chunk_variants = sv.variants[start:end]
+                chunk_sv = SampleVariants(
+                    sample_id=sv.sample_id,
+                    label=sv.label,
+                    variants=chunk_variants,
+                )
+                chunk_tensor = build_variant_tensor(
+                    chunk_sv, dataset.annotation_level,
+                    dataset.gene_index, impute_value=dataset.impute_value,
+                )
+                # Remap target indices into the chunk
+                chunk_v1_idx = v1_idx - start
+                chunk_v2_idx = v2_idx - start
+                was_chunked = True
+                chunk_start_idx = start
+                chunk_end_idx = end
+            else:
+                chunk_tensor = build_variant_tensor(
+                    sv, dataset.annotation_level,
+                    dataset.gene_index, impute_value=dataset.impute_value,
+                )
+                chunk_v1_idx = v1_idx
+                chunk_v2_idx = v2_idx
+                was_chunked = False
+                chunk_start_idx = 0
+                chunk_end_idx = n_variants
+
             try:
                 validation = detector.validate_interaction_with_perturbation(
-                    features=sample['features'],
-                    positions=sample['positions'],
-                    gene_ids=sample['gene_ids'],
-                    mask=sample['mask'],
-                    variant1_idx=v1_idx,
-                    variant2_idx=v2_idx
+                    features=chunk_tensor['features'],
+                    positions=chunk_tensor['positions'],
+                    gene_ids=chunk_tensor['gene_ids'],
+                    mask=chunk_tensor['mask'],
+                    variant1_idx=chunk_v1_idx,
+                    variant2_idx=chunk_v2_idx,
                 )
 
                 result = {
@@ -258,6 +327,10 @@ def main():
                     'variant1_gene': v1_gene,
                     'variant2_gene': v2_gene,
                     'same_gene': interaction.get('same_gene', False),
+                    'was_chunked': was_chunked,
+                    'chunk_start_idx': chunk_start_idx,
+                    'chunk_end_idx': chunk_end_idx,
+                    'n_variants_in_chunk': chunk_tensor['features'].shape[0],
                     **validation
                 }
 
@@ -268,6 +341,13 @@ def main():
                     last_reported = len(validation_results)
                     print(f"  Validated {len(validation_results)} interactions...")
                 break
+
+            except torch.cuda.OutOfMemoryError:
+                torch.cuda.empty_cache()
+                print(f"Warning: CUDA OOM for interaction {idx} on sample {sample_idx} "
+                      f"({chunk_tensor['features'].shape[0]} variants in chunk), "
+                      f"trying next sample")
+                continue
 
             except Exception as e:
                 print(f"Warning: Could not validate interaction {idx} on sample {sample_idx}: {e}")
