@@ -192,14 +192,14 @@ def main():
     # raw sample data, avoiding full feature encoding for every sample upfront.
     print("Building position index across samples...")
     from collections import defaultdict
-    variant_key_to_samples = defaultdict(list)
+    variant_key_to_samples = defaultdict(set)
     # Also store per-sample (pos, gene_id) -> tensor index for later lookup
     sample_pg_to_idx = []
     gene_index = dataset.gene_index
     for si, sv in enumerate(dataset.samples):
         pg_to_idx = {}
         for ti, variant in enumerate(sv.variants):
-            gene_id = gene_index.get(variant.gene_symbol, -1)
+            gene_id = gene_index.get(variant.gene, -1)
             if gene_id < 0:
                 continue
             key = (variant.pos, gene_id)
@@ -209,7 +209,7 @@ def main():
                 pg_to_idx[key] = -1
             else:
                 pg_to_idx[key] = ti
-                variant_key_to_samples[key].append(si)
+                variant_key_to_samples[key].add(si)
         sample_pg_to_idx.append(pg_to_idx)
 
     last_reported = 0
@@ -224,12 +224,12 @@ def main():
         v2_key = (v2_pos, v2_gene)
 
         # Intersect candidate samples that carry both variants
-        candidates_v1 = set(variant_key_to_samples.get(v1_key, []))
-        candidates_v2 = set(variant_key_to_samples.get(v2_key, []))
+        candidates_v1 = variant_key_to_samples.get(v1_key, set())
+        candidates_v2 = variant_key_to_samples.get(v2_key, set())
         candidate_samples = candidates_v1 & candidates_v2
 
         validated = False
-        for sample_idx in candidate_samples:
+        for sample_idx in sorted(candidate_samples):
             pg_to_idx = sample_pg_to_idx[sample_idx]
             v1_idx = pg_to_idx[v1_key]
             v2_idx = pg_to_idx[v2_key]
