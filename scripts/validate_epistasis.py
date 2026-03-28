@@ -179,56 +179,70 @@ def main():
 
     validation_results = []
 
+    # Pre-load all sample positions and gene_ids for efficient lookup
+    # Match on both position AND gene_id to avoid collisions across chromosomes
+    print("Building position index across samples...")
+    sample_data = []
+    for i in range(len(dataset)):
+        sample = dataset[i]
+        pos_list = sample['positions'].tolist()
+        gene_list = sample['gene_ids'].tolist()
+        # Build a dict of (pos, gene_id) -> tensor index for fast lookup
+        pg_to_idx = {}
+        for ti, (p, g) in enumerate(zip(pos_list, gene_list)):
+            pg_to_idx[(p, g)] = ti
+        sample_data.append(pg_to_idx)
+
     for idx, interaction in top_interactions.iterrows():
-        # Get sample and variant indices
-        sample_idx = int(interaction.get('sample_idx', 0))
+        v1_pos = int(interaction['variant1_pos'])
+        v2_pos = int(interaction['variant2_pos'])
+        v1_gene = int(interaction['variant1_gene'])
+        v2_gene = int(interaction['variant2_gene'])
 
-        # This is tricky - we need to map back to the actual variant indices
-        # For now, we'll use the positions to find variants
-        # In practice, you'd store variant indices in the interactions
+        # Find a sample that carries both variants (matched on position + gene)
+        validated = False
+        for sample_idx, pg_to_idx in enumerate(sample_data):
+            v1_key = (v1_pos, v1_gene)
+            v2_key = (v2_pos, v2_gene)
+            if v1_key in pg_to_idx and v2_key in pg_to_idx:
+                v1_idx = pg_to_idx[v1_key]
+                v2_idx = pg_to_idx[v2_key]
 
-        # Skip if we don't have the required fields
-        if 'variant1_idx' not in interaction or 'variant2_idx' not in interaction:
-            print(f"Warning: Interaction {idx} missing variant indices, skipping")
-            continue
+                sample = dataset[sample_idx]
+                try:
+                    validation = detector.validate_interaction_with_perturbation(
+                        features=sample['features'],
+                        positions=sample['positions'],
+                        gene_ids=sample['gene_ids'],
+                        mask=sample['mask'],
+                        variant1_idx=v1_idx,
+                        variant2_idx=v2_idx
+                    )
 
-        v1_idx = int(interaction['variant1_idx'])
-        v2_idx = int(interaction['variant2_idx'])
+                    result = {
+                        'sample_idx': sample_idx,
+                        'variant1_pos': v1_pos,
+                        'variant2_pos': v2_pos,
+                        'variant1_gene': v1_gene,
+                        'variant2_gene': v2_gene,
+                        'same_gene': interaction.get('same_gene', False),
+                        **validation
+                    }
 
-        # Get sample data
-        sample = dataset[sample_idx]
+                    validation_results.append(result)
+                    validated = True
+                    break
 
-        # Validate interaction
-        try:
-            validation = detector.validate_interaction_with_perturbation(
-                features=sample['features'],
-                positions=sample['positions'],
-                gene_ids=sample['gene_ids'],
-                mask=sample['mask'],
-                variant1_idx=v1_idx,
-                variant2_idx=v2_idx
-            )
+                except Exception as e:
+                    print(f"Warning: Could not validate interaction {idx} on sample {sample_idx}: {e}")
+                    continue
 
-            # Add to results
-            result = {
-                'sample_idx': sample_idx,
-                'variant1_pos': int(interaction['variant1_pos']),
-                'variant2_pos': int(interaction['variant2_pos']),
-                'variant1_gene': int(interaction['variant1_gene']),
-                'variant2_gene': int(interaction['variant2_gene']),
-                'same_gene': interaction.get('same_gene', False),
-                **validation
-            }
+        if not validated:
+            print(f"Warning: No sample found carrying both variants for interaction {idx}, skipping")
 
-            validation_results.append(result)
-
-            # Print progress
-            if (len(validation_results)) % 10 == 0:
-                print(f"  Validated {len(validation_results)} interactions...")
-
-        except Exception as e:
-            print(f"Warning: Could not validate interaction {idx}: {e}")
-            continue
+        # Print progress
+        if (len(validation_results)) % 10 == 0 and len(validation_results) > 0:
+            print(f"  Validated {len(validation_results)} interactions...")
 
     print(f"\nCompleted validation of {len(validation_results)} interactions")
 
@@ -236,11 +250,8 @@ def main():
     if len(validation_results) == 0:
         print("\nERROR: No interactions were successfully validated.")
         print("\nPossible reasons:")
-        print("  - Interaction file missing required columns: variant1_idx, variant2_idx")
-        print("  - No variant indices matched the dataset")
-        print("  - All samples had too few variants to validate interactions")
-        print("\nNote: Interactions file must include variant indices, not just positions.")
-        print("These are typically generated by explain.py attention analysis.")
+        print("  - No samples carry both variant positions for any interaction")
+        print("  - All perturbation attempts failed")
         return
 
     results_df = pd.DataFrame(validation_results)
