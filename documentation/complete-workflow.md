@@ -31,6 +31,11 @@
 ┌─────────────────────┐
 │  7. Biological      │  Experimental validation
 │     Follow-up       │
+└─────────┬───────────┘
+          ↓
+┌─────────────────────┐
+│  8. Cross-Cohort    │  Burden enrichment test in
+│     Validation      │  independent cohorts
 └─────────────────────┘
 ```
 
@@ -418,5 +423,331 @@ python scripts/validate_discoveries.py \
 - **ClinVar**: Are variants known pathogenic?
 - **GWAS Catalog**: Are genes in disease associations?
 - **GO Enrichment**: Are genes enriched in specific pathways?
+
+---
+
+#### Step 8: Cross-Cohort Gene-Set Burden Validation
+
+**Purpose**: Test whether the *specific genes* SIEVE identified in the discovery cohort (e.g. Ottawa Heart CAD) carry an excess of exonic variation in cases vs controls in independent validation cohorts.
+
+**Why this approach?**
+Running SIEVE on the validation cohorts would validate that the pipeline works, not that the Ottawa results are meaningful. A PRS-style weighted score would linearise SIEVE's non-linear signal, contradicting the model's premise. Instead, this pipeline uses a **set-level burden enrichment test**: it asks whether SIEVE-highlighted genes are enriched for case-control variation, agnostic to how variants contribute. Analogous to confirming a telescope's star cluster discovery by pointing a different instrument at the same coordinates.
+
+**Prerequisites**:
+- Completed Steps 1-5 on the discovery cohort (variant rankings with null comparison and chrX correction)
+- One or more **independent validation VCFs**: VEP-annotated, multi-sample, same genome build (GRCh37/GRCh38), with phenotype files
+- Validation cohorts should study a related phenotype (e.g. atherosclerosis, myocardial infarction for a CAD discovery cohort)
+
+**Input files from the SIEVE discovery pipeline**:
+
+| File | Source step | Description |
+|------|-----------|-------------|
+| `variant_rankings_corrected.csv` | Step 4 → `correct_chrx_bias.py` | ChrX-corrected, null-compared variant rankings |
+| `sieve_gene_rankings.csv` | Step 3 → `explain.py` | Gene-level attribution rankings |
+| `L{0..3}_variant_rankings_corrected.csv` | Steps 2-5 (per level) | Per-ablation-level corrected rankings (optional) |
+
+**This step has three sub-steps**: generate the gene list, extract burden counts from the validation VCF, and test for enrichment against a permutation null.
+
+---
+
+##### Step 8a: Generate SIEVE Gene List
+
+**Purpose**: Aggregate variant-level rankings to a standardised gene-level TSV suitable for burden testing.
+
+**Command**:
+```bash
+python scripts/generate_sieve_gene_list.py \
+    --variant-rankings results/attribution_comparison/variant_rankings_corrected.csv \
+    --output validation/sieve_gene_lists/sieve_genes.tsv \
+    --score-column z_attribution \
+    --exclude-sex-chroms \
+    --aggregation max
+```
+
+This takes the chrX-corrected variant rankings and produces a ranked gene list where each gene's score is the maximum `z_attribution` across its variants. Sex chromosome genes are excluded by default (consistent with the corrected rankings).
+
+**To generate per-ablation-level gene lists** (for testing whether different annotation levels replicate differently):
+```bash
+for level in L0 L1 L2 L3; do
+    python scripts/generate_sieve_gene_list.py \
+        --variant-rankings results/${level}_attribution_comparison/variant_rankings_corrected.csv \
+        --output validation/sieve_gene_lists/sieve_genes.tsv \
+        --ablation-level ${level} \
+        --score-column z_attribution \
+        --aggregation max
+done
+```
+
+This produces `L0_sieve_genes.tsv`, `L1_sieve_genes.tsv`, etc.
+
+**Optional: filter to null-significant genes only**:
+```bash
+python scripts/generate_sieve_gene_list.py \
+    --variant-rankings results/attribution_comparison/variant_rankings_corrected.csv \
+    --output validation/sieve_gene_lists/sieve_genes_sig.tsv \
+    --min-null-threshold p01 \
+    --aggregation max
+```
+
+This retains only genes containing at least one variant exceeding the null model's 99th percentile.
+
+**Output format** (`sieve_genes.tsv`):
+```
+gene_name    gene_rank    gene_score    n_variants    chromosome
+CUL3         1            3.45          5             2
+AP2A1        2            3.21          3             19
+NEXN         3            2.98          2             1
+...
+```
+
+---
+
+##### Step 8b: Extract Burden Counts from Validation VCF
+
+**Purpose**: Parse the validation cohort VCF and count non-reference alleles per sample within the SIEVE gene sets. This is a single-pass VCF scan that produces per-sample burden counts and optionally a full gene-level burden matrix for fast permutation testing.
+
+**Command** (recommended — with full matrix for permutation testing):
+```bash
+python scripts/extract_validation_burden.py \
+    --vcf /path/to/validation_cohort.vcf.gz \
+    --phenotypes /path/to/validation_phenotypes.tsv \
+    --sieve-genes validation/sieve_gene_lists/sieve_genes.tsv \
+    --output-dir validation/atherosclerosis \
+    --genome-build GRCh37 \
+    --min-gq 20 \
+    --top-k 50 100 200 \
+    --consequence-stratify \
+    --compute-full-gene-matrix
+```
+
+**What this does**:
+1. Loads phenotypes (1=control, 2=case PLINK convention, same as SIEVE)
+2. Selects the top 50, 100, and 200 genes from the SIEVE gene list
+3. Iterates through the validation VCF using `cyvcf2`, reusing the same CSQ parsing, canonical transcript selection, and contig harmonisation as the main SIEVE pipeline
+4. For each variant in a target gene, sums genotype dosages (0/1/2) per sample — a homozygous alt counts as 2
+5. With `--consequence-stratify`: separately counts missense, LoF, synonymous, and other variants
+6. With `--compute-full-gene-matrix`: builds a complete (samples × all genes) burden matrix stored as Parquet, enabling fast permutation testing in Step 8c without re-parsing the VCF
+
+**Key flags**:
+
+| Flag | When to use |
+|------|-------------|
+| `--consequence-stratify` | Always recommended — enables testing whether enrichment is driven by functional variants |
+| `--compute-full-gene-matrix` | Required for Step 8c — builds the matrix that makes 10,000 permutations feasible |
+| `--include-sex-chroms` | Only if your gene list includes sex chromosome genes |
+| `--from-variant-rankings` | If passing the raw `variant_rankings_corrected.csv` instead of a pre-generated gene list |
+
+**Outputs**:
+```
+validation/atherosclerosis/
+├── burden_topK50.tsv              # Per-sample burden (columns: sample_id, phenotype, total_burden, ...)
+├── burden_topK100.tsv
+├── burden_topK200.tsv
+├── burden_topK50_summary.yaml     # Diagnostics: genes found/missing, mean burden by group
+├── burden_topK100_summary.yaml
+├── burden_topK200_summary.yaml
+├── gene_burden_matrix.parquet     # Full (samples × genes) burden matrix
+├── gene_burden_matrix_metadata.yaml
+├── gene_burden_matrix_missense.parquet    # Consequence-stratified matrices
+├── gene_burden_matrix_lof.parquet
+├── gene_burden_matrix_synonymous.parquet
+└── gene_burden_matrix_other.parquet
+```
+
+**Check the summary YAML** before proceeding to Step 8c:
+- `n_sieve_genes_found_in_vcf` should be close to the total — if many genes are missing, the validation VCF may use different gene symbol conventions or have limited exome coverage
+- `missing_genes` lists the specific SIEVE genes not found, which helps diagnose gene name mismatches between VEP versions
+- `mean_burden_cases` vs `mean_burden_controls` gives a quick preview of whether there is a difference (but this is not yet tested for significance)
+
+**Repeat for each validation cohort**:
+```bash
+python scripts/extract_validation_burden.py \
+    --vcf /path/to/mi_cohort.vcf.gz \
+    --phenotypes /path/to/mi_phenotypes.tsv \
+    --sieve-genes validation/sieve_gene_lists/sieve_genes.tsv \
+    --output-dir validation/mi \
+    --top-k 50 100 200 \
+    --consequence-stratify \
+    --compute-full-gene-matrix
+```
+
+---
+
+##### Step 8c: Test Burden Enrichment
+
+**Purpose**: Test whether the SIEVE gene set shows significantly stronger case-control burden difference than random gene sets of the same size, using a permutation null distribution.
+
+**How it works**:
+1. Loads the pre-computed gene burden matrix from Step 8b
+2. Computes a logistic regression z-statistic (phenotype ~ burden) for the SIEVE gene set — this is the **observed test statistic**
+3. Draws 10,000 random gene sets of size *k* from all genes in the validation exome
+4. Computes the same z-statistic for each random set — this is the **null distribution**
+5. Reports an **empirical p-value**: the fraction of random sets with a z-statistic at least as extreme as the observed one
+
+Because the full gene matrix was pre-computed in Step 8b, each permutation is a fast column-slice + sum operation — the VCF is never re-parsed.
+
+**Command**:
+```bash
+python scripts/test_burden_enrichment.py \
+    --burden-dir validation/atherosclerosis \
+    --sieve-genes validation/sieve_gene_lists/sieve_genes.tsv \
+    --output-dir validation/atherosclerosis/enrichment \
+    --n-permutations 10000 \
+    --top-k 50 100 200 \
+    --seed 42
+```
+
+**To test consequence-specific enrichment** (requires `--consequence-stratify` in Step 8b):
+```bash
+python scripts/test_burden_enrichment.py \
+    --burden-dir validation/atherosclerosis \
+    --sieve-genes validation/sieve_gene_lists/sieve_genes.tsv \
+    --output-dir validation/atherosclerosis/enrichment \
+    --n-permutations 10000 \
+    --top-k 50 100 200 \
+    --consequence-types total missense lof \
+    --seed 42
+```
+
+**To include covariates** (e.g. sex, principal components):
+```bash
+python scripts/test_burden_enrichment.py \
+    --burden-dir validation/atherosclerosis \
+    --sieve-genes validation/sieve_gene_lists/sieve_genes.tsv \
+    --output-dir validation/atherosclerosis/enrichment \
+    --covariates /path/to/covariates.tsv \
+    --n-permutations 10000 \
+    --top-k 50 100 200 \
+    --seed 42
+```
+
+The covariates TSV should have `sample_id` as the first column (or index) and one column per covariate.
+
+**Outputs**:
+```
+validation/atherosclerosis/enrichment/
+├── enrichment_topK50.yaml              # Full results: observed stats + permutation p-value
+├── enrichment_topK100.yaml
+├── enrichment_topK200.yaml
+├── null_distribution_topK50.npz        # Saved null z-statistics (for custom plotting)
+├── null_distribution_topK100.npz
+├── null_distribution_topK200.npz
+├── enrichment_plot_topK50.png          # Histogram: null distribution + observed value
+├── enrichment_plot_topK100.png
+├── enrichment_plot_topK200.png
+├── cross_cohort_validation_summary.yaml  # Summary with Bonferroni correction
+└── validation_report.md                  # Human-readable report
+```
+
+**Interpreting the results**:
+
+The key metric in each `enrichment_topK{k}.yaml` is the **empirical p-value** under `permutation.empirical_p`. This tells you the probability that a random gene set of the same size would produce an equally strong or stronger case-control burden difference.
+
+| Empirical p | Interpretation |
+|-------------|---------------|
+| < 0.01 | Strong evidence: SIEVE genes are enriched for case-control variation |
+| 0.01 - 0.05 | Moderate evidence (check after Bonferroni correction) |
+| > 0.05 | No significant enrichment at this top-k threshold |
+
+The `cross_cohort_validation_summary.yaml` applies Bonferroni correction across all tests (multiple top-k thresholds and consequence types). A result that survives Bonferroni correction is robust.
+
+**Additional diagnostics**:
+- If enrichment is significant for **missense/LoF** but not **synonymous**, this suggests SIEVE genes harbour functional exonic variation — not just more variants by chance of gene length
+- If enrichment is significant at **top-50** but not **top-200**, the signal is concentrated in the highest-ranked genes
+- The `enrichment_plot_topK{k}.png` shows the null distribution with the observed value marked — the further right the red line, the stronger the evidence
+
+**Per-ablation-level testing** (tests whether different annotation levels replicate differently):
+```bash
+for level in L0 L1 L2 L3; do
+    python scripts/test_burden_enrichment.py \
+        --burden-dir validation/atherosclerosis \
+        --sieve-genes validation/sieve_gene_lists/${level}_sieve_genes.tsv \
+        --output-dir validation/atherosclerosis/enrichment_${level} \
+        --n-permutations 10000 \
+        --top-k 50 100 200 \
+        --seed 42
+done
+```
+
+If L1-specific genes replicate in the atherosclerosis cohort but L0-specific ones do not (or vice versa), that directly strengthens the annotation-ablation narrative.
+
+---
+
+##### Complete Step 8 Example
+
+Putting it all together for two validation cohorts:
+
+```bash
+# --- Gene list from Ottawa discovery ---
+python scripts/generate_sieve_gene_list.py \
+    --variant-rankings results/attribution_comparison/variant_rankings_corrected.csv \
+    --output validation/sieve_gene_lists/sieve_genes.tsv \
+    --score-column z_attribution \
+    --aggregation max
+
+# --- Atherosclerosis cohort ---
+python scripts/extract_validation_burden.py \
+    --vcf /data/atherosclerosis/cohort.vcf.gz \
+    --phenotypes /data/atherosclerosis/phenotypes.tsv \
+    --sieve-genes validation/sieve_gene_lists/sieve_genes.tsv \
+    --output-dir validation/atherosclerosis \
+    --top-k 50 100 200 \
+    --consequence-stratify \
+    --compute-full-gene-matrix
+
+python scripts/test_burden_enrichment.py \
+    --burden-dir validation/atherosclerosis \
+    --sieve-genes validation/sieve_gene_lists/sieve_genes.tsv \
+    --output-dir validation/atherosclerosis/enrichment \
+    --n-permutations 10000 \
+    --top-k 50 100 200 \
+    --consequence-types total missense lof \
+    --seed 42
+
+# --- MI cohort ---
+python scripts/extract_validation_burden.py \
+    --vcf /data/mi/cohort.vcf.gz \
+    --phenotypes /data/mi/phenotypes.tsv \
+    --sieve-genes validation/sieve_gene_lists/sieve_genes.tsv \
+    --output-dir validation/mi \
+    --top-k 50 100 200 \
+    --consequence-stratify \
+    --compute-full-gene-matrix
+
+python scripts/test_burden_enrichment.py \
+    --burden-dir validation/mi \
+    --sieve-genes validation/sieve_gene_lists/sieve_genes.tsv \
+    --output-dir validation/mi/enrichment \
+    --n-permutations 10000 \
+    --top-k 50 100 200 \
+    --consequence-types total missense lof \
+    --seed 42
+```
+
+**Expected output tree**:
+```
+validation/
+├── sieve_gene_lists/
+│   └── sieve_genes.tsv
+├── atherosclerosis/
+│   ├── gene_burden_matrix.parquet
+│   ├── gene_burden_matrix_metadata.yaml
+│   ├── gene_burden_matrix_missense.parquet
+│   ├── gene_burden_matrix_lof.parquet
+│   ├── gene_burden_matrix_synonymous.parquet
+│   ├── gene_burden_matrix_other.parquet
+│   ├── burden_topK{50,100,200}.tsv
+│   ├── burden_topK{50,100,200}_summary.yaml
+│   └── enrichment/
+│       ├── enrichment_topK{50,100,200}.yaml
+│       ├── enrichment_topK{50,100,200}_missense.yaml
+│       ├── enrichment_topK{50,100,200}_lof.yaml
+│       ├── null_distribution_topK{50,100,200}.npz
+│       ├── enrichment_plot_topK{50,100,200}.png
+│       ├── cross_cohort_validation_summary.yaml
+│       └── validation_report.md
+└── mi/
+    └── ... (same structure)
+```
 
 ---
