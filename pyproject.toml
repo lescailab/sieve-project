@@ -51,10 +51,16 @@ dependencies = [
     # Machine learning utilities
     "scikit-learn>=1.3.0",
     "shap>=0.42.0,<0.50",  # SHAP values (compatible with numpy<2.0)
-    
+
+    # Statistical modelling
+    "statsmodels>=0.14.0",  # Logistic regression for burden enrichment
+
     # Configuration and logging
     "pyyaml>=6.0",
-    
+
+    # Data storage
+    "pyarrow>=12.0.0",  # Parquet I/O for gene burden matrices
+
     # Visualization (Python side)
     "matplotlib>=3.7.0",
     "seaborn>=0.12.0",  # Used by plot_ablation_comparison.py when available
@@ -97,6 +103,9 @@ sieve-plot-ablation-comparison = "scripts.plot_ablation_comparison:main"
 sieve-audit-cooccurrence = "scripts.audit_cooccurrence:main"
 sieve-epistasis-power-analysis = "scripts.epistasis_power_analysis:main"
 sieve-aggregate-gene-interactions = "scripts.aggregate_gene_interactions:main"
+sieve-generate-gene-list = "scripts.generate_sieve_gene_list:main"
+sieve-extract-burden = "scripts.extract_validation_burden:main"
+sieve-test-burden-enrichment = "scripts.test_burden_enrichment:main"
 
 [project.urls]
 Homepage = "https://github.com/lescailab/dl-exome-img"
