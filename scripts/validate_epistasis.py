@@ -27,7 +27,7 @@ from src.encoding import VariantDataset, get_feature_dimension, AnnotationLevel
 from src.encoding.sparse_tensor import build_variant_tensor
 from src.models.sieve import create_sieve_model
 from src.models import ChunkedSIEVEModel
-from src.data.vcf_parser import SampleVariants
+from src.data import SampleVariants
 from src.explain.shap_epistasis import SHAPEpistasisDetector
 
 
@@ -258,9 +258,11 @@ def main():
             n_variants = len(sv.variants)
 
             # For large samples, extract a chunk around the two target variants
-            # to keep attention O(n²) manageable.  The synergy formula is a
-            # second-order difference: variants outside the chunk contribute
-            # identically to all 4 conditions and cancel out exactly.
+            # to keep attention O(n²) manageable.  This is an approximation:
+            # with global attention, excluded variants can influence the target
+            # pair's embeddings.  In practice the effect is small because the
+            # synergy formula is a second-order difference and most distant
+            # context is shared across all 4 perturbation conditions.
             if n_variants > chunk_size:
                 # Ensure both target indices stay inside the window
                 lo = min(v1_idx, v2_idx)
@@ -294,6 +296,9 @@ def main():
                 # Remap target indices into the chunk
                 chunk_v1_idx = v1_idx - start
                 chunk_v2_idx = v2_idx - start
+                was_chunked = True
+                chunk_start_idx = start
+                chunk_end_idx = end
             else:
                 chunk_tensor = build_variant_tensor(
                     sv, dataset.annotation_level,
@@ -301,6 +306,9 @@ def main():
                 )
                 chunk_v1_idx = v1_idx
                 chunk_v2_idx = v2_idx
+                was_chunked = False
+                chunk_start_idx = 0
+                chunk_end_idx = n_variants
 
             try:
                 validation = detector.validate_interaction_with_perturbation(
@@ -319,6 +327,9 @@ def main():
                     'variant1_gene': v1_gene,
                     'variant2_gene': v2_gene,
                     'same_gene': interaction.get('same_gene', False),
+                    'was_chunked': was_chunked,
+                    'chunk_start_idx': chunk_start_idx,
+                    'chunk_end_idx': chunk_end_idx,
                     'n_variants_in_chunk': chunk_tensor['features'].shape[0],
                     **validation
                 }
