@@ -570,6 +570,35 @@ Parses a validation VCF and computes per-sample burden counts within SIEVE gene 
 | `--from-variant-rankings` | flag | False | Input is a variant rankings CSV (aggregate internally) |
 | `--compute-full-gene-matrix` | flag | False | Build full gene-level burden matrix for permutation testing |
 
+> **Tip — multi-level validation in a single VCF pass**: The full gene matrix records
+> burden for *every* gene in the VCF, regardless of which `--sieve-genes` file you
+> provide. When comparing ablation levels (L0–L3), run `extract_validation_burden.py`
+> **once** with `--compute-full-gene-matrix` and any gene list, then call
+> `test_burden_enrichment.py` separately per level with the level-specific gene list.
+> This avoids re-parsing the VCF for each level:
+>
+> ```bash
+> # Parse VCF once
+> python scripts/extract_validation_burden.py \
+>     --vcf /path/to/validation_cohort.vcf.gz \
+>     --phenotypes /path/to/phenotypes.tsv \
+>     --sieve-genes validation/sieve_gene_lists/L3_sieve_genes.tsv \
+>     --output-dir validation/cohort_b \
+>     --top-k 50 100 200 \
+>     --consequence-stratify \
+>     --compute-full-gene-matrix
+>
+> # Test enrichment per level (fast — reads parquet, no VCF)
+> for level in L0 L1 L2 L3; do
+>     python scripts/test_burden_enrichment.py \
+>         --burden-dir validation/cohort_b \
+>         --sieve-genes validation/sieve_gene_lists/${level}_sieve_genes.tsv \
+>         --output-dir validation/cohort_b/enrichment_${level} \
+>         --top-k 50 100 200 \
+>         --n-permutations 10000
+> done
+> ```
+
 **Example**:
 ```bash
 python scripts/extract_validation_burden.py \

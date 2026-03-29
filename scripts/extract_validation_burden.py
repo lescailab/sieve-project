@@ -16,14 +16,15 @@ import cyvcf2
 import numpy as np
 import pandas as pd
 import yaml
+from tqdm import tqdm
 
+from src.data.annotation import map_consequence_to_severity
 from src.data.genome import get_genome_build, is_sex_chrom, normalise_chrom
 from src.data.vcf_parser import (
     load_phenotypes,
     parse_csq_field,
     select_canonical_annotation,
 )
-from src.data.annotation import map_consequence_to_severity
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -267,8 +268,18 @@ def extract_burden_from_vcf(
     variant_count = 0
     assigned_count = 0
 
-    for variant in vcf:
+    checkpoint_interval = 500_000
+
+    for variant in tqdm(vcf, desc="Parsing VCF", unit=" variants"):
         variant_count += 1
+
+        if variant_count % checkpoint_interval == 0:
+            tqdm.write(
+                f"  [checkpoint] {variant_count:,} variants | "
+                f"{len(all_vcf_genes):,} genes seen | "
+                f"{len(found_target_genes)}/{len(all_target_genes)} SIEVE targets matched | "
+                f"{assigned_count:,} assignments"
+            )
 
         chrom = normalise_chrom(variant.CHROM, build)
 
