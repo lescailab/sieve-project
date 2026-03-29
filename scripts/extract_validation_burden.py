@@ -18,13 +18,13 @@ import pandas as pd
 import yaml
 from tqdm import tqdm
 
+from src.data.annotation import map_consequence_to_severity
 from src.data.genome import get_genome_build, is_sex_chrom, normalise_chrom
 from src.data.vcf_parser import (
     load_phenotypes,
     parse_csq_field,
     select_canonical_annotation,
 )
-from src.data.annotation import map_consequence_to_severity
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
