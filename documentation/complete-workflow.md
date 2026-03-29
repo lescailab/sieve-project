@@ -428,7 +428,7 @@ python scripts/validate_discoveries.py \
 
 #### Step 8: Cross-Cohort Gene-Set Burden Validation
 
-**Purpose**: Test whether the *specific genes* SIEVE identified in the discovery cohort (e.g. Discovery Cohort A) carry an excess of exonic variation in cases vs controls in independent validation cohorts.
+**Purpose**: Test whether the *specific genes* SIEVE identified in the discovery cohort carry an excess of exonic variation in cases vs controls in independent validation cohorts.
 
 **Why this approach?**
 Running SIEVE on the validation cohorts would validate that the pipeline works, not that the discovery results are meaningful. A PRS-style weighted score would linearise SIEVE's non-linear signal, contradicting the model's premise. Instead, this pipeline uses a **set-level burden enrichment test**: it asks whether SIEVE-highlighted genes are enriched for case-control variation, agnostic to how variants contribute. Analogous to confirming a telescope's star cluster discovery by pointing a different instrument at the same coordinates.
@@ -436,7 +436,7 @@ Running SIEVE on the validation cohorts would validate that the pipeline works, 
 **Prerequisites**:
 - Completed Steps 1-5 on the discovery cohort (variant rankings with null comparison and chrX correction)
 - One or more **independent validation VCFs**: VEP-annotated, multi-sample, same genome build (GRCh37/GRCh38), with phenotype files
-- Validation cohorts should study a related phenotype (e.g. cohort_b, related phenotype for a CAD discovery cohort)
+- Validation cohorts should study a related phenotype (e.g. a different disease cohort with overlapping genetic architecture)
 
 **Input files from the SIEVE discovery pipeline**:
 
@@ -678,14 +678,14 @@ If L1-specific genes replicate in the cohort_b cohort but L0-specific ones do no
 Putting it all together for two validation cohorts:
 
 ```bash
-# --- Gene list from discovery discovery ---
+# --- Gene list from discovery cohort ---
 python scripts/generate_sieve_gene_list.py \
     --variant-rankings results/attribution_comparison/variant_rankings_corrected.csv \
     --output validation/sieve_gene_lists/sieve_genes.tsv \
     --score-column z_attribution \
     --aggregation max
 
-# --- Cohort B cohort ---
+# --- Cohort B ---
 python scripts/extract_validation_burden.py \
     --vcf /data/cohort_b/cohort.vcf.gz \
     --phenotypes /data/cohort_b/phenotypes.tsv \
@@ -704,7 +704,7 @@ python scripts/test_burden_enrichment.py \
     --consequence-types total missense lof \
     --seed 42
 
-# --- Cohort C---
+# --- Cohort C ---
 python scripts/extract_validation_burden.py \
     --vcf /data/cohort_c/cohort.vcf.gz \
     --phenotypes /data/cohort_c/phenotypes.tsv \
