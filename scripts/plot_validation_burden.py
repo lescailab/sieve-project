@@ -202,11 +202,27 @@ def collect_results(
                     "n_permutations": perm.get("n_permutations"),
                 })
 
+    if not rows:
+        return pd.DataFrame(columns=[
+            "level", "consequence_type", "top_k", "logistic_z", "logistic_p",
+            "mannwhitney_p", "empirical_p", "percentile_rank", "mean_cases",
+            "mean_controls", "n_genes_found", "n_permutations",
+        ])
+
     df = pd.DataFrame(rows)
 
-    # Enforce level ordering
-    present_levels = [lv for lv in LEVEL_ORDER if lv in df["level"].values]
-    df["level"] = pd.Categorical(df["level"], categories=present_levels, ordered=True)
+    # Determine which levels are present in the data
+    levels_in_df = pd.unique(df["level"])
+
+    # If all present levels are standard L-levels, use LEVEL_ORDER;
+    # otherwise, fall back to the provided labels list to preserve
+    # user-specified or auto-detected ordering.
+    if set(levels_in_df).issubset(set(LEVEL_ORDER)):
+        categories = [lv for lv in LEVEL_ORDER if lv in levels_in_df]
+    else:
+        categories = [lv for lv in labels if lv in levels_in_df]
+
+    df["level"] = pd.Categorical(df["level"], categories=categories, ordered=True)
     df = df.sort_values(["level", "consequence_type", "top_k"]).reset_index(drop=True)
 
     return df
@@ -283,6 +299,8 @@ def plot_pvalue_lines(
 
     # Cap for -log10 when empirical_p is at its minimum
     max_n_perm = df["n_permutations"].max() if "n_permutations" in df.columns else 10000
+    if pd.isna(max_n_perm):
+        max_n_perm = 10000
     neg_log10_cap = -np.log10(1 / (max_n_perm + 1))
 
     for ax, csq in zip(axes, consequences):
@@ -324,12 +342,20 @@ def plot_pvalue_lines(
 
     axes[0].set_ylabel(r"$-\log_{10}$(empirical p)", fontsize=12)
 
-    # Shared legend below
-    handles, legend_labels = axes[0].get_legend_handles_labels()
+    # Shared legend below: aggregate handles/labels across all axes
+    combined_handles = []
+    combined_labels: list[str] = []
+    for ax in axes:
+        handles, labels = ax.get_legend_handles_labels()
+        for h, lab in zip(handles, labels):
+            if lab not in combined_labels:
+                combined_handles.append(h)
+                combined_labels.append(lab)
+
     fig.legend(
-        handles, legend_labels,
+        combined_handles, combined_labels,
         loc="lower center",
-        ncol=min(len(legend_labels), 4),
+        ncol=min(len(combined_labels), 4),
         fontsize=9,
         frameon=True,
         bbox_to_anchor=(0.5, -0.02),
@@ -374,7 +400,13 @@ def plot_zscore_heatmap(
     axes = axes[0]
 
     # Determine shared color limits for comparable panels
-    z_abs_max = df["logistic_z"].abs().max()
+    z_series = df["logistic_z"]
+    if z_series.notna().any():
+        z_abs_max = z_series.abs().max()
+        if not np.isfinite(z_abs_max) or z_abs_max == 0:
+            z_abs_max = 1.0
+    else:
+        z_abs_max = 1.0
     vmin, vmax = -z_abs_max, z_abs_max
 
     for ax, csq in zip(axes, consequences):
