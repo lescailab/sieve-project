@@ -75,7 +75,7 @@ The fixed CV folds ensure the only variable is the gene set, not the data split.
 # Single level, single top-k
 python scripts/validate_nonlinear_classifier.py \
     --burden-matrix validation/cohort_b/gene_burden_matrix.parquet \
-    --sieve-genes validation/sieve_gene_lists/sieve_genes_L1.tsv \
+    --sieve-genes validation/sieve_gene_lists/L1_sieve_genes.tsv \
     --phenotypes /path/to/phenotypes.tsv \
     --output-dir validation/cohort_b/nonlinear_validation \
     --top-k 100 \
@@ -144,7 +144,7 @@ Use `--also-export-csv` to export the SIEVE feature matrix as a CSV for analysis
 ```bash
 python scripts/validate_nonlinear_classifier.py \
     --burden-matrix validation/cohort_b/gene_burden_matrix.parquet \
-    --sieve-genes validation/sieve_gene_lists/sieve_genes_L1.tsv \
+    --sieve-genes validation/sieve_gene_lists/L1_sieve_genes.tsv \
     --phenotypes /path/to/phenotypes.tsv \
     --output-dir validation/cohort_b/nonlinear_validation \
     --top-k 100 \
