@@ -273,6 +273,46 @@ The figure produced by `plot_ablation_comparison.py` contains four panels:
 
 ---
 
+### Non-Linear Classifier Validation Results
+
+The non-linear classifier validation tests whether the **pattern** of variation across SIEVE genes jointly discriminates cases from controls, beyond what a scalar burden sum can capture. See the [Validation](validation.md) chapter for full usage details.
+
+#### Summary Table (`nonlinear_validation_summary.tsv`)
+
+| Column | Description |
+|--------|-------------|
+| `level` | Ablation level (L0-L3) |
+| `top_k` | Number of top genes used |
+| `k_effective` | Genes matched in validation VCF |
+| `classifier` | `rf` (random forest) or `lr` (logistic regression) |
+| `observed_auc` | Mean AUC across CV folds |
+| `observed_std` | Standard deviation of per-fold AUCs |
+| `null_mean_auc` | Mean AUC of the null distribution |
+| `null_std_auc` | Standard deviation of the null distribution |
+| `empirical_p` | Fraction of random gene sets with AUC >= observed |
+| `percentile_rank` | Where observed AUC falls in null distribution (0-100) |
+| `bonferroni_significant` | `yes` if p < 0.05 / n_tests |
+
+#### Decision Framework
+
+| Observed AUC vs null | RF vs LR | Interpretation |
+|---------------------|----------|----------------|
+| Significant (p < 0.05) | RF >> LR | Non-linear multi-gene signal transfers to validation cohort |
+| Significant (p < 0.05) | RF ≈ LR | Linear signal transfers (could be captured by PRS) |
+| Not significant | — | Signal does not transfer at this level/top-k |
+
+#### Heatmap (`nonlinear_validation_heatmap.png`)
+
+Rows are ablation levels, columns are top-k values. Cell values show observed AUC with significance annotations:
+
+- `**` = Bonferroni-significant
+- `*` = nominally significant (p < 0.05)
+- No marker = not significant
+
+Look for patterns: does signal concentrate at specific levels or top-k values? Consistent signal across levels suggests a robust discovery; signal only at L3 may indicate annotation dependence.
+
+---
+
 ### Epistasis Results
 
 SIEVE now provides two complementary interaction views:

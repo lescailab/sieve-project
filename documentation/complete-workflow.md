@@ -34,8 +34,8 @@
 └─────────┬───────────┘
           ↓
 ┌─────────────────────┐
-│  8. Cross-Cohort    │  Burden enrichment test in
-│     Validation      │  independent cohorts
+│  8. Cross-Cohort    │  Burden enrichment + non-linear
+│     Validation      │  classifier test in independent cohorts
 └─────────────────────┘
 ```
 
@@ -702,6 +702,73 @@ If L1-specific genes replicate in the cohort_b cohort but L0-specific ones do no
 
 ---
 
+##### Step 8d: Non-Linear Classifier Validation
+
+**Purpose**: Test whether the SIEVE gene set carries *non-linear* discriminative signal — combinatorial patterns across genes that a scalar burden sum would destroy.
+
+**Why this step?** The scalar burden test (Step 8c) asks whether SIEVE genes have more total exonic variation in cases. But SIEVE's core claim is that the **pattern** of variation across genes matters, not just the total count. A random forest trained on per-gene burden counts preserves this multi-gene structure.
+
+**Command** (all levels at once):
+```bash
+python scripts/validate_nonlinear_classifier.py \
+    --burden-matrix validation/cohort_b/gene_burden_matrix.parquet \
+    --sieve-genes validation/sieve_gene_lists/ \
+    --phenotypes /path/to/validation_phenotypes.tsv \
+    --output-dir validation/cohort_b/nonlinear_validation \
+    --top-k 50 100 200 500 \
+    --n-permutations 1000 \
+    --classifiers both \
+    --n-jobs 4 \
+    --seed 42
+```
+
+**How it works**:
+1. For each ablation level and top-k threshold, extracts the per-gene burden sub-matrix for the SIEVE gene set
+2. Trains a random forest using repeated stratified CV with fixed fold assignments
+3. Generates a null distribution by repeating the same procedure on 1,000 random gene sets of equal size
+4. Reports an empirical p-value and, when `--classifiers both` is used, compares RF vs logistic regression to test for non-linear structure
+
+**Outputs**:
+```
+validation/cohort_b/nonlinear_validation/
+├── nonlinear_validation_L{0..3}_topK{k}.yaml   # Full results per combination
+├── null_aucs_L{0..3}_topK{k}.npz               # Null distributions
+├── validation_plot_L{0..3}_topK{k}.png          # Diagnostic plots
+├── nonlinear_validation_summary.tsv             # Summary table
+├── nonlinear_validation_heatmap.png             # AUC heatmap across levels x top-k
+└── nonlinear_validation_report.md               # Human-readable report
+```
+
+**Interpreting the results**: see the [Validation](validation.md) chapter for detailed guidance.
+
+!!! tip "Start with quick exploration"
+    Use `--n-permutations 200` for a fast initial run. Once you identify the most promising level/top-k combinations, re-run with `--n-permutations 1000` for publication-quality results.
+
+---
+
+##### Step 8e: Visualise Scalar Burden Results
+
+**Purpose**: Collect scalar burden enrichment results across annotation levels into summary plots.
+
+**Command**:
+```bash
+python scripts/plot_validation_burden.py \
+    --input-dirs validation/cohort_b/enrichment_L0 \
+                 validation/cohort_b/enrichment_L1 \
+                 validation/cohort_b/enrichment_L2 \
+                 validation/cohort_b/enrichment_L3 \
+    --top-k 50 100 200 500 \
+    --consequence-types total missense lof \
+    --output-dir validation/cohort_b/burden_plots
+```
+
+**Outputs**:
+- Summary TSV with all results across levels, consequence types, and top-k values
+- Multi-panel line plot of -log10(empirical p) vs top-k
+- Heatmap of logistic regression z-statistics
+
+---
+
 ##### Complete Step 8 Example
 
 Putting it all together for two validation cohorts:
@@ -751,6 +818,38 @@ python scripts/test_burden_enrichment.py \
     --top-k 50 100 200 \
     --consequence-types total missense lof \
     --seed 42
+
+# --- Non-linear classifier validation (Cohort B) ---
+python scripts/validate_nonlinear_classifier.py \
+    --burden-matrix validation/cohort_b/gene_burden_matrix.parquet \
+    --sieve-genes validation/sieve_gene_lists/ \
+    --phenotypes /path/to/cohort_b_phenotypes.tsv \
+    --output-dir validation/cohort_b/nonlinear_validation \
+    --top-k 50 100 200 \
+    --n-permutations 1000 \
+    --classifiers both \
+    --n-jobs 4
+
+# --- Non-linear classifier validation (Cohort C) ---
+python scripts/validate_nonlinear_classifier.py \
+    --burden-matrix validation/cohort_c/gene_burden_matrix.parquet \
+    --sieve-genes validation/sieve_gene_lists/ \
+    --phenotypes /path/to/cohort_c_phenotypes.tsv \
+    --output-dir validation/cohort_c/nonlinear_validation \
+    --top-k 50 100 200 \
+    --n-permutations 1000 \
+    --classifiers both \
+    --n-jobs 4
+
+# --- Collect and plot scalar burden results ---
+python scripts/plot_validation_burden.py \
+    --input-dirs validation/cohort_b/enrichment_L0 \
+                 validation/cohort_b/enrichment_L1 \
+                 validation/cohort_b/enrichment_L2 \
+                 validation/cohort_b/enrichment_L3 \
+    --top-k 50 100 200 \
+    --consequence-types total missense lof \
+    --output-dir validation/cohort_b/burden_plots
 ```
 
 **Expected output tree**:
@@ -775,6 +874,17 @@ validation/
 │       ├── enrichment_plot_topK{50,100,200}.png
 │       ├── cross_cohort_validation_summary.yaml
 │       └── validation_report.md
+│   ├── nonlinear_validation/
+│   │   ├── nonlinear_validation_L{0..3}_topK{k}.yaml
+│   │   ├── null_aucs_L{0..3}_topK{k}.npz
+│   │   ├── validation_plot_L{0..3}_topK{k}.png
+│   │   ├── nonlinear_validation_summary.tsv
+│   │   ├── nonlinear_validation_heatmap.png
+│   │   └── nonlinear_validation_report.md
+│   └── burden_plots/
+│       ├── validation_burden_summary.tsv
+│       ├── validation_burden_pvalue_lines.png
+│       └── validation_burden_zscore_heatmap.png
 └── cohort_c/
     └── ... (same structure)
 ```
