@@ -75,7 +75,7 @@ The fixed CV folds ensure the only variable is the gene set, not the data split.
 # Single level, single top-k
 python scripts/validate_nonlinear_classifier.py \
     --burden-matrix validation/cohort_b/gene_burden_matrix.parquet \
-    --sieve-genes validation/sieve_gene_lists/sieve_genes_L1.tsv \
+    --sieve-genes validation/sieve_gene_lists/L1_sieve_genes.tsv \
     --phenotypes /path/to/phenotypes.tsv \
     --output-dir validation/cohort_b/nonlinear_validation \
     --top-k 100 \
@@ -86,7 +86,7 @@ python scripts/validate_nonlinear_classifier.py \
 
 ### Multi-Level Mode
 
-To compare across ablation levels, point `--sieve-genes` at a directory containing `sieve_genes_L{0,1,2,3}.tsv` files:
+To compare across ablation levels, point `--sieve-genes` at a directory containing the per-level gene list files (either `L{0,1,2,3}_sieve_genes.tsv` as produced by `generate_sieve_gene_list.py --ablation-level`, or `sieve_genes_L{0,1,2,3}.tsv`):
 
 ```bash
 python scripts/validate_nonlinear_classifier.py \
@@ -144,7 +144,7 @@ Use `--also-export-csv` to export the SIEVE feature matrix as a CSV for analysis
 ```bash
 python scripts/validate_nonlinear_classifier.py \
     --burden-matrix validation/cohort_b/gene_burden_matrix.parquet \
-    --sieve-genes validation/sieve_gene_lists/sieve_genes_L1.tsv \
+    --sieve-genes validation/sieve_gene_lists/L1_sieve_genes.tsv \
     --phenotypes /path/to/phenotypes.tsv \
     --output-dir validation/cohort_b/nonlinear_validation \
     --top-k 100 \
