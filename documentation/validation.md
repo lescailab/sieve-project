@@ -86,7 +86,7 @@ python scripts/validate_nonlinear_classifier.py \
 
 ### Multi-Level Mode
 
-To compare across ablation levels, point `--sieve-genes` at a directory containing `sieve_genes_L{0,1,2,3}.tsv` files:
+To compare across ablation levels, point `--sieve-genes` at a directory containing the per-level gene list files (either `L{0,1,2,3}_sieve_genes.tsv` as produced by `generate_sieve_gene_list.py --ablation-level`, or `sieve_genes_L{0,1,2,3}.tsv`):
 
 ```bash
 python scripts/validate_nonlinear_classifier.py \

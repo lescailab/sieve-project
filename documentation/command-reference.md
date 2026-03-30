@@ -660,7 +660,7 @@ Tests whether SIEVE gene sets carry non-linear discriminative information by tra
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `--burden-matrix` | path | required | Gene-burden matrix parquet file, or directory containing `gene_burden_matrix*.parquet` |
-| `--sieve-genes` | path | required | SIEVE gene list TSV (single level), or directory with `sieve_genes_L{0,1,2,3}.tsv` files |
+| `--sieve-genes` | path | required | SIEVE gene list TSV (single level), or directory with per-level files (`L{0..3}_sieve_genes.tsv` or `sieve_genes_L{0..3}.tsv`) |
 | `--phenotypes` | path | required | Phenotype TSV (sample_id, phenotype: 1=ctrl, 2=case) |
 | `--output-dir` | path | required | Output directory |
 | `--top-k` | int list | `100` | Gene set size(s) to test |
