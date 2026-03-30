@@ -978,6 +978,21 @@ def main(argv: list[str] | None = None) -> None:
     n_controls = int(np.sum(y == 0))
     minority_fraction = min(n_cases, n_controls) / len(y)
     print(f"  Intersected: {len(common_samples)} samples ({n_cases} cases, {n_controls} controls)")
+    if n_cases == 0 or n_controls == 0:
+        print(
+            f"ERROR: Only one class present ({n_cases} cases, {n_controls} controls). "
+            "Cannot run stratified cross-validation."
+        )
+        sys.exit(1)
+
+    if min(n_cases, n_controls) < args.cv_folds:
+        print(
+            f"ERROR: Minority class has {min(n_cases, n_controls)} samples, "
+            f"but --cv-folds requires at least {args.cv_folds}. "
+            "Reduce --cv-folds or provide more samples."
+        )
+        sys.exit(1)
+
     if minority_fraction < 0.20:
         print(
             "  WARNING: Minority class fraction is below 20%; "
