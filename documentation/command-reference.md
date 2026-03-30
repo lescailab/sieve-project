@@ -648,3 +648,73 @@ python scripts/test_burden_enrichment.py \
 ```
 
 ---
+
+### validate_nonlinear_classifier.py
+
+```bash
+python scripts/validate_nonlinear_classifier.py [OPTIONS]
+```
+
+Tests whether SIEVE gene sets carry non-linear discriminative information by training a random forest (and optionally logistic regression) on the per-gene burden vector and comparing performance against a permutation null from size-matched random gene sets. See [Validation](validation.md) for detailed usage and interpretation.
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--burden-matrix` | path | required | Gene-burden matrix parquet file, or directory containing `gene_burden_matrix*.parquet` |
+| `--sieve-genes` | path | required | SIEVE gene list TSV (single level), or directory with `sieve_genes_L{0,1,2,3}.tsv` files |
+| `--phenotypes` | path | required | Phenotype TSV (sample_id, phenotype: 1=ctrl, 2=case) |
+| `--output-dir` | path | required | Output directory |
+| `--top-k` | int list | `100` | Gene set size(s) to test |
+| `--n-permutations` | int | `1000` | Number of random gene set permutations |
+| `--cv-folds` | int | `5` | Number of stratified CV folds |
+| `--seed` | int | `42` | Random seed |
+| `--n-jobs` | int | `4` | Number of parallel jobs |
+| `--consequence` | str | `total` | Which burden matrix: `total`, `missense`, `lof` |
+| `--classifiers` | str | `rf` | Classifier(s) to use: `rf`, `lr`, or `both` |
+| `--also-export-csv` | flag | False | Export SIEVE feature matrices as CSV for external analysis |
+
+**Example** (multi-level with both classifiers):
+```bash
+python scripts/validate_nonlinear_classifier.py \
+    --burden-matrix validation/cohort_b/gene_burden_matrix.parquet \
+    --sieve-genes validation/sieve_gene_lists/ \
+    --phenotypes /path/to/phenotypes.tsv \
+    --output-dir validation/cohort_b/nonlinear_validation \
+    --top-k 50 100 200 500 \
+    --n-permutations 1000 \
+    --classifiers both \
+    --n-jobs 4
+```
+
+---
+
+### plot_validation_burden.py
+
+```bash
+python scripts/plot_validation_burden.py [OPTIONS]
+```
+
+Collects and visualises scalar burden enrichment results across annotation levels. Reads YAML outputs from `test_burden_enrichment.py` and produces summary tables and plots.
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--input-dirs` | path list | required | Directories containing enrichment YAML files (one per level) |
+| `--labels` | str list | None | Labels for each input directory (auto-detected from directory names if omitted) |
+| `--output-dir` | path | `.` | Output directory |
+| `--top-k` | int list | `100 500 1000 2000` | Top-k values to include |
+| `--consequence-types` | str list | `total missense lof` | Consequence types to include |
+| `--output-prefix` | str | `validation_burden` | Prefix for output filenames |
+| `--format` | str | `png` | Output format: `png`, `pdf`, or `both` |
+
+**Example**:
+```bash
+python scripts/plot_validation_burden.py \
+    --input-dirs validation/cohort_b/enrichment_L0 \
+                 validation/cohort_b/enrichment_L1 \
+                 validation/cohort_b/enrichment_L2 \
+                 validation/cohort_b/enrichment_L3 \
+    --top-k 100 500 1000 2000 \
+    --consequence-types total missense lof \
+    --output-dir validation/cohort_b/burden_plots
+```
+
+---
