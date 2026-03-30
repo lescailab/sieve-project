@@ -220,13 +220,19 @@ def detect_sieve_gene_files(sieve_genes_path: Path) -> Dict[str, Path]:
 
     if sieve_genes_path.is_dir():
         files: Dict[str, Path] = {}
-        for gene_file in sorted(sieve_genes_path.glob("sieve_genes_L*.tsv")):
+        # Match both naming conventions:
+        #   L0_sieve_genes.tsv  (from --ablation-level L0)
+        #   sieve_genes_L0.tsv
+        for gene_file in sorted(sieve_genes_path.glob("*sieve_genes*.tsv")):
             match = re.search(r"L(\d+)", gene_file.name)
             if match:
-                files[f"L{match.group(1)}"] = gene_file
+                level = f"L{match.group(1)}"
+                if level not in files:
+                    files[level] = gene_file
         if not files:
             raise FileNotFoundError(
-                f"No sieve_genes_L*.tsv files found in {sieve_genes_path}"
+                f"No SIEVE gene list files (L*_sieve_genes*.tsv or "
+                f"sieve_genes_L*.tsv) found in {sieve_genes_path}"
             )
         return files
 
