@@ -259,7 +259,7 @@ def build_classifier(classifier_name: str, seed: int) -> Pipeline | RandomForest
                 (
                     "lr",
                     LogisticRegression(
-                        penalty="l2",
+                        l1_ratio=0,
                         C=1.0,
                         class_weight="balanced",
                         solver="lbfgs",
@@ -512,7 +512,7 @@ def plot_validation(
     valid_observed = observed_aucs[~np.isnan(observed_aucs)]
     box = axes[1].boxplot(
         [null_aucs, valid_observed],
-        labels=["Null (means)", "Observed (folds)"],
+        tick_labels=["Null (means)", "Observed (folds)"],
         patch_artist=True,
     )
     box["boxes"][0].set_facecolor("steelblue")
