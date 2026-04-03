@@ -67,7 +67,7 @@ A4_W, A4_H = 11.69, 8.27
 # Helpers
 # ---------------------------------------------------------------------------
 
-def level_sort_key(level: str) -> Tuple[int, str]:
+def level_sort_key(level: str) -> Tuple[int, int | str]:
     """Sort key placing L0–L3 first, then anything else alphabetically."""
     if level in LEVEL_ORDER:
         return (0, LEVEL_ORDER.index(level))
@@ -84,8 +84,8 @@ def load_null_aucs(npz_path: Path) -> Optional[np.ndarray]:
     """Load the null-distribution AUC array from an npz file."""
     if not npz_path.exists():
         return None
-    data = np.load(npz_path)
-    return data["null_aucs"]
+    with np.load(npz_path) as data:
+        return data["null_aucs"]
 
 
 def discover_results(results_dir: Path) -> Dict[Tuple[str, int], Dict[str, Dict[str, Any]]]:
@@ -241,7 +241,6 @@ def plot_comparison(
                      label="Null (LR)")
 
     # Observed markers – tall vertical lines
-    ymax = ax_dens.get_ylim()[1] if ax_dens.get_ylim()[1] > 0 else 1.0
     ax_dens.axvline(lr_mean, color=CLR_LR, linewidth=2.2, linestyle="--",
                     label=f"LR observed = {lr_mean:.3f}", zorder=5)
     ax_dens.axvline(rf_mean, color=CLR_RF, linewidth=2.2, linestyle="-",
@@ -344,9 +343,15 @@ def plot_comparison(
                  ha="right", va="bottom")
 
     # Y-axis: auto range with some padding
-    all_vals = np.concatenate([lr_folds, rf_folds]) if lr_folds.size and rf_folds.size else np.array([lr_mean, rf_mean])
+    fold_vals = [folds for folds in (lr_folds, rf_folds) if folds.size]
+    all_vals = np.concatenate(fold_vals) if fold_vals else np.array([lr_mean, rf_mean])
     y_lo = min(0.5, np.min(all_vals) - 0.02)
-    y_hi = max(np.max(all_vals) + 0.02, rf_mean + rf_obs["std_auc"] + 0.02)
+    y_hi_candidates = [
+        np.max(all_vals),
+        lr_mean + lr_obs["std_auc"],
+        rf_mean + rf_obs["std_auc"],
+    ]
+    y_hi = max(y_hi_candidates) + 0.02
     ax_comp.set_ylim(y_lo, y_hi)
     ax_comp.yaxis.set_major_formatter(mticker.FormatStrFormatter("%.2f"))
 
