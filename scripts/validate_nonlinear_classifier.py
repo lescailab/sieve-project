@@ -537,12 +537,11 @@ def plot_summary_heatmap(summary_df: pd.DataFrame, output_path: Path) -> None:
     top_ks = sorted(summary_df["top_k"].unique())
     bonferroni_threshold = 0.05 / len(summary_df) if len(summary_df) else 0.05
 
-    fig, axes = plt.subplots(
-        1,
-        len(classifiers),
-        figsize=(max(6, len(top_ks) * 1.7 * len(classifiers)), max(4, len(levels) * 0.9 + 2)),
-        squeeze=False,
+    fig = plt.figure(
+        figsize=(max(6, len(top_ks) * 1.7 * len(classifiers)) + 1.2, max(4, len(levels) * 0.9 + 2)),
     )
+    gs = fig.add_gridspec(1, len(classifiers) + 1, width_ratios=[*([1] * len(classifiers)), 0.05], wspace=0.4)
+    axes = np.array([[fig.add_subplot(gs[0, i]) for i in range(len(classifiers))]])
 
     matrices: list[np.ndarray] = []
     pval_matrices: list[np.ndarray] = []
@@ -609,10 +608,10 @@ def plot_summary_heatmap(summary_df: pd.DataFrame, output_path: Path) -> None:
                 )
 
     if image is not None:
-        fig.colorbar(image, ax=axes.ravel().tolist(), label="Observed AUC")
+        cbar_ax = fig.add_subplot(gs[0, len(classifiers)])
+        fig.colorbar(image, cax=cbar_ax, label="Observed AUC")
 
     fig.suptitle("Observed AUC across SIEVE ablation levels and top-k selections")
-    fig.tight_layout()
     fig.savefig(output_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
 
