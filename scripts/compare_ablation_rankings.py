@@ -179,6 +179,7 @@ def _score_column_is_ascending(score_column: str) -> bool:
 def _get_score(
     row: Dict[str, str],
     resolved_col: str,
+    missing_value: float,
 ) -> float:
     """Extract attribution score from a row using a pre-resolved column.
 
@@ -192,14 +193,14 @@ def _get_score(
     Returns
     -------
     float
-        The numeric score value, or 0.0 on failure.
+        The numeric score value, or *missing_value* on failure.
     """
     if resolved_col:
         try:
             return float(row[resolved_col])
         except (ValueError, TypeError, KeyError):
-            return 0.0
-    return 0.0
+            return missing_value
+    return missing_value
 
 
 def _get_field(
@@ -237,6 +238,8 @@ def load_rankings(
         reader = csv.DictReader(fh)
         headers = reader.fieldnames or []
         resolved_col, was_explicit = _resolve_score_column(headers, score_column)
+        ascending = _score_column_is_ascending(resolved_col)
+        missing_value = float("inf") if ascending else float("-inf")
         rows: List[Dict[str, Any]] = []
         for row in reader:
             vid = _build_variant_id(row, headers)
@@ -245,14 +248,13 @@ def load_rankings(
             rows.append(
                 {
                     "variant_id": vid,
-                    "score": _get_score(row, resolved_col),
+                    "score": _get_score(row, resolved_col, missing_value),
                     "gene": _get_field(row, headers, GENE_COLUMNS),
                     "chrom": _get_field(row, headers, CHROM_COLUMNS),
                     "pos": _get_field(row, headers, POS_COLUMNS),
                 }
             )
 
-    ascending = _score_column_is_ascending(resolved_col)
     rows.sort(key=lambda r: r["score"], reverse=not ascending)
     for i, row in enumerate(rows):
         row["rank"] = i + 1
