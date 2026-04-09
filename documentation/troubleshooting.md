@@ -243,12 +243,12 @@ If using `--experiment-dir`, check that `best_model.pt` or `fold_*/best_model.pt
 3. Apply post-hoc correction (`correct_chrx_bias.py`)
 
 **Note**: `correct_chrx_bias.py` excludes sex chromosomes by default; use `--include-sex-chroms` if you need chrX/chrY retained.
-4. Re-run ablation comparison on corrected rankings:
+4. Re-run ablation comparison on the null-contrasted significance rankings:
    ```bash
    python scripts/compare_ablation_rankings.py \
-       --ranking-dir results/ablation/corrected_rankings \
-       --score-column z_attribution \
-       --out-comparison corrected_ablation_ranking_comparison.yaml
+       --ranking-dir results/ablation/significance_rankings \
+       --score-column empirical_p_variant \
+       --out-comparison significance_ablation_ranking_comparison.yaml
    ```
 
 #### Very low attributions overall
@@ -275,4 +275,3 @@ If using `--experiment-dir`, check that `best_model.pt` or `fold_*/best_model.pt
 - Consider adjusting for covariates in future version
 
 ---
-

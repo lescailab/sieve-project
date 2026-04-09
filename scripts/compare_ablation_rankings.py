@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """
-Compare variant attribution rankings across annotation levels L0-L3.
+Compare null-contrasted variant rankings across annotation levels L0-L3.
 
-After running explain.py at each annotation level, this script compares the
-resulting variant rankings to quantify how much the discovered variants depend
-on the annotation information provided. Key analyses:
+After running the per-level null baseline workflow, this script compares the
+resulting significance-annotated variant rankings to quantify how much the
+discovered variants depend on the annotation information provided. By default
+it ranks variants by ``empirical_p_variant`` from
+``corrected_variant_rankings_with_significance.csv``. Lower p-values are
+treated as better ranks automatically. Key analyses:
 
 1. Jaccard similarity matrices at multiple top-k thresholds
 2. Level-specific variant discovery (high rank at one level, low at others)
@@ -13,13 +16,15 @@ Usage:
     # From a directory with L{0..3}_sieve_variant_rankings.csv files
     python scripts/compare_ablation_rankings.py \\
         --ranking-dir results/ablation \\
+        --score-column empirical_p_variant \\
         --out-comparison ablation_ranking_comparison.yaml
 
     # With explicit per-level paths
     python scripts/compare_ablation_rankings.py \\
-        --rankings L0:results/L0/sieve_variant_rankings.csv \\
-                   L1:results/L1/sieve_variant_rankings.csv \\
-                   L2:results/L2/sieve_variant_rankings.csv \\
+        --rankings L0:results/null_baseline_L0/results/attribution_comparison_corrected/corrected_variant_rankings_with_significance.csv \\
+                   L1:results/null_baseline_L1/results/attribution_comparison_corrected/corrected_variant_rankings_with_significance.csv \\
+                   L2:results/null_baseline_L2/results/attribution_comparison_corrected/corrected_variant_rankings_with_significance.csv \\
+        --score-column empirical_p_variant \\
         --out-comparison ablation_ranking_comparison.yaml
 
 Author: Francesco Lescai
@@ -63,21 +68,24 @@ def dump_yaml(value: Any, path: pathlib.Path) -> None:
 # CSV loading — flexible column matching
 # ---------------------------------------------------------------------------
 
-# Primary SIEVE columns produced by src/explain/variant_ranking.py
+# Primary SIEVE columns produced by src/explain/variant_ranking.py and the
+# null-contrast workflow.
 VARIANT_ID_COLUMNS = [
     "variant_id",
     "feature",
     "feature_id",
 ]
 SCORE_COLUMNS = [
+    "empirical_p_variant",
+    "fdr_variant",
+    "z_attribution",
+    "corrected_rank",
     "mean_attribution",
     "score",
     "attribution",
     "max_attribution",
     "mean_score",
     "importance",
-    "z_attribution",
-    "corrected_rank",
 ]
 GENE_COLUMNS = ["gene_name", "gene", "gene_symbol"]
 GENE_ID_COLUMNS = ["gene_id"]
@@ -125,9 +133,6 @@ def _build_variant_id(row: Dict[str, str], headers: List[str]) -> Optional[str]:
     return None
 
 
-_score_column_warning_shown = False
-
-
 def _resolve_score_column(
     headers: List[str],
     score_column: Optional[str] = None,
@@ -147,24 +152,28 @@ def _resolve_score_column(
         (resolved_column_name, was_explicit). *was_explicit* is True when
         the returned column came from *score_column* rather than auto-detection.
     """
-    global _score_column_warning_shown
-
     if score_column is not None:
         lower_headers = {h.lower(): h for h in headers}
         if score_column.lower() in lower_headers:
             return lower_headers[score_column.lower()], True
-        else:
-            if not _score_column_warning_shown:
-                print(
-                    f"WARNING: --score-column '{score_column}' not found in "
-                    f"headers; falling back to auto-detection",
-                    file=sys.stderr,
-                )
-                _score_column_warning_shown = True
+        raise ValueError(
+            f"--score-column '{score_column}' not found in headers: {headers}"
+        )
 
     # Auto-detect from SCORE_COLUMNS list
     col = _find_column(headers, SCORE_COLUMNS)
     return (col or ""), False
+
+
+def _score_column_is_ascending(score_column: str) -> bool:
+    """Return True when lower values indicate stronger ranking."""
+    lowered = score_column.lower()
+    return (
+        lowered.startswith("empirical_p")
+        or lowered.startswith("fdr")
+        or lowered.endswith("_rank")
+        or lowered == "rank"
+    )
 
 
 def _get_score(
@@ -206,7 +215,7 @@ def _get_field(
 def load_rankings(
     csv_path: pathlib.Path,
     score_column: Optional[str] = None,
-) -> Tuple[List[Dict[str, Any]], str]:
+) -> Tuple[List[Dict[str, Any]], str, bool]:
     """
     Load a variant ranking CSV and return a list of dicts sorted by score.
 
@@ -243,8 +252,8 @@ def load_rankings(
                 }
             )
 
-    # Sort by score descending, assign ranks
-    rows.sort(key=lambda r: -r["score"])
+    ascending = _score_column_is_ascending(resolved_col)
+    rows.sort(key=lambda r: r["score"], reverse=not ascending)
     for i, row in enumerate(rows):
         row["rank"] = i + 1
     return rows, resolved_col, was_explicit
@@ -515,13 +524,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--score-column",
         type=str,
-        default=None,
+        default="empirical_p_variant",
         help=(
             "Column name to use for ranking variants. "
-            "If not specified, the script auto-detects from a built-in list "
-            "(mean_attribution, score, attribution, ...). "
-            "Use 'z_attribution' when comparing chromosome-normalised rankings "
-            "from correct_chrx_bias.py."
+            "Defaults to empirical_p_variant from the null-contrast workflow. "
+            "Columns such as empirical_p_variant, fdr_variant, and corrected_rank "
+            "are ranked ascending automatically; attribution-like scores are "
+            "ranked descending."
         ),
     )
     return parser.parse_args()
@@ -583,9 +592,16 @@ def main() -> int:
     resolved_score_col = ""
     score_was_explicit = False
     for level, fpath in level_files.items():
-        rankings, col_name, was_explicit = load_rankings(
-            fpath, score_column=args.score_column
-        )
+        try:
+            rankings, col_name, was_explicit = load_rankings(
+                fpath, score_column=args.score_column
+            )
+        except ValueError as exc:
+            print(
+                f"ERROR: Failed to load rankings for {level} from {fpath}: {exc}",
+                file=sys.stderr,
+            )
+            return 1
         level_rankings[level] = rankings
         if not resolved_score_col and col_name:
             resolved_score_col = col_name
@@ -599,7 +615,8 @@ def main() -> int:
     if resolved_score_col:
         source = "from --score-column" if score_was_explicit else "auto-detected"
         print(
-            f"Score column: {resolved_score_col} ({source})",
+            f"Score column: {resolved_score_col} ({source}, "
+            f"{'ascending' if _score_column_is_ascending(resolved_score_col) else 'descending'})",
             file=sys.stderr,
         )
 
@@ -669,6 +686,11 @@ def main() -> int:
         "top_k_values": top_k_values,
         "high_rank_threshold": args.high_rank_threshold,
         "low_rank_threshold": args.low_rank_threshold,
+        "score_column": resolved_score_col,
+        "score_sort_order": (
+            "ascending" if resolved_score_col and _score_column_is_ascending(resolved_score_col)
+            else "descending"
+        ),
         "variants_per_level": {
             level: len(rankings) for level, rankings in level_rankings.items()
         },
