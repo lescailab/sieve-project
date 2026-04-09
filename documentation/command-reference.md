@@ -335,12 +335,13 @@ Compares variant attribution rankings across annotation levels. Computes pairwis
 | `--out-comparison` | path | `ablation_ranking_comparison.yaml` | Output YAML summary |
 | `--out-jaccard` | path | `ablation_jaccard_matrix.tsv` | Output Jaccard matrix TSV |
 | `--out-level-specific` | path | `level_specific_variants.tsv` | Output level-specific variants TSV |
-| `--score-column` | str | None (auto-detect) | Column to rank variants by. Use `z_attribution` for chromosome-normalised rankings from `correct_chrx_bias.py` |
+| `--score-column` | str | `empirical_p_variant` | Column to rank variants by. The default is the null-contrast empirical p-value from `corrected_variant_rankings_with_significance.csv`; p/FDR-like columns are ranked ascending automatically |
 
 **Example**:
 ```bash
 python scripts/compare_ablation_rankings.py \
     --ranking-dir results/ablation/rankings \
+    --score-column empirical_p_variant \
     --top-k 50,100,200,500 \
     --out-comparison results/ablation/ablation_ranking_comparison.yaml \
     --out-jaccard results/ablation/ablation_jaccard_matrix.tsv \
