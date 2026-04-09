@@ -416,12 +416,13 @@ python scripts/ablation_compare.py \
 # Compare attribution rankings
 mkdir -p results/ablation/rankings
 for LEVEL in L0 L1 L2 L3; do
-    cp results/${LEVEL}_explainability/sieve_variant_rankings.csv \
+    cp results/null_baseline_${LEVEL}/results/attribution_comparison_corrected/corrected_variant_rankings_with_significance.csv \
        results/ablation/rankings/${LEVEL}_sieve_variant_rankings.csv
 done
 
 python scripts/compare_ablation_rankings.py \
     --ranking-dir results/ablation/rankings \
+    --score-column empirical_p_variant \
     --out-comparison results/ablation/ablation_ranking_comparison.yaml \
     --out-jaccard results/ablation/ablation_jaccard_matrix.tsv \
     --out-level-specific results/ablation/level_specific_variants.tsv
@@ -440,10 +441,11 @@ If your ranking files are not in a single directory with level prefixes, you can
 
 ```bash
 python scripts/compare_ablation_rankings.py \
-    --rankings L0:results/L0_explainability/sieve_variant_rankings.csv \
-               L1:results/L1_explainability/sieve_variant_rankings.csv \
-               L2:results/L2_explainability/sieve_variant_rankings.csv \
-               L3:results/L3_explainability/sieve_variant_rankings.csv \
+    --rankings L0:results/null_baseline_L0/results/attribution_comparison_corrected/corrected_variant_rankings_with_significance.csv \
+               L1:results/null_baseline_L1/results/attribution_comparison_corrected/corrected_variant_rankings_with_significance.csv \
+               L2:results/null_baseline_L2/results/attribution_comparison_corrected/corrected_variant_rankings_with_significance.csv \
+               L3:results/null_baseline_L3/results/attribution_comparison_corrected/corrected_variant_rankings_with_significance.csv \
+    --score-column empirical_p_variant \
     --out-comparison results/ablation/ablation_ranking_comparison.yaml \
     --out-jaccard results/ablation/ablation_jaccard_matrix.tsv \
     --out-level-specific results/ablation/level_specific_variants.tsv
@@ -458,43 +460,34 @@ The level-specific variant detection uses two thresholds:
 
 Tighter thresholds (e.g., `--high-rank-threshold 50 --low-rank-threshold 200`) produce a more selective list; looser thresholds capture more candidates.
 
-#### Using Chromosome-Normalised Rankings
+#### Using Null-Contrasted Significance Rankings
 
-When chrX ploidy bias inflates attributions on sex chromosomes, run `correct_chrx_bias.py` on each level's rankings before comparing:
+The ablation comparison should operate on the null-contrasted significance files produced by `run_null_baseline_analysis.sh`, not on the standalone corrected rankings:
 
 ```bash
-# 1. Normalise each level's rankings by chromosome
+# 1. Copy null-contrasted significance files into a comparison directory
+mkdir -p results/ablation/significance_rankings
 for LEVEL in L0 L1 L2 L3; do
-    python scripts/correct_chrx_bias.py \
-        --rankings results/${LEVEL}_explainability/sieve_variant_rankings.csv \
-        --output-dir results/${LEVEL}_explainability/corrected/ \
-        --include-sex-chroms \
-        --genome-build GRCh37
+    cp results/null_baseline_${LEVEL}/results/attribution_comparison_corrected/corrected_variant_rankings_with_significance.csv \
+       results/ablation/significance_rankings/${LEVEL}_sieve_variant_rankings.csv
 done
 
-# 2. Copy corrected files into a comparison directory
-mkdir -p results/ablation/corrected_rankings
-for LEVEL in L0 L1 L2 L3; do
-    cp results/${LEVEL}_explainability/corrected/corrected_variant_rankings.csv \
-       results/ablation/corrected_rankings/${LEVEL}_sieve_variant_rankings.csv
-done
-
-# 3. Compare using z_attribution as the score column
+# 2. Compare using the null-contrast empirical p-value ranking
 python scripts/compare_ablation_rankings.py \
-    --ranking-dir results/ablation/corrected_rankings \
-    --score-column z_attribution \
+    --ranking-dir results/ablation/significance_rankings \
+    --score-column empirical_p_variant \
     --top-k 100,500,1000,2000 \
-    --out-comparison results/ablation/corrected_ablation_ranking_comparison.yaml \
-    --out-jaccard results/ablation/corrected_ablation_jaccard_matrix.tsv \
-    --out-level-specific results/ablation/corrected_level_specific_variants.tsv
+    --out-comparison results/ablation/significance_ablation_ranking_comparison.yaml \
+    --out-jaccard results/ablation/significance_ablation_jaccard_matrix.tsv \
+    --out-level-specific results/ablation/significance_level_specific_variants.tsv
 
-# 4. Plot (unchanged — reads from the TSV outputs)
+# 3. Plot (reads from the significance-based TSV outputs)
 python scripts/plot_ablation_comparison.py \
-    --jaccard-tsv results/ablation/corrected_ablation_jaccard_matrix.tsv \
-    --level-specific-tsv results/ablation/corrected_level_specific_variants.tsv \
+    --jaccard-tsv results/ablation/significance_ablation_jaccard_matrix.tsv \
+    --level-specific-tsv results/ablation/significance_level_specific_variants.tsv \
     --summary-yaml results/ablation/ablation_summary.yaml \
     --heatmap-top-k 1000 \
-    --output results/ablation/corrected_ablation_comparison.png
+    --output results/ablation/significance_ablation_comparison.png
 ```
 
 Using `--include-sex-chroms` retains chrX/chrY variants in the output (flagged via `is_sex_chrom`) but normalises their scores relative to other variants on the same chromosome. This removes systematic inflation while preserving genuinely important sex-chromosome variants.

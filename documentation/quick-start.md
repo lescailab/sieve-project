@@ -70,7 +70,9 @@ bash scripts/run_null_baseline_analysis.sh
 #    NOTE: run_null_baseline_analysis.sh (step 6) already applies chrX
 #    correction to both real and null rankings automatically.  Use this
 #    command only if you want a standalone corrected file for a single
-#    rankings CSV (e.g. to pass to compare_ablation_rankings.py).
+#    rankings CSV for inspection.  Ablation comparison should instead use
+#    corrected_variant_rankings_with_significance.csv from the null baseline
+#    wrapper.
 python scripts/correct_chrx_bias.py \
     --rankings results/explainability/sieve_variant_rankings.csv \
     --output-dir results/explainability_corrected \
@@ -91,4 +93,3 @@ python scripts/train.py \
 ```
 
 ---
-

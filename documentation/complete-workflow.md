@@ -286,17 +286,17 @@ done
 
 **Step 5c: Compare corrected variant attribution rankings across levels**:
 ```bash
-# Collect corrected ranking files into one directory with level prefixes
+# Collect null-contrasted significance files into one directory with level prefixes
 mkdir -p results/ablation/rankings
-cp results/L0_explainability/corrected/corrected_variant_rankings.csv results/ablation/rankings/L0_sieve_variant_rankings.csv
-cp results/L1_explainability/corrected/corrected_variant_rankings.csv results/ablation/rankings/L1_sieve_variant_rankings.csv
-cp results/L2_explainability/corrected/corrected_variant_rankings.csv results/ablation/rankings/L2_sieve_variant_rankings.csv
-cp results/L3_explainability/corrected/corrected_variant_rankings.csv results/ablation/rankings/L3_sieve_variant_rankings.csv
+cp results/null_baseline_L0/results/attribution_comparison_corrected/corrected_variant_rankings_with_significance.csv results/ablation/rankings/L0_sieve_variant_rankings.csv
+cp results/null_baseline_L1/results/attribution_comparison_corrected/corrected_variant_rankings_with_significance.csv results/ablation/rankings/L1_sieve_variant_rankings.csv
+cp results/null_baseline_L2/results/attribution_comparison_corrected/corrected_variant_rankings_with_significance.csv results/ablation/rankings/L2_sieve_variant_rankings.csv
+cp results/null_baseline_L3/results/attribution_comparison_corrected/corrected_variant_rankings_with_significance.csv results/ablation/rankings/L3_sieve_variant_rankings.csv
 
 # Run comparison
 python scripts/compare_ablation_rankings.py \
     --ranking-dir results/ablation/rankings \
-    --score-column z_attribution \
+    --score-column empirical_p_variant \
     --top-k 50,100,200,500 \
     --high-rank-threshold 100 \
     --low-rank-threshold 500 \
