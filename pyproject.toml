@@ -51,6 +51,7 @@ dependencies = [
     # Machine learning utilities
     "scikit-learn>=1.3.0",
     "shap>=0.42.0,<0.50",  # SHAP values (compatible with numpy<2.0)
+    "threadpoolctl>=3.0.0",  # BLAS thread diagnostics for parallel validation
 
     # Statistical modelling
     "statsmodels>=0.14.0",  # Logistic regression for burden enrichment

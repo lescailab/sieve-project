@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import os
+import time
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pytest
-import yaml
 
 import scripts.validate_nonlinear_classifier as nonlinear
 
@@ -16,8 +17,8 @@ def make_xor_signal_dataset(
     n_samples: int = 80,
     n_genes: int = 100,
     seed: int = 42,
-) -> tuple[pd.DataFrame, np.ndarray, pd.DataFrame]:
-    """Create a dataset with a strong non-linear XOR signal in the first 10 genes."""
+) -> tuple[pd.DataFrame, np.ndarray]:
+    """Create a burden matrix with a strong XOR-like signal in the first 10 genes."""
     if n_samples % 4 != 0:
         raise ValueError("n_samples must be divisible by 4 for the XOR construction")
 
@@ -27,7 +28,7 @@ def make_xor_signal_dataset(
     data = rng.poisson(lam=0.1, size=(n_samples, n_genes))
 
     quarter = n_samples // 4
-    y = np.array([1] * (2 * quarter) + [0] * (2 * quarter), dtype=np.int64)
+    labels = np.array([1] * (2 * quarter) + [0] * (2 * quarter), dtype=np.int64)
     xor_patterns = np.array(
         [[1, 0]] * quarter
         + [[0, 1]] * quarter
@@ -42,45 +43,37 @@ def make_xor_signal_dataset(
         data[:, gene_idx] = xor_patterns[:, gene_idx % 2]
 
     burden_matrix = pd.DataFrame(data, index=samples, columns=genes)
-    sieve_df = pd.DataFrame(
+    return burden_matrix, labels
+
+
+def make_gene_rankings(
+    genes: list[str],
+    signal_genes: list[str],
+    reverse_tail: bool = False,
+) -> pd.DataFrame:
+    """Create a corrected gene-ranking file with optional significance columns."""
+    tail_genes = [gene for gene in genes if gene not in signal_genes]
+    if reverse_tail:
+        tail_genes = tail_genes[::-1]
+
+    ordered = signal_genes + tail_genes
+    gene_z = np.linspace(4.0, -1.0, len(ordered))
+    fdr = np.linspace(0.001, 0.50, len(ordered))
+
+    return pd.DataFrame(
         {
-            "gene_name": genes[:10],
-            "gene_rank": np.arange(1, 11),
-            "gene_score": np.linspace(10.0, 1.0, 10),
-            "n_variants": [2] * 10,
-            "chromosome": ["1"] * 10,
+            "gene_name": ordered,
+            "gene_rank": np.arange(1, len(ordered) + 1),
+            "gene_z_score": gene_z,
+            "num_variants": np.ones(len(ordered), dtype=int),
+            "empirical_p_gene": np.clip(fdr / 2, 0, 1),
+            "fdr_gene": fdr,
         }
     )
-    return burden_matrix, y, sieve_df
 
 
-def make_null_dataset(
-    n_samples: int = 120,
-    n_genes: int = 100,
-    seed: int = 123,
-) -> tuple[pd.DataFrame, np.ndarray, pd.DataFrame]:
-    """Create a burden matrix with no phenotype signal."""
-    rng = np.random.default_rng(seed)
-    samples = [f"sample_{idx}" for idx in range(n_samples)]
-    genes = [f"GENE_{idx}" for idx in range(n_genes)]
-    data = rng.poisson(lam=0.15, size=(n_samples, n_genes))
-    y = np.array([0, 1] * (n_samples // 2), dtype=np.int64)
-
-    burden_matrix = pd.DataFrame(data, index=samples, columns=genes)
-    sieve_df = pd.DataFrame(
-        {
-            "gene_name": genes[:10],
-            "gene_rank": np.arange(1, 11),
-            "gene_score": np.linspace(10.0, 1.0, 10),
-            "n_variants": [1] * 10,
-            "chromosome": ["1"] * 10,
-        }
-    )
-    return burden_matrix, y, sieve_df
-
-
-def write_phenotypes(path: Path, sample_ids: list[str], labels: np.ndarray) -> None:
-    """Write a PLINK-style phenotype file."""
+def write_labels(path: Path, sample_ids: list[str], labels: np.ndarray) -> None:
+    """Write a phenotype file in standard SIEVE format."""
     lines = [
         f"{sample_id}\t{2 if label == 1 else 1}"
         for sample_id, label in zip(sample_ids, labels)
@@ -88,190 +81,247 @@ def write_phenotypes(path: Path, sample_ids: list[str], labels: np.ndarray) -> N
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-class TestNonlinearValidation:
+def prepare_inputs(
+    tmp_path: Path,
+    levels: tuple[str, ...] = ("L0", "L1"),
+) -> tuple[Path, Path, Path]:
+    """Create a burden matrix, label file, and per-level corrected rankings."""
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    burden_matrix, labels = make_xor_signal_dataset(n_samples=40, n_genes=40, seed=21)
+    burden_path = tmp_path / "gene_burden_matrix.parquet"
+    label_path = tmp_path / "labels.tsv"
+    rankings_root = tmp_path / "rankings"
 
-    def test_random_forest_detects_xor_signal_above_null(self, tmp_path: Path) -> None:
-        burden_matrix, y, sieve_df = make_xor_signal_dataset(n_genes=500)
-        fold_indices = nonlinear.generate_fixed_folds(y, cv_folds=4, seed=42, n_repeats=2)
+    burden_with_sample_id = burden_matrix.reset_index().rename(columns={"index": "sample_id"})
+    burden_with_sample_id.to_parquet(burden_path)
+    write_labels(label_path, burden_matrix.index.tolist(), labels)
 
-        result = nonlinear.run_validation(
-            burden_matrix=burden_matrix,
-            burden_values=burden_matrix.to_numpy(dtype=np.float64, copy=True),
-            sieve_genes_df=sieve_df,
-            y=y,
-            sample_ids=np.asarray(burden_matrix.index, dtype=object),
-            level="L1",
-            top_k_requested=10,
-            top_k_used=10,
-            classifier_name="rf",
-            fold_indices=fold_indices,
-            n_permutations=20,
-            seed=42,
-            n_jobs=1,
-            output_dir=tmp_path,
-            consequence="total",
+    rankings_root.mkdir()
+    signal_genes = burden_matrix.columns[:10].tolist()
+    all_genes = burden_matrix.columns.tolist()
+
+    for level_index, level in enumerate(levels):
+        level_dir = rankings_root / level
+        level_dir.mkdir()
+        rankings_df = make_gene_rankings(
+            genes=all_genes,
+            signal_genes=signal_genes,
+            reverse_tail=bool(level_index % 2),
         )
-
-        assert result
-        assert result["observed_auc"] > 0.80
-        assert result["observed_auc"] > np.mean(result["null_aucs"]) + 0.15
-        assert result["empirical_p"] < 0.10
-
-    def test_random_gene_set_on_null_data_is_not_significant(self, tmp_path: Path) -> None:
-        burden_matrix, y, sieve_df = make_null_dataset()
-        fold_indices = nonlinear.generate_fixed_folds(y, cv_folds=4, seed=7, n_repeats=2)
-
-        result = nonlinear.run_validation(
-            burden_matrix=burden_matrix,
-            burden_values=burden_matrix.to_numpy(dtype=np.float64, copy=True),
-            sieve_genes_df=sieve_df,
-            y=y,
-            sample_ids=np.asarray(burden_matrix.index, dtype=object),
-            level="L0",
-            top_k_requested=10,
-            top_k_used=10,
-            classifier_name="rf",
-            fold_indices=fold_indices,
-            n_permutations=20,
-            seed=7,
-            n_jobs=1,
-            output_dir=tmp_path,
-            consequence="total",
-        )
-
-        assert result
-        assert abs(result["observed_auc"] - np.mean(result["null_aucs"])) < 0.10
-        assert 0.05 <= result["empirical_p"] <= 0.95
-
-    def test_same_fold_indices_are_reused_for_observed_and_null(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        burden_matrix, y, sieve_df = make_xor_signal_dataset(n_samples=40, n_genes=40, seed=9)
-        fold_indices = nonlinear.generate_fixed_folds(y, cv_folds=4, seed=9, n_repeats=2)
-        seen_fold_ids: list[int] = []
-
-        def fake_evaluate_gene_set(
-            X: np.ndarray,
-            y_array: np.ndarray,
-            received_fold_indices: nonlinear.FoldIndices,
-            classifier_name: str,
-            model_seed: int,
-            warn_context: str = "",
-        ) -> np.ndarray:
-            del X, y_array, classifier_name, model_seed, warn_context
-            seen_fold_ids.append(id(received_fold_indices))
-            return np.full(len(received_fold_indices), 0.5, dtype=np.float64)
-
-        monkeypatch.setattr(nonlinear, "evaluate_gene_set", fake_evaluate_gene_set)
-
-        result = nonlinear.run_validation(
-            burden_matrix=burden_matrix,
-            burden_values=burden_matrix.to_numpy(dtype=np.float64, copy=True),
-            sieve_genes_df=sieve_df,
-            y=y,
-            sample_ids=np.asarray(burden_matrix.index, dtype=object),
-            level="L2",
-            top_k_requested=10,
-            top_k_used=10,
-            classifier_name="rf",
-            fold_indices=fold_indices,
-            n_permutations=5,
-            seed=9,
-            n_jobs=1,
-            output_dir=tmp_path,
-            consequence="total",
-        )
-
-        assert result
-        assert len(seen_fold_ids) == 6
-        assert set(seen_fold_ids) == {id(fold_indices)}
-
-    def test_cli_outputs_yaml_tsv_npz_png_and_csv(self, tmp_path: Path) -> None:
-        burden_matrix, y, sieve_df = make_xor_signal_dataset(n_samples=40, n_genes=30, seed=21)
-        burden_path = tmp_path / "gene_burden_matrix.parquet"
-        phenotypes_path = tmp_path / "phenotypes.tsv"
-        sieve_dir = tmp_path / "sieve_levels"
-        output_dir = tmp_path / "nonlinear_validation"
-
-        burden_with_sample_id = burden_matrix.reset_index().rename(columns={"index": "sample_id"})
-        burden_with_sample_id.to_parquet(burden_path)
-        write_phenotypes(phenotypes_path, burden_matrix.index.tolist(), y)
-
-        sieve_dir.mkdir()
-        sieve_df.to_csv(sieve_dir / "sieve_genes_L0.tsv", sep="\t", index=False)
-        sieve_df.iloc[::-1].assign(gene_rank=np.arange(1, len(sieve_df) + 1)).to_csv(
-            sieve_dir / "sieve_genes_L1.tsv",
-            sep="\t",
+        rankings_df.to_csv(
+            level_dir / "corrected_gene_rankings_with_significance.csv",
             index=False,
         )
 
+    return burden_path, label_path, rankings_root
+
+
+class TestNonlinearValidation:
+
+    def test_output_tsv_has_exact_columns_and_shared_null_stats(self, tmp_path: Path) -> None:
+        """Summary TSV must match the new schema and share null stats across levels."""
+        burden_path, label_path, rankings_root = prepare_inputs(tmp_path)
+        output_tsv = tmp_path / "nonlinear_validation_summary.tsv"
+
         nonlinear.main(
             [
+                "--real-rankings-dir",
+                str(rankings_root),
                 "--burden-matrix",
                 str(burden_path),
-                "--sieve-genes",
-                str(sieve_dir),
-                "--phenotypes",
-                str(phenotypes_path),
-                "--output-dir",
-                str(output_dir),
+                "--labels",
+                str(label_path),
+                "--output-tsv",
+                str(output_tsv),
                 "--top-k",
-                "5",
+                "5,10",
+                "--classifiers",
+                "rf,lr",
+                "--levels",
+                "L0,L1",
+                "--n-permutations",
+                "6",
+                "--cv-folds",
+                "3",
+                "--n-cores",
+                "1",
+                "--seed",
+                "21",
+            ]
+        )
+
+        summary_df = pd.read_csv(output_tsv, sep="\t")
+        assert list(summary_df.columns) == nonlinear.SUMMARY_COLUMNS
+        assert len(summary_df) == 2 * 2 * 2
+
+        for (_, _), group in summary_df.groupby(["top_k", "classifier"]):
+            assert group["null_mean_auc"].nunique() == 1
+            assert group["null_std_auc"].nunique() == 1
+
+        sorted_fdr = summary_df.sort_values("empirical_p")["fdr_bh"].to_numpy()
+        assert np.all(np.diff(sorted_fdr) >= -1e-12)
+
+    def test_same_seed_produces_byte_identical_output(self, tmp_path: Path) -> None:
+        """Running twice with the same seed should produce byte-identical TSV output."""
+        burden_path, label_path, rankings_root = prepare_inputs(tmp_path / "inputs")
+        output_a = tmp_path / "run_a.tsv"
+        output_b = tmp_path / "run_b.tsv"
+
+        common_args = [
+            "--real-rankings-dir",
+            str(rankings_root),
+            "--burden-matrix",
+            str(burden_path),
+            "--labels",
+            str(label_path),
+            "--top-k",
+            "5",
+            "--classifiers",
+            "rf",
+            "--levels",
+            "L0,L1",
+            "--n-permutations",
+            "5",
+            "--cv-folds",
+            "3",
+            "--n-cores",
+            "1",
+            "--seed",
+            "123",
+        ]
+
+        nonlinear.main(common_args + ["--output-tsv", str(output_a)])
+        nonlinear.main(common_args + ["--output-tsv", str(output_b)])
+
+        assert output_a.read_bytes() == output_b.read_bytes()
+
+    def test_cli_requires_top_k(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """Argparse must reject invocations that omit --top-k."""
+        with pytest.raises(SystemExit):
+            nonlinear.parse_args(
+                [
+                    "--real-rankings-dir",
+                    "rankings",
+                    "--burden-matrix",
+                    "burden.parquet",
+                    "--labels",
+                    "labels.tsv",
+                    "--output-tsv",
+                    "out.tsv",
+                    "--classifiers",
+                    "rf",
+                ]
+            )
+
+        stderr = capsys.readouterr().err
+        assert "--top-k" in stderr
+
+    def test_custom_grid_row_count(self, tmp_path: Path) -> None:
+        """Custom top-k and classifier grids must produce the expected row count."""
+        burden_path, label_path, rankings_root = prepare_inputs(
+            tmp_path,
+            levels=("L0", "L1", "L2"),
+        )
+        output_tsv = tmp_path / "custom_grid.tsv"
+
+        nonlinear.main(
+            [
+                "--real-rankings-dir",
+                str(rankings_root),
+                "--burden-matrix",
+                str(burden_path),
+                "--labels",
+                str(label_path),
+                "--output-tsv",
+                str(output_tsv),
+                "--top-k",
+                "5,8",
+                "--classifiers",
+                "rf",
+                "--levels",
+                "L0,L1,L2",
                 "--n-permutations",
                 "4",
                 "--cv-folds",
                 "3",
-                "--seed",
-                "21",
-                "--n-jobs",
+                "--n-cores",
                 "1",
-                "--classifiers",
-                "both",
-                "--also-export-csv",
+                "--seed",
+                "99",
             ]
         )
 
-        primary_yaml = output_dir / "nonlinear_validation_L0_topK5.yaml"
-        secondary_yaml = output_dir / "nonlinear_validation_L0_topK5_lr.yaml"
-        null_npz = output_dir / "null_aucs_L0_topK5.npz"
-        plot_png = output_dir / "validation_plot_L0_topK5.png"
-        summary_tsv = output_dir / "nonlinear_validation_summary.tsv"
-        heatmap_png = output_dir / "nonlinear_validation_heatmap.png"
-        report_md = output_dir / "nonlinear_validation_report.md"
-        csv_path = output_dir / "csv" / "feature_matrix_total_L0_top5.csv"
+        summary_df = pd.read_csv(output_tsv, sep="\t")
+        assert len(summary_df) == 2 * 1 * 3
+        assert set(summary_df["top_k"]) == {5, 8}
+        assert set(summary_df["classifier"]) == {"rf"}
+        assert set(summary_df["level"]) == {"L0", "L1", "L2"}
 
-        assert primary_yaml.exists()
-        assert secondary_yaml.exists()
-        assert null_npz.exists()
-        assert plot_png.exists()
-        assert summary_tsv.exists()
-        assert heatmap_png.exists()
-        assert report_md.exists()
-        assert csv_path.exists()
+    def test_thread_environment_variables_are_pinned(self) -> None:
+        """BLAS/OpenMP thread counts must be pinned to one at import time."""
+        assert os.environ["OMP_NUM_THREADS"] == "1"
+        assert os.environ["OPENBLAS_NUM_THREADS"] == "1"
+        assert os.environ["MKL_NUM_THREADS"] == "1"
+        assert os.environ["VECLIB_MAXIMUM_THREADS"] == "1"
+        assert os.environ["NUMEXPR_NUM_THREADS"] == "1"
 
-        yaml_payload = yaml.safe_load(primary_yaml.read_text(encoding="utf-8"))
-        assert "parameters" in yaml_payload
-        assert "observed" in yaml_payload
-        assert "null_distribution" in yaml_payload
-        assert "linear_baseline" in yaml_payload
+    def test_parallel_null_distribution_scales_with_cores(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The shared permutation phase should scale materially with outer-loop parallelism."""
+        available_cores = os.cpu_count() or 1
+        if available_cores < 8:
+            pytest.skip("Parallel scaling test requires at least 8 CPU cores")
 
-        summary_df = pd.read_csv(summary_tsv, sep="\t")
-        expected_columns = {
-            "level",
-            "top_k",
-            "k_effective",
-            "classifier",
-            "observed_auc",
-            "observed_std",
-            "null_mean_auc",
-            "null_std_auc",
-            "empirical_p",
-            "percentile_rank",
-            "bonferroni_significant",
-        }
-        assert expected_columns.issubset(summary_df.columns)
-        assert set(summary_df["classifier"]) == {"rf", "lr"}
+        def fake_evaluate_random_gene_set_mean_auc(
+            burden_values: np.ndarray,
+            labels: np.ndarray,
+            feature_indices: np.ndarray,
+            fold_indices: object,
+            classifier_name: str,
+            model_seed: int,
+        ) -> float:
+            del burden_values, labels, feature_indices, fold_indices, classifier_name, model_seed
+            time.sleep(0.1)
+            return 0.5
 
-        csv_df = pd.read_csv(csv_path)
-        assert csv_df.columns[0] == "sample_id"
-        assert csv_df.columns[-1] == "phenotype"
-        assert csv_df.shape[0] == burden_matrix.shape[0]
-        assert csv_df.shape[1] == 7
+        monkeypatch.setattr(
+            nonlinear,
+            "evaluate_random_gene_set_mean_auc",
+            fake_evaluate_random_gene_set_mean_auc,
+        )
+
+        burden_values = np.zeros((20, 100), dtype=np.float64)
+        labels = np.array([0, 1] * 10, dtype=np.int64)
+        fold_indices = [(np.arange(10), np.arange(10, 20))]
+        random_gene_sets = [np.arange(5, dtype=np.int64) for _ in range(80)]
+
+        start_single = time.perf_counter()
+        nonlinear.run_shared_null_distribution(
+            burden_values=burden_values,
+            labels=labels,
+            random_gene_sets=random_gene_sets,
+            fold_indices=fold_indices,
+            classifier_name="rf",
+            seed=7,
+            n_cores=1,
+        )
+        single_elapsed = time.perf_counter() - start_single
+
+        start_parallel = time.perf_counter()
+        nonlinear.run_shared_null_distribution(
+            burden_values=burden_values,
+            labels=labels,
+            random_gene_sets=random_gene_sets,
+            fold_indices=fold_indices,
+            classifier_name="rf",
+            seed=7,
+            n_cores=8,
+        )
+        parallel_elapsed = time.perf_counter() - start_parallel
+
+        assert parallel_elapsed <= single_elapsed / 4, (
+            f"Expected at least 4x speedup with 8 cores, but got "
+            f"{single_elapsed / parallel_elapsed:.2f}x"
+        )

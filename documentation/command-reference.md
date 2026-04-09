@@ -274,21 +274,19 @@ python scripts/compare_attributions.py [OPTIONS]
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `--real` | path | required | Real variant rankings CSV |
-| `--null` | path | - | Single null rankings CSV |
-| `--null-dir` | path | - | Directory with multiple null results |
+| `--corrected-real` | path | required | Corrected real variant rankings CSV from `correct_chrx_bias.py` |
+| `--corrected-null` | path | required | Corrected null variant rankings CSV from `correct_chrx_bias.py` |
 | `--output-dir` | path | required | Output directory |
-| `--top-k` | int | 100 | Number of top variants to output |
 | `--genome-build` | str | GRCh37 | Reference genome build |
-| `--exclude-sex-chroms` | flag | False | Exclude chrX/chrY before thresholding/comparison |
+| `--exclude-sex-chroms` | flag | False | Exclude chrX/chrY before empirical p-value and FDR computation |
 
 **Example**:
 ```bash
 python scripts/compare_attributions.py \
-    --real results/explainability/sieve_variant_rankings.csv \
-    --null results/null/sieve_variant_rankings.csv \
-    --output-dir results/comparison \
-    --top-k 100
+    --corrected-real results/explainability/corrected/corrected_variant_rankings.csv \
+    --corrected-null results/null_attributions/corrected/corrected_variant_rankings.csv \
+    --output-dir results/attribution_comparison_corrected \
+    --genome-build GRCh37
 ```
 
 ---
@@ -303,7 +301,6 @@ python scripts/correct_chrx_bias.py [OPTIONS]
 |--------|------|---------|-------------|
 | `--rankings` | path | required | Variant rankings CSV |
 | `--output-dir` | path | required | Output directory |
-| `--null-rankings` | path | None | Null rankings CSV for recalculating enrichment |
 | `--exclude-sex-chroms` | flag | True | Exclude chrX/chrY from final rankings (default) |
 | `--include-sex-chroms` | flag | False | Include chrX/chrY (flagged) in rankings |
 | `--genome-build` | str | GRCh37 | Reference genome build |
@@ -313,9 +310,9 @@ python scripts/correct_chrx_bias.py [OPTIONS]
 ```bash
 python scripts/correct_chrx_bias.py \
     --rankings results/explainability/sieve_variant_rankings.csv \
-    --null-rankings results/null_baseline_run/results/null_attributions/sieve_variant_rankings.csv \
     --output-dir results/explainability_corrected \
-    --exclude-sex-chroms
+    --include-sex-chroms \
+    --genome-build GRCh37
 ```
 
 ---
@@ -659,30 +656,30 @@ Tests whether SIEVE gene sets carry non-linear discriminative information by tra
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `--burden-matrix` | path | required | Gene-burden matrix parquet file, or directory containing `gene_burden_matrix*.parquet` |
-| `--sieve-genes` | path | required | SIEVE gene list TSV (single level), or directory with per-level files (`L{0..3}_sieve_genes.tsv` or `sieve_genes_L{0..3}.tsv`) |
-| `--phenotypes` | path | required | Phenotype TSV (sample_id, phenotype: 1=ctrl, 2=case) |
-| `--output-dir` | path | required | Output directory |
-| `--top-k` | int list | `100` | Gene set size(s) to test |
+| `--real-rankings-dir` | path | required | Directory with one subdirectory per level containing corrected gene rankings |
+| `--burden-matrix` | path | required | Gene-burden matrix parquet file |
+| `--labels` | path | required | Phenotype TSV (sample_id, phenotype: 1=ctrl, 2=case) |
+| `--output-tsv` | path | required | Summary TSV path |
+| `--top-k` | str | required | Comma-separated top-k values, e.g. `100,500,1000,2000` |
+| `--classifiers` | str | required | Comma-separated classifier list from `rf,lr` |
+| `--levels` | str | `L0,L1,L2,L3` | Comma-separated annotation levels |
 | `--n-permutations` | int | `1000` | Number of random gene set permutations |
 | `--cv-folds` | int | `5` | Number of stratified CV folds |
 | `--seed` | int | `42` | Random seed |
-| `--n-jobs` | int | `4` | Number of parallel jobs |
-| `--consequence` | str | `total` | Which burden matrix: `total`, `missense`, `lof` |
-| `--classifiers` | str | `rf` | Classifier(s) to use: `rf`, `lr`, or `both` |
-| `--also-export-csv` | flag | False | Export SIEVE feature matrices as CSV for external analysis |
+| `--n-cores` | int | `-1` | Number of outer-loop cores for permutation evaluation |
+| `--score-column` | str | `z_attribution` | Gene-ranking score to use; `z_attribution` maps to `gene_z_score` |
 
 **Example** (multi-level with both classifiers):
 ```bash
 python scripts/validate_nonlinear_classifier.py \
+    --real-rankings-dir results/ablation/rankings \
     --burden-matrix validation/cohort_b/gene_burden_matrix.parquet \
-    --sieve-genes validation/sieve_gene_lists/ \
-    --phenotypes /path/to/phenotypes.tsv \
-    --output-dir validation/cohort_b/nonlinear_validation \
-    --top-k 50 100 200 500 \
+    --labels /path/to/phenotypes.tsv \
+    --output-tsv validation/cohort_b/nonlinear_validation/nonlinear_validation_summary.tsv \
+    --top-k 50,100,200,500 \
     --n-permutations 1000 \
-    --classifiers both \
-    --n-jobs 4
+    --classifiers rf,lr \
+    --n-cores 4
 ```
 
 ---
