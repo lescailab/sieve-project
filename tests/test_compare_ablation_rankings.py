@@ -160,6 +160,31 @@ def test_main_defaults_to_empirical_p_variant(tmp_path: Path, monkeypatch) -> No
     assert summary["score_sort_order"] == "ascending"
 
 
+def test_load_rankings_pushes_invalid_empirical_p_to_the_bottom(tmp_path: Path) -> None:
+    """Malformed p-values must not be promoted to the best ranks."""
+    csv_path = tmp_path / "L0_sieve_variant_rankings.csv"
+    csv_path.write_text(
+        "\n".join(
+            [
+                "variant_id,gene_name,chromosome,position,empirical_p_variant,fdr_variant,z_attribution",
+                "1:100_A,GENE1,1,100,0.02,0.05,5.0",
+                "1:200_B,GENE2,1,200,NA,0.10,4.0",
+                "1:300_C,GENE3,1,300,0.10,0.15,3.0",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    rows, _, _ = ablation.load_rankings(csv_path, score_column="empirical_p_variant")
+
+    assert [row["variant_id"] for row in rows] == [
+        "1:100_A",
+        "1:300_C",
+        "1:200_B",
+    ]
+
+
 def test_main_fails_when_significance_column_is_missing(
     tmp_path: Path,
     monkeypatch,
