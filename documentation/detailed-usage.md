@@ -356,11 +356,13 @@ for i in {0..4}; do
         --is-null-baseline
 done
 
-# Compare using all permutations (null_dir restricted to null outputs only)
+# Compare one corrected real run against one corrected null run
+# (multi-permutation null support is not implemented in compare_attributions.py)
 python scripts/compare_attributions.py \
-    --real results/explainability/sieve_variant_rankings.csv \
-    --null-dir results/null_permutations \
-    --output-dir results/comparison_robust
+    --corrected-real results/explainability/corrected/corrected_variant_rankings.csv \
+    --corrected-null results/null_permutations/perm0/corrected/corrected_variant_rankings.csv \
+    --output-dir results/comparison_robust \
+    --genome-build GRCh37
 ```
 
 **Benefits**:
@@ -498,4 +500,3 @@ python scripts/plot_ablation_comparison.py \
 Using `--include-sex-chroms` retains chrX/chrY variants in the output (flagged via `is_sex_chrom`) but normalises their scores relative to other variants on the same chromosome. This removes systematic inflation while preserving genuinely important sex-chromosome variants.
 
 ---
-

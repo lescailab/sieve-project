@@ -123,58 +123,40 @@ Columns in `sieve_gene_rankings.csv`:
 
 ### Null Baseline Comparison
 
-#### Summary YAML (`comparison_summary.yaml`)
+#### Significance Summary (`significance_summary.yaml`)
 
 ```yaml
-thresholds:
-  p_0.05: 0.152    # 95th percentile of null
-  p_0.01: 0.238    # 99th percentile of null
-  p_0.001: 0.394   # 99.9th percentile of null
-
-distribution_comparison:
-  real_mean: 0.089
-  null_mean: 0.045
-  ks_pvalue: 2.3e-145    # Distributions differ
-  mannwhitney_pvalue: 1.1e-78
-
-significance_counts:
-  p_0.01:
-    threshold: 0.238
-    observed: 46        # Variants in real exceeding threshold
-    expected: 10.0      # Expected by chance (1% of 1000)
-    enrichment: 4.6     # 4.6× more than expected
-
-interpretation:
-  distributions_differ: true
-  real_higher_than_null: true
-  enrichment_at_p01: 4.6
-  n_significant_p01: 46
+genome_build: GRCh37
+exclude_sex_chroms: false
+n_real_variants_tested: 102341
+n_null_variants: 101998
+n_real_genes_tested: 18244
+n_null_genes: 18190
+min_achievable_empirical_p: 9.804e-06
+variant_significance:
+  fdr_0.05: 134
+  fdr_0.01: 82
+  fdr_0.001: 19
+gene_significance:
+  fdr_0.05: 27
+  fdr_0.01: 14
+  fdr_0.001: 3
 ```
 
 **How to Interpret**:
 
-1. **Check distributions differ** (KS p-value < 0.001):
-   - ✓ Yes → Real model found signal
-   - ✗ No → May need more data or different approach
+1. **Read the variant-level file** `corrected_variant_rankings_with_significance.csv`:
+   - `empirical_p_variant` is the empirical p-value against the corrected null distribution
+   - `fdr_variant` is the BH-adjusted value across all tested variants
 
-2. **Check enrichment at p<0.01**:
-   - **< 1.5×**: Weak, be cautious
-   - **1.5-2×**: Moderate, validate carefully
-   - **2-5×**: Strong, good confidence
-   - **> 5×**: Very strong, high confidence
+2. **Read the gene-level file** `corrected_gene_rankings_with_significance.csv`:
+   - `gene_z_score` is the maximum corrected variant score per gene
+   - `empirical_p_gene` and `fdr_gene` are the gene-level significance metrics
 
-3. **Identify significant variants**:
-   - Review `significant_variants_p01.csv`
-   - These variants have attributions exceeding 99th percentile of null
-   - Use these for biological validation
-
-**Decision Framework**:
-
-| Enrichment | KS p-value | Interpretation | Action |
-|-----------|-----------|----------------|--------|
-| > 2× | < 0.001 | Strong signal | Proceed to validation |
-| 1.5-2× | < 0.01 | Moderate signal | Validate top hits carefully |
-| < 1.5× | > 0.05 | Weak/no signal | Check data quality, increase sample size |
+3. **Use FDR for decisions**:
+   - `fdr_gene < 0.05`: suitable for manuscript-level per-gene claims
+   - `fdr_variant < 0.05`: variant-level follow-up candidates
+   - `min_achievable_empirical_p = 1 / (N + 1)`: lower bound imposed by the null size
 
 ---
 
@@ -290,8 +272,8 @@ The non-linear classifier validation tests whether the **pattern** of variation 
 | `null_mean_auc` | Mean AUC of the null distribution |
 | `null_std_auc` | Standard deviation of the null distribution |
 | `empirical_p` | Fraction of random gene sets with AUC >= observed |
-| `percentile_rank` | Where observed AUC falls in null distribution (0-100) |
-| `bonferroni_significant` | `yes` if p < 0.05 / n_tests |
+| `z_score` | Observed AUC as a z-score against the shared null |
+| `fdr_bh` | BH-adjusted empirical p-value across the full result grid |
 
 #### Decision Framework
 
@@ -305,8 +287,7 @@ The non-linear classifier validation tests whether the **pattern** of variation 
 
 Rows are ablation levels, columns are top-k values. Cell values show observed AUC with significance annotations:
 
-- `**` = Bonferroni-significant
-- `*` = nominally significant (p < 0.05)
+- `*` = `fdr_bh < 0.05`
 - No marker = not significant
 
 Look for patterns: does signal concentrate at specific levels or top-k values? Consistent signal across levels suggests a robust discovery; signal only at L3 may indicate annotation dependence.

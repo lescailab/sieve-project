@@ -100,12 +100,15 @@ export REAL_RESULTS="results/explainability"             # directory with sieve_
 export OUTPUT_BASE="results/null_baseline_run"           # where null outputs will be written
 bash scripts/run_null_baseline_analysis.sh
 
-# 7. (Optional) Correct chrX ploidy bias in rankings
+# 7. (Optional) Correct chrX ploidy bias outside of the null baseline wrapper
+#    NOTE: run_null_baseline_analysis.sh already corrects both the real and
+#    null rankings before running the null contrast. Use this command only
+#    when you want a standalone corrected file for a single rankings CSV.
 python scripts/correct_chrx_bias.py \
     --rankings results/explainability/sieve_variant_rankings.csv \
-    --null-rankings results/null_baseline_run/results/null_attributions/sieve_variant_rankings.csv \
     --output-dir results/explainability_corrected \
-    --exclude-sex-chroms
+    --include-sex-chroms \
+    --genome-build GRCh37
 ```
 
 ### 5-Minute Test Run
@@ -360,10 +363,10 @@ python scripts/explain.py \
 **Theory**: When we train a model, every variant receives some attribution score. But which attributions represent genuine biological signal vs. random noise? By training an identical model on **permuted labels** (shuffled case/control assignments), we break any real genotype-phenotype relationship. Attributions from this null model represent the "noise floor" of our pipeline.
 
 **Why It Matters**:
-- Without null baseline: Can't distinguish signal from noise
-- With null baseline: Identify variants exceeding chance expectations
-- Establishes p-value thresholds (p<0.05, 0.01, 0.001)
-- Computes enrichment factors (e.g., "5× more discoveries than expected by chance")
+- Without null baseline: rankings have no empirical significance information
+- With null baseline: both variant and gene rankings gain empirical p-values and BH-FDR
+- chrX correction is applied before the null comparison, preventing hemizygosity artefacts from contaminating significance calls
+- Manuscript-level per-gene claims should use `fdr_gene`, not raw ranking order
 
 **Quick Start**:
 ```bash
@@ -401,37 +404,41 @@ python scripts/explain.py \
     --output-dir results/null_attributions \
     --is-null-baseline
 
-# 4. Compare real vs null
+# 4. Correct chrX bias on the real rankings
+python scripts/correct_chrx_bias.py \
+    --rankings results/explainability/sieve_variant_rankings.csv \
+    --output-dir results/explainability/corrected \
+    --include-sex-chroms \
+    --genome-build GRCh37
+
+# 5. Correct chrX bias on the null rankings
+python scripts/correct_chrx_bias.py \
+    --rankings results/null_attributions/sieve_variant_rankings.csv \
+    --output-dir results/null_attributions/corrected \
+    --include-sex-chroms \
+    --genome-build GRCh37
+
+# 6. Compare corrected real vs corrected null
 python scripts/compare_attributions.py \
-    --real results/explainability/sieve_variant_rankings.csv \
-    --null results/null_attributions/sieve_variant_rankings.csv \
-    --output-dir results/comparison
+    --corrected-real results/explainability/corrected/corrected_variant_rankings.csv \
+    --corrected-null results/null_attributions/corrected/corrected_variant_rankings.csv \
+    --output-dir results/attribution_comparison_corrected \
+    --genome-build GRCh37
 ```
 
 **Outputs**:
-- `comparison_summary.yaml` - Statistical tests and thresholds
-- `significant_variants_p01.csv` - Variants exceeding p<0.01
-- `variant_rankings_with_significance.csv` - All variants annotated
-- `real_vs_null_comparison.png` - Distribution comparison plot
+- `corrected_variant_rankings_with_significance.csv` - corrected real rankings plus `empirical_p_variant` and `fdr_variant`
+- `corrected_gene_rankings_with_significance.csv` - corrected real gene rankings plus `empirical_p_gene` and `fdr_gene`
+- `significance_summary.yaml` - counts of variants and genes passing FDR thresholds 0.05, 0.01, 0.001
 
 **Expected Results**:
 - Null model AUC ≈ 0.50 (chance level - confirms permutation worked)
-- Real distributions differ from null (KS test p < 0.001)
-- Enrichment at p<0.01:
-  - **< 1.5×**: Weak signal, be cautious
-  - **1.5-2×**: Moderate signal, validate carefully
-  - **> 2×**: Strong signal, proceed with confidence
+- Non-zero numbers of variants or genes may now pass `fdr_variant < 0.05` or `fdr_gene < 0.05`
+- The minimum achievable empirical p-value is `1 / (N + 1)` where `N` is the null size
 
-**Interpretation Guide**:
-```
-Enrichment = Observed / Expected
+**Order of operations**:
 
-Example:
-- Real data: 50 variants exceed null p<0.01 threshold
-- Expected by chance: 10 variants (1% of 1000 total)
-- Enrichment: 50 / 10 = 5×
-- Interpretation: 5× more discoveries than expected by chance
-```
+The chrX hemizygosity artefact in male-majority cohorts inflates raw attribution magnitudes on chrX for both real models and null models, because the effect comes from the input data rather than from the labels. Computing the null contrast on raw attributions would conflate this structural inflation with genuine disease signal. The pipeline therefore applies chrX correction independently to the real and null rankings first, producing chromosome-stratified z-scores on both sides, and then computes the null comparison on the corrected `z_attribution` column. This order is enforced by the sequence of scripts invoked inside `run_null_baseline_analysis.sh` and should not be changed without a corresponding change to the script logic.
 
 ---
 
@@ -971,11 +978,13 @@ for i in {0..4}; do
         --is-null-baseline
 done
 
-# Compare using all permutations (null_dir restricted to null outputs only)
+# Compare one corrected real run against one corrected null run
+# (multi-permutation null support is not implemented in compare_attributions.py)
 python scripts/compare_attributions.py \
-    --real results/explainability/sieve_variant_rankings.csv \
-    --null-dir results/null_permutations \
-    --output-dir results/comparison_robust
+    --corrected-real results/explainability/corrected/corrected_variant_rankings.csv \
+    --corrected-null results/null_permutations/perm0/corrected/corrected_variant_rankings.csv \
+    --output-dir results/comparison_robust \
+    --genome-build GRCh37
 ```
 
 **Benefits**:
@@ -988,6 +997,8 @@ python scripts/compare_attributions.py \
 ### Running Ablation Experiments
 
 The annotation ablation is the central experiment in SIEVE. It trains models at multiple annotation levels and compares both their predictive performance and the variant discoveries they produce.
+
+**The null baseline is a required step of the ablation workflow. Running `run_null_baseline_analysis.sh` for every level produces the null-contrasted rankings that all downstream analyses and manuscript claims depend on. Skipping this step leaves the rankings without significance information and invalidates any per-gene claim.**
 
 #### Full Ablation Pipeline
 
@@ -1026,15 +1037,25 @@ python scripts/ablation_compare.py \
     --out-summary-tsv results/ablation/ablation_summary.tsv \
     --out-summary-yaml results/ablation/ablation_summary.yaml
 
-# Compare attribution rankings
-mkdir -p results/ablation/rankings
+# Run the required null baseline at each level
 for LEVEL in L0 L1 L2 L3; do
-    cp results/${LEVEL}_explainability/sieve_variant_rankings.csv \
-       results/ablation/rankings/${LEVEL}_sieve_variant_rankings.csv
+    export INPUT_DATA=preprocessed.pt
+    export REAL_EXPERIMENT=experiments/ablation_${LEVEL}
+    export REAL_RESULTS=results/${LEVEL}_explainability
+    export OUTPUT_BASE=results/null_baseline_${LEVEL}
+    bash scripts/run_null_baseline_analysis.sh
+done
+
+# Compare chrX-corrected rankings
+mkdir -p results/ablation/corrected_rankings
+for LEVEL in L0 L1 L2 L3; do
+    cp results/${LEVEL}_explainability/corrected/corrected_variant_rankings.csv \
+       results/ablation/corrected_rankings/${LEVEL}_sieve_variant_rankings.csv
 done
 
 python scripts/compare_ablation_rankings.py \
-    --ranking-dir results/ablation/rankings \
+    --ranking-dir results/ablation/corrected_rankings \
+    --score-column z_attribution \
     --out-comparison results/ablation/ablation_ranking_comparison.yaml \
     --out-jaccard results/ablation/ablation_jaccard_matrix.tsv \
     --out-level-specific results/ablation/level_specific_variants.tsv
@@ -1390,21 +1411,19 @@ python scripts/compare_attributions.py [OPTIONS]
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `--real` | path | required | Real variant rankings CSV |
-| `--null` | path | - | Single null rankings CSV |
-| `--null-dir` | path | - | Directory with multiple null results |
+| `--corrected-real` | path | required | Corrected real variant rankings CSV from `correct_chrx_bias.py` |
+| `--corrected-null` | path | required | Corrected null variant rankings CSV from `correct_chrx_bias.py` |
 | `--output-dir` | path | required | Output directory |
-| `--top-k` | int | 100 | Number of top variants to output |
 | `--genome-build` | str | GRCh37 | Reference genome build |
-| `--exclude-sex-chroms` | flag | False | Exclude chrX/chrY before thresholding/comparison |
+| `--exclude-sex-chroms` | flag | False | Exclude chrX/chrY before empirical p-value and FDR computation |
 
 **Example**:
 ```bash
 python scripts/compare_attributions.py \
-    --real results/explainability/sieve_variant_rankings.csv \
-    --null results/null/sieve_variant_rankings.csv \
-    --output-dir results/comparison \
-    --top-k 100
+    --corrected-real results/explainability/corrected/corrected_variant_rankings.csv \
+    --corrected-null results/null_attributions/corrected/corrected_variant_rankings.csv \
+    --output-dir results/attribution_comparison_corrected \
+    --genome-build GRCh37
 ```
 
 ---
@@ -1419,7 +1438,6 @@ python scripts/correct_chrx_bias.py [OPTIONS]
 |--------|------|---------|-------------|
 | `--rankings` | path | required | Variant rankings CSV |
 | `--output-dir` | path | required | Output directory |
-| `--null-rankings` | path | None | Null rankings CSV for recalculating enrichment |
 | `--exclude-sex-chroms` | flag | True | Exclude chrX/chrY from final rankings (default) |
 | `--include-sex-chroms` | flag | False | Include chrX/chrY (flagged) in rankings |
 | `--genome-build` | str | GRCh37 | Reference genome build |
@@ -1429,9 +1447,9 @@ python scripts/correct_chrx_bias.py [OPTIONS]
 ```bash
 python scripts/correct_chrx_bias.py \
     --rankings results/explainability/sieve_variant_rankings.csv \
-    --null-rankings results/null_baseline_run/results/null_attributions/sieve_variant_rankings.csv \
     --output-dir results/explainability_corrected \
-    --exclude-sex-chroms
+    --include-sex-chroms \
+    --genome-build GRCh37
 ```
 
 ---
@@ -1753,58 +1771,40 @@ Columns in `sieve_gene_rankings.csv`:
 
 ### Null Baseline Comparison
 
-#### Summary YAML (`comparison_summary.yaml`)
+#### Significance Summary (`significance_summary.yaml`)
 
 ```yaml
-thresholds:
-  p_0.05: 0.152    # 95th percentile of null
-  p_0.01: 0.238    # 99th percentile of null
-  p_0.001: 0.394   # 99.9th percentile of null
-
-distribution_comparison:
-  real_mean: 0.089
-  null_mean: 0.045
-  ks_pvalue: 2.3e-145    # Distributions differ
-  mannwhitney_pvalue: 1.1e-78
-
-significance_counts:
-  p_0.01:
-    threshold: 0.238
-    observed: 46        # Variants in real exceeding threshold
-    expected: 10.0      # Expected by chance (1% of 1000)
-    enrichment: 4.6     # 4.6× more than expected
-
-interpretation:
-  distributions_differ: true
-  real_higher_than_null: true
-  enrichment_at_p01: 4.6
-  n_significant_p01: 46
+genome_build: GRCh37
+exclude_sex_chroms: false
+n_real_variants_tested: 102341
+n_null_variants: 101998
+n_real_genes_tested: 18244
+n_null_genes: 18190
+min_achievable_empirical_p: 9.804e-06
+variant_significance:
+  fdr_0.05: 134
+  fdr_0.01: 82
+  fdr_0.001: 19
+gene_significance:
+  fdr_0.05: 27
+  fdr_0.01: 14
+  fdr_0.001: 3
 ```
 
 **How to Interpret**:
 
-1. **Check distributions differ** (KS p-value < 0.001):
-   - ✓ Yes → Real model found signal
-   - ✗ No → May need more data or different approach
+1. **Read the variant-level file** `corrected_variant_rankings_with_significance.csv`:
+   - `empirical_p_variant` is the empirical p-value against the corrected null distribution
+   - `fdr_variant` is the BH-adjusted value across all tested variants
 
-2. **Check enrichment at p<0.01**:
-   - **< 1.5×**: Weak, be cautious
-   - **1.5-2×**: Moderate, validate carefully
-   - **2-5×**: Strong, good confidence
-   - **> 5×**: Very strong, high confidence
+2. **Read the gene-level file** `corrected_gene_rankings_with_significance.csv`:
+   - `gene_z_score` is the maximum corrected variant score per gene
+   - `empirical_p_gene` and `fdr_gene` are the gene-level significance metrics
 
-3. **Identify significant variants**:
-   - Review `significant_variants_p01.csv`
-   - These variants have attributions exceeding 99th percentile of null
-   - Use these for biological validation
-
-**Decision Framework**:
-
-| Enrichment | KS p-value | Interpretation | Action |
-|-----------|-----------|----------------|--------|
-| > 2× | < 0.001 | Strong signal | Proceed to validation |
-| 1.5-2× | < 0.01 | Moderate signal | Validate top hits carefully |
-| < 1.5× | > 0.05 | Weak/no signal | Check data quality, increase sample size |
+3. **Use FDR for decisions**:
+   - `fdr_gene < 0.05`: suitable for manuscript-level per-gene claims
+   - `fdr_variant < 0.05`: variant-level follow-up candidates
+   - `min_achievable_empirical_p = 1 / (N + 1)`: lower bound imposed by the null size
 
 ---
 
