@@ -64,12 +64,12 @@ For each SIEVE gene set (defined by ablation level and top-k threshold):
 1. Load the corrected gene rankings for each annotation level
 2. Select the observed top-k genes for that level from the requested score column
 3. Train the requested classifier on the per-gene burden sub-matrix using fixed stratified CV folds
-4. For each `(top_k, classifier)` pair, draw one shared null distribution of random gene sets from the burden-matrix gene universe
-5. Reuse that same null distribution across all annotation levels
+4. For each `(top_k, classifier)` pair, group annotation levels by their effective matched gene count (`k_effective`) after burden-matrix intersection
+5. Draw one shared null distribution per `(top_k, classifier, k_effective)` group and reuse it across the levels in that group
 6. Compute empirical p-values with the `(k + 1) / (N + 1)` convention
 7. Apply Benjamini-Hochberg FDR across the full result grid
 
-The fixed CV folds ensure the only variable is the gene set, not the data split. The shared null distribution ensures that `null_mean_auc` and `null_std_auc` are identical across levels for a given `(top_k, classifier)` pair.
+The fixed CV folds ensure the only variable is the gene set, not the data split. The shared null distribution ensures that `null_mean_auc` and `null_std_auc` are identical across levels within a given `(top_k, classifier, k_effective)` group.
 
 ### Quick Start
 

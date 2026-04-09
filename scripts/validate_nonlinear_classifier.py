@@ -4,11 +4,12 @@ Non-linear classifier validation of SIEVE gene sets.
 
 This script validates corrected SIEVE gene rankings from one or more
 annotation levels against an independent validation cohort burden matrix.
-For each ``(top_k, classifier)`` pair it draws one shared null distribution
-of random gene sets, reuses that null across all requested annotation levels,
-and computes empirical p-values with the ``(k + 1) / (N + 1)`` convention
-recommended by Phipson and Smyth (2010), "Permutation P-values Should Never
-Be Zero".
+For each ``(top_k, classifier)`` pair it draws one or more shared null
+distributions of random gene sets, reusing each null across all requested
+annotation levels that end up with the same effective gene-set size after
+burden-matrix intersection. Empirical p-values use the ``(k + 1) / (N + 1)``
+convention recommended by Phipson and Smyth (2010), "Permutation P-values
+Should Never Be Zero".
 
 The output TSV contains one row per ``level x top_k x classifier``
 combination. Benjamini-Hochberg FDR is then computed across the entire output
@@ -39,7 +40,7 @@ import argparse
 import sys
 import time
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any, Sequence
 
 import matplotlib
 
@@ -475,6 +476,22 @@ def derive_seed(top_k: int, classifier_name: str, master_seed: int) -> int:
     return int(master_seed + top_k * 1009 + classifier_offset * 100_003)
 
 
+def get_parallel_verbose() -> int:
+    """Read optional joblib verbosity from SIEVE_JOBLIB_VERBOSE."""
+    raw_value = os.environ.get("SIEVE_JOBLIB_VERBOSE", "0").strip()
+    if not raw_value:
+        return 0
+
+    try:
+        return max(0, int(raw_value))
+    except ValueError:
+        print(
+            f"WARNING: Ignoring invalid SIEVE_JOBLIB_VERBOSE={raw_value!r}; "
+            "defaulting to 0"
+        )
+        return 0
+
+
 def run_shared_null_distribution(
     burden_values: np.ndarray,
     labels: np.ndarray,
@@ -483,13 +500,14 @@ def run_shared_null_distribution(
     classifier_name: str,
     seed: int,
     n_cores: int,
+    parallel_verbose: int,
 ) -> np.ndarray:
     """Evaluate the shared random-gene null distribution in parallel."""
     start = time.perf_counter()
     null_aucs = Parallel(
         n_jobs=n_cores,
         backend="loky",
-        verbose=10,
+        verbose=parallel_verbose,
     )(
         delayed(evaluate_random_gene_set_mean_auc)(
             burden_values=burden_values,
@@ -541,6 +559,49 @@ def select_observed_gene_set(
         "feature_indices": np.asarray(matched_indices, dtype=np.int64),
         "k_effective": int(len(matched_indices)),
     }
+
+
+def resolve_observed_gene_sets(
+    level_rankings: dict[str, pd.DataFrame],
+    burden_columns: Sequence[str],
+    requested_levels: Sequence[str],
+    top_k: int,
+) -> tuple[dict[str, dict[str, Any]], dict[int, list[str]]]:
+    """Resolve observed top-k gene sets and group levels by effective size."""
+    observed_gene_sets: dict[str, dict[str, Any]] = {}
+    levels_by_k_effective: dict[int, list[str]] = {}
+
+    for level in requested_levels:
+        observed_gene_set = select_observed_gene_set(
+            ranked_genes=level_rankings[level],
+            burden_columns=burden_columns,
+            top_k=top_k,
+        )
+        k_effective = observed_gene_set["k_effective"]
+        print(
+            f"  {level}: matched {k_effective}/{top_k} genes "
+            f"({len(observed_gene_set['missing_genes'])} missing)"
+        )
+
+        if k_effective == 0:
+            raise ValueError(
+                f"No ranked genes for {level} matched the burden matrix "
+                f"for top_k={top_k}"
+            )
+
+        observed_gene_sets[level] = observed_gene_set
+        levels_by_k_effective.setdefault(k_effective, []).append(level)
+
+    if len(levels_by_k_effective) > 1:
+        print(
+            "  WARNING: effective gene-set size differs across levels after "
+            "burden-matrix matching. Shared null distributions will be reused "
+            "only within levels that have the same k_effective."
+        )
+        for k_effective, levels in sorted(levels_by_k_effective.items()):
+            print(f"    k_effective={k_effective}: {', '.join(levels)}")
+
+    return observed_gene_sets, levels_by_k_effective
 
 
 def compute_empirical_p(observed_value: float, null_distribution: np.ndarray) -> float:
@@ -612,6 +673,7 @@ def plot_validation(
     empirical_p: float,
     level: str,
     top_k: int,
+    k_effective: int,
     classifier_name: str,
     output_path: Path,
 ) -> None:
@@ -629,7 +691,7 @@ def plot_validation(
     axes[0].set_xlabel("Mean AUC")
     axes[0].set_ylabel("Count")
     axes[0].set_title(
-        f"Shared null - {level} top-{top_k} ({classifier_label})\n"
+        f"Shared null - {level} top-{top_k} (k={k_effective}, {classifier_label})\n"
         f"empirical p = {empirical_p:.4f}"
     )
     axes[0].legend()
@@ -912,6 +974,7 @@ def write_auxiliary_outputs(
                 empirical_p=result["empirical_p"],
                 level=result["level"],
                 top_k=result["top_k"],
+                k_effective=result["k_effective"],
                 classifier_name=result["classifier"],
                 output_path=plot_path,
             )
@@ -937,6 +1000,8 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit(1)
 
     log_thread_configuration()
+    parallel_verbose = get_parallel_verbose()
+    print(f"joblib.Parallel verbosity: {parallel_verbose}")
     print("")
 
     print(f"Loading burden matrix from {args.burden_matrix}...")
@@ -1010,101 +1075,98 @@ def main(argv: list[str] | None = None) -> None:
         print(f"top_k = {top_k}")
         print(f"{'=' * 72}")
 
-        null_set_size = top_k
-        if null_set_size > gene_universe_size:
+        if top_k > gene_universe_size:
             raise ValueError(
                 f"Requested top_k={top_k} exceeds burden matrix width "
                 f"({gene_universe_size} genes)"
             )
 
+        observed_gene_sets, levels_by_k_effective = resolve_observed_gene_sets(
+            level_rankings=level_rankings,
+            burden_columns=burden_matrix.columns,
+            requested_levels=requested_levels,
+            top_k=top_k,
+        )
+
         for classifier_name in classifiers_to_run:
-            print(f"\nShared null for classifier={classifier_name}")
-            permutation_seed = derive_seed(top_k, classifier_name, args.seed)
-            random_gene_sets = draw_random_gene_sets(
-                gene_universe_size=gene_universe_size,
-                set_size=null_set_size,
-                n_permutations=args.n_permutations,
-                seed=permutation_seed,
-            )
-            null_aucs = run_shared_null_distribution(
-                burden_values=burden_values,
-                labels=labels,
-                random_gene_sets=random_gene_sets,
-                fold_indices=fold_indices,
-                classifier_name=classifier_name,
-                seed=permutation_seed,
-                n_cores=args.n_cores,
-            )
-            null_mean_auc = float(np.mean(null_aucs))
-            null_std_auc = float(np.std(null_aucs))
-            print(
-                f"  Shared null mean AUC = {null_mean_auc:.4f}, "
-                f"std = {null_std_auc:.4f}"
-            )
-
-            for level in requested_levels:
-                ranked_genes = level_rankings[level]
-                observed_gene_set = select_observed_gene_set(
-                    ranked_genes=ranked_genes,
-                    burden_columns=burden_matrix.columns,
-                    top_k=top_k,
-                )
-                k_effective = observed_gene_set["k_effective"]
+            for k_effective, grouped_levels in sorted(levels_by_k_effective.items()):
                 print(
-                    f"  {level}: matched {k_effective}/{top_k} genes "
-                    f"({len(observed_gene_set['missing_genes'])} missing)"
+                    f"\nShared null for classifier={classifier_name}, "
+                    f"k_effective={k_effective}"
                 )
-
-                if k_effective == 0:
-                    raise ValueError(
-                        f"No ranked genes for {level} matched the burden matrix "
-                        f"for top_k={top_k}"
-                    )
-
-                observed_aucs = evaluate_auc_for_feature_indices(
+                permutation_seed = (
+                    derive_seed(top_k, classifier_name, args.seed)
+                    + k_effective * 1_000_003
+                )
+                random_gene_sets = draw_random_gene_sets(
+                    gene_universe_size=gene_universe_size,
+                    set_size=k_effective,
+                    n_permutations=args.n_permutations,
+                    seed=permutation_seed,
+                )
+                null_aucs = run_shared_null_distribution(
                     burden_values=burden_values,
                     labels=labels,
-                    feature_indices=observed_gene_set["feature_indices"],
+                    random_gene_sets=random_gene_sets,
                     fold_indices=fold_indices,
                     classifier_name=classifier_name,
-                    model_seed=derive_seed(top_k, classifier_name, args.seed) + 1_000_000,
+                    seed=permutation_seed,
+                    n_cores=args.n_cores,
+                    parallel_verbose=parallel_verbose,
                 )
-                observed_auc = float(np.mean(observed_aucs))
-                observed_std = float(np.std(observed_aucs))
-                empirical_p = compute_empirical_p(observed_auc, null_aucs)
-                if null_std_auc > 0:
-                    z_score = float((observed_auc - null_mean_auc) / null_std_auc)
-                else:
-                    z_score = float("nan")
-
-                results.append(
-                    {
-                        "level": level,
-                        "top_k": int(top_k),
-                        "k_effective": int(k_effective),
-                        "classifier": classifier_name,
-                        "observed_auc": observed_auc,
-                        "observed_std": observed_std,
-                        "null_mean_auc": null_mean_auc,
-                        "null_std_auc": null_std_auc,
-                        "empirical_p": empirical_p,
-                        "z_score": z_score,
-                        "observed_aucs": observed_aucs,
-                        "null_aucs": null_aucs,
-                        "missing_genes": observed_gene_set["missing_genes"],
-                        "matched_genes": observed_gene_set["matched_genes"],
-                        "n_samples": int(len(labels)),
-                        "n_cases": int(n_cases),
-                        "n_controls": int(n_controls),
-                        "n_permutations": int(args.n_permutations),
-                        "seed": int(args.seed),
-                        "score_column": args.score_column,
-                    }
-                )
+                null_mean_auc = float(np.mean(null_aucs))
+                null_std_auc = float(np.std(null_aucs))
                 print(
-                    f"    observed_auc={observed_auc:.4f} "
-                    f"empirical_p={empirical_p:.4f}"
+                    f"  Shared null mean AUC = {null_mean_auc:.4f}, "
+                    f"std = {null_std_auc:.4f}"
                 )
+
+                for level in grouped_levels:
+                    observed_gene_set = observed_gene_sets[level]
+                    observed_aucs = evaluate_auc_for_feature_indices(
+                        burden_values=burden_values,
+                        labels=labels,
+                        feature_indices=observed_gene_set["feature_indices"],
+                        fold_indices=fold_indices,
+                        classifier_name=classifier_name,
+                        model_seed=derive_seed(top_k, classifier_name, args.seed) + 1_000_000,
+                    )
+                    observed_auc = float(np.mean(observed_aucs))
+                    observed_std = float(np.std(observed_aucs))
+                    empirical_p = compute_empirical_p(observed_auc, null_aucs)
+                    if null_std_auc > 0:
+                        z_score = float((observed_auc - null_mean_auc) / null_std_auc)
+                    else:
+                        z_score = float("nan")
+
+                    results.append(
+                        {
+                            "level": level,
+                            "top_k": int(top_k),
+                            "k_effective": int(k_effective),
+                            "classifier": classifier_name,
+                            "observed_auc": observed_auc,
+                            "observed_std": observed_std,
+                            "null_mean_auc": null_mean_auc,
+                            "null_std_auc": null_std_auc,
+                            "empirical_p": empirical_p,
+                            "z_score": z_score,
+                            "observed_aucs": observed_aucs,
+                            "null_aucs": null_aucs,
+                            "missing_genes": observed_gene_set["missing_genes"],
+                            "matched_genes": observed_gene_set["matched_genes"],
+                            "n_samples": int(len(labels)),
+                            "n_cases": int(n_cases),
+                            "n_controls": int(n_controls),
+                            "n_permutations": int(args.n_permutations),
+                            "seed": int(args.seed),
+                            "score_column": args.score_column,
+                        }
+                    )
+                    print(
+                        f"    {level}: observed_auc={observed_auc:.4f} "
+                        f"empirical_p={empirical_p:.4f}"
+                    )
 
     if not results:
         print("ERROR: No results were produced.", file=sys.stderr)
@@ -1125,16 +1187,18 @@ def main(argv: list[str] | None = None) -> None:
         kind="mergesort",
     ).reset_index(drop=True)
 
-    for (top_k, classifier_name), group in summary_df.groupby(["top_k", "classifier"]):
+    for (top_k, classifier_name, k_effective), group in summary_df.groupby(
+        ["top_k", "classifier", "k_effective"]
+    ):
         if group["null_mean_auc"].nunique() != 1:
             raise AssertionError(
-                f"Null mean AUC differs across levels for top_k={top_k}, "
-                f"classifier={classifier_name}"
+                f"Null mean AUC differs within the shared-null group for "
+                f"top_k={top_k}, classifier={classifier_name}, k_effective={k_effective}"
             )
         if group["null_std_auc"].nunique() != 1:
             raise AssertionError(
-                f"Null std AUC differs across levels for top_k={top_k}, "
-                f"classifier={classifier_name}"
+                f"Null std AUC differs within the shared-null group for "
+                f"top_k={top_k}, classifier={classifier_name}, k_effective={k_effective}"
             )
 
     sorted_fdr = summary_df.sort_values("empirical_p")["fdr_bh"].to_numpy()
