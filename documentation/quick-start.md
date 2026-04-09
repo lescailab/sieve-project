@@ -66,12 +66,15 @@ export REAL_RESULTS="results/explainability"             # directory with sieve_
 export OUTPUT_BASE="results/null_baseline_run"           # where null outputs will be written
 bash scripts/run_null_baseline_analysis.sh
 
-# 7. (Optional) Correct chrX ploidy bias in rankings
+# 7. (Optional) Correct chrX ploidy bias outside of the null baseline wrapper
+#    NOTE: run_null_baseline_analysis.sh (step 6) already applies chrX
+#    correction to both real and null rankings automatically.  Use this
+#    command only if you want a standalone corrected file for a single
+#    rankings CSV (e.g. to pass to compare_ablation_rankings.py).
 python scripts/correct_chrx_bias.py \
     --rankings results/explainability/sieve_variant_rankings.csv \
-    --null-rankings results/null_baseline_run/results/null_attributions/sieve_variant_rankings.csv \
     --output-dir results/explainability_corrected \
-    --exclude-sex-chroms
+    --include-sex-chroms
 ```
 
 ### 5-Minute Test Run

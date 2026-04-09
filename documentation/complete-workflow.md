@@ -192,7 +192,7 @@ bash scripts/run_null_baseline_analysis.sh
 
 The wrapper reads hyperparameters directly from the real run `config.yaml` (including `--sex-map` when used) so the null model is trained under matched settings.
 
-**Manual Steps**:
+**Manual Steps** (for reference — the wrapper above covers all of these automatically):
 ```bash
 # 1. Create permuted dataset
 python scripts/create_null_baseline.py \
@@ -214,37 +214,41 @@ python scripts/explain.py \
     --output-dir results/null_attributions \
     --is-null-baseline
 
-# 4. Compare real vs null
+# 4. Apply chrX bias correction to real rankings
+python scripts/correct_chrx_bias.py \
+    --rankings results/explainability/sieve_variant_rankings.csv \
+    --output-dir results/explainability/corrected \
+    --include-sex-chroms \
+    --genome-build GRCh37
+
+# 5. Apply chrX bias correction to null rankings
+python scripts/correct_chrx_bias.py \
+    --rankings results/null_attributions/sieve_variant_rankings.csv \
+    --output-dir results/null_attributions/corrected \
+    --include-sex-chroms \
+    --genome-build GRCh37
+
+# 6. Compare corrected real vs corrected null
 python scripts/compare_attributions.py \
-    --real results/explainability/sieve_variant_rankings.csv \
-    --null results/null_attributions/sieve_variant_rankings.csv \
-    --output-dir results/comparison
+    --corrected-real results/explainability/corrected/corrected_variant_rankings.csv \
+    --corrected-null results/null_attributions/corrected/corrected_variant_rankings.csv \
+    --output-dir results/comparison_corrected \
+    --genome-build GRCh37
 ```
 
-**Outputs**:
-- `comparison_summary.yaml` - Statistical tests and thresholds
-- `significant_variants_p01.csv` - Variants exceeding p<0.01
-- `variant_rankings_with_significance.csv` - All variants annotated
-- `real_vs_null_comparison.png` - Distribution comparison plot
+#### Order of operations
+
+**The chrX correction step must precede the null comparison.** The reason is that hemizygosity in male-majority cohorts inflates raw attribution magnitudes on chrX for both real models and null models, because the effect comes from the input data rather than from the labels. Computing the null contrast on raw attributions would conflate this structural inflation with genuine disease signal. The pipeline therefore applies chrX correction independently to the real and null rankings first, producing chromosome-stratified z-scores on both sides, and then computes the null comparison on the corrected `z_attribution` column. This order is enforced by the sequence of scripts invoked inside `run_null_baseline_analysis.sh` and should not be changed without a corresponding change to the script logic.
+
+**Outputs from `compare_attributions.py`**:
+- `corrected_variant_rankings_with_significance.csv` — corrected real rankings plus `empirical_p_variant` and `fdr_variant` columns
+- `corrected_gene_rankings_with_significance.csv` — gene-level rankings plus `empirical_p_gene` and `fdr_gene` columns
+- `significance_summary.yaml` — counts of variants and genes passing FDR thresholds 0.05, 0.01, 0.001
 
 **Expected Results**:
-- Null model AUC ≈ 0.50 (chance level - confirms permutation worked)
-- Real distributions differ from null (KS test p < 0.001)
-- Enrichment at p<0.01:
-  - **< 1.5×**: Weak signal, be cautious
-  - **1.5-2×**: Moderate signal, validate carefully
-  - **> 2×**: Strong signal, proceed with confidence
-
-**Interpretation Guide**:
-```
-Enrichment = Observed / Expected
-
-Example:
-- Real data: 50 variants exceed null p<0.01 threshold
-- Expected by chance: 10 variants (1% of 1000 total)
-- Enrichment: 50 / 10 = 5×
-- Interpretation: 5× more discoveries than expected by chance
-```
+- Null model AUC ≈ 0.50 (chance level — confirms permutation worked)
+- Variants with `fdr_variant < 0.05`: number depends on signal strength; expect non-zero for well-powered cohorts
+- Genes with `fdr_gene < 0.05`: candidates for manuscript-level biological claims
 
 ---
 
@@ -257,7 +261,9 @@ Example:
 - Which variants are found regardless of annotation level (robust discoveries)
 - Which variants are only found at specific levels (annotation-dependent)
 
-**Prerequisites**: Train and run explain.py at each annotation level (Steps 2-3 repeated for L0, L1, L2, L3).
+**The null baseline is a required step of the ablation workflow. Running `run_null_baseline_analysis.sh` for every level produces the null-contrasted rankings that all downstream analyses and manuscript claims depend on. Skipping this step leaves the rankings without significance information and invalidates any per-gene claim.**
+
+**Prerequisites**: Train and run explain.py at each annotation level (Steps 2-3 repeated for L0, L1, L2, L3), then run the null baseline wrapper once per level.
 
 **Step 5a: Compare model performance across levels**:
 ```bash
@@ -267,18 +273,30 @@ python scripts/ablation_compare.py \
     --out-summary-yaml results/ablation/ablation_summary.yaml
 ```
 
-**Step 5b: Compare variant attribution rankings across levels**:
+**Step 5b: Run the required null baseline at each level**:
 ```bash
-# Collect ranking files into one directory with level prefixes
+for LEVEL in L0 L1 L2 L3; do
+    export INPUT_DATA=preprocessed.pt
+    export REAL_EXPERIMENT=experiments/ablation_${LEVEL}
+    export REAL_RESULTS=results/${LEVEL}_explainability
+    export OUTPUT_BASE=results/null_baseline_${LEVEL}
+    bash scripts/run_null_baseline_analysis.sh
+done
+```
+
+**Step 5c: Compare corrected variant attribution rankings across levels**:
+```bash
+# Collect corrected ranking files into one directory with level prefixes
 mkdir -p results/ablation/rankings
-cp results/L0_explainability/sieve_variant_rankings.csv results/ablation/rankings/L0_sieve_variant_rankings.csv
-cp results/L1_explainability/sieve_variant_rankings.csv results/ablation/rankings/L1_sieve_variant_rankings.csv
-cp results/L2_explainability/sieve_variant_rankings.csv results/ablation/rankings/L2_sieve_variant_rankings.csv
-cp results/L3_explainability/sieve_variant_rankings.csv results/ablation/rankings/L3_sieve_variant_rankings.csv
+cp results/L0_explainability/corrected/corrected_variant_rankings.csv results/ablation/rankings/L0_sieve_variant_rankings.csv
+cp results/L1_explainability/corrected/corrected_variant_rankings.csv results/ablation/rankings/L1_sieve_variant_rankings.csv
+cp results/L2_explainability/corrected/corrected_variant_rankings.csv results/ablation/rankings/L2_sieve_variant_rankings.csv
+cp results/L3_explainability/corrected/corrected_variant_rankings.csv results/ablation/rankings/L3_sieve_variant_rankings.csv
 
 # Run comparison
 python scripts/compare_ablation_rankings.py \
     --ranking-dir results/ablation/rankings \
+    --score-column z_attribution \
     --top-k 50,100,200,500 \
     --high-rank-threshold 100 \
     --low-rank-threshold 500 \
@@ -287,7 +305,7 @@ python scripts/compare_ablation_rankings.py \
     --out-level-specific results/ablation/level_specific_variants.tsv
 ```
 
-**Step 5c: Visualise the comparison**:
+**Step 5d: Visualise the comparison**:
 ```bash
 python scripts/plot_ablation_comparison.py \
     --jaccard-tsv results/ablation/ablation_jaccard_matrix.tsv \
@@ -711,22 +729,22 @@ If L1-specific genes replicate in the cohort_b cohort but L0-specific ones do no
 **Command** (all levels at once):
 ```bash
 python scripts/validate_nonlinear_classifier.py \
+    --real-rankings-dir results/ablation/rankings \
     --burden-matrix validation/cohort_b/gene_burden_matrix.parquet \
-    --sieve-genes validation/sieve_gene_lists/ \
-    --phenotypes /path/to/validation_phenotypes.tsv \
-    --output-dir validation/cohort_b/nonlinear_validation \
-    --top-k 50 100 200 500 \
+    --labels /path/to/validation_phenotypes.tsv \
+    --output-tsv validation/cohort_b/nonlinear_validation/nonlinear_validation_summary.tsv \
+    --top-k 50,100,200,500 \
     --n-permutations 1000 \
-    --classifiers both \
-    --n-jobs 4 \
+    --classifiers rf,lr \
+    --n-cores 8 \
     --seed 42
 ```
 
 **How it works**:
-1. For each ablation level and top-k threshold, extracts the per-gene burden sub-matrix for the SIEVE gene set
-2. Trains a random forest using repeated stratified CV with fixed fold assignments
-3. Generates a null distribution by repeating the same procedure on 1,000 random gene sets of equal size
-4. Reports an empirical p-value and, when `--classifiers both` is used, compares RF vs logistic regression to test for non-linear structure
+1. For each ablation level and top-k threshold, extracts the per-gene burden sub-matrix for the corrected SIEVE gene set
+2. Trains the requested classifier using fixed stratified CV folds
+3. Groups levels by effective matched gene count and generates one shared null distribution per `(top_k, classifier, k_effective)` group
+4. Reports an empirical p-value, a null-relative z-score, and a single BH-FDR column across the full result grid
 
 **Outputs**:
 ```
@@ -734,7 +752,7 @@ validation/cohort_b/nonlinear_validation/
 ├── nonlinear_validation_L{0..3}_topK{k}.yaml   # Full results per combination
 ├── null_aucs_L{0..3}_topK{k}.npz               # Null distributions
 ├── validation_plot_L{0..3}_topK{k}.png          # Diagnostic plots
-├── nonlinear_validation_summary.tsv             # Summary table
+├── nonlinear_validation_summary.tsv             # Summary table with fdr_bh
 ├── nonlinear_validation_heatmap.png             # AUC heatmap across levels x top-k
 └── nonlinear_validation_report.md               # Human-readable report
 ```
@@ -821,25 +839,25 @@ python scripts/test_burden_enrichment.py \
 
 # --- Non-linear classifier validation (Cohort B) ---
 python scripts/validate_nonlinear_classifier.py \
+    --real-rankings-dir results/ablation/rankings \
     --burden-matrix validation/cohort_b/gene_burden_matrix.parquet \
-    --sieve-genes validation/sieve_gene_lists/ \
-    --phenotypes /path/to/cohort_b_phenotypes.tsv \
-    --output-dir validation/cohort_b/nonlinear_validation \
-    --top-k 50 100 200 \
+    --labels /path/to/cohort_b_phenotypes.tsv \
+    --output-tsv validation/cohort_b/nonlinear_validation/nonlinear_validation_summary.tsv \
+    --top-k 50,100,200 \
     --n-permutations 1000 \
-    --classifiers both \
-    --n-jobs 4
+    --classifiers rf,lr \
+    --n-cores 8
 
 # --- Non-linear classifier validation (Cohort C) ---
 python scripts/validate_nonlinear_classifier.py \
+    --real-rankings-dir results/ablation/rankings \
     --burden-matrix validation/cohort_c/gene_burden_matrix.parquet \
-    --sieve-genes validation/sieve_gene_lists/ \
-    --phenotypes /path/to/cohort_c_phenotypes.tsv \
-    --output-dir validation/cohort_c/nonlinear_validation \
-    --top-k 50 100 200 \
+    --labels /path/to/cohort_c_phenotypes.tsv \
+    --output-tsv validation/cohort_c/nonlinear_validation/nonlinear_validation_summary.tsv \
+    --top-k 50,100,200 \
     --n-permutations 1000 \
-    --classifiers both \
-    --n-jobs 4
+    --classifiers rf,lr \
+    --n-cores 8
 
 # --- Collect and plot scalar burden results ---
 python scripts/plot_validation_burden.py \

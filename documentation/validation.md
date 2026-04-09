@@ -61,97 +61,77 @@ The validation question is:
 
 For each SIEVE gene set (defined by ablation level and top-k threshold):
 
-1. Extract the per-gene burden sub-matrix for the top-k SIEVE genes
-2. Train a random forest classifier using repeated stratified cross-validation
-3. Record the observed mean AUC
-4. Repeat for 1,000 random gene sets of the same size, using the **same CV fold assignments**
-5. Compute an empirical p-value: the fraction of random sets with AUC >= observed
+1. Load the corrected gene rankings for each annotation level
+2. Select the observed top-k genes for that level from the requested score column
+3. Train the requested classifier on the per-gene burden sub-matrix using fixed stratified CV folds
+4. For each `(top_k, classifier)` pair, group annotation levels by their effective matched gene count (`k_effective`) after burden-matrix intersection
+5. Draw one shared null distribution per `(top_k, classifier, k_effective)` group and reuse it across the levels in that group
+6. Compute empirical p-values with the `(k + 1) / (N + 1)` convention
+7. Apply Benjamini-Hochberg FDR across the full result grid
 
-The fixed CV folds ensure the only variable is the gene set, not the data split.
+The fixed CV folds ensure the only variable is the gene set, not the data split. The shared null distribution ensures that `null_mean_auc` and `null_std_auc` are identical across levels within a given `(top_k, classifier, k_effective)` group.
 
 ### Quick Start
 
 ```bash
-# Single level, single top-k
 python scripts/validate_nonlinear_classifier.py \
+    --real-rankings-dir results/ablation/rankings \
     --burden-matrix validation/cohort_b/gene_burden_matrix.parquet \
-    --sieve-genes validation/sieve_gene_lists/L1_sieve_genes.tsv \
-    --phenotypes /path/to/phenotypes.tsv \
-    --output-dir validation/cohort_b/nonlinear_validation \
-    --top-k 100 \
+    --labels /path/to/phenotypes.tsv \
+    --output-tsv validation/cohort_b/nonlinear_validation/nonlinear_validation_summary.tsv \
+    --top-k 100,500,1000,2000 \
+    --classifiers rf,lr \
+    --levels L0,L1,L2,L3 \
     --n-permutations 1000 \
-    --seed 42 \
-    --n-jobs 4
+    --cv-folds 5 \
+    --n-cores 8 \
+    --seed 42
 ```
 
 ### Multi-Level Mode
 
-To compare across ablation levels, point `--sieve-genes` at a directory containing the per-level gene list files (either `L{0,1,2,3}_sieve_genes.tsv` as produced by `generate_sieve_gene_list.py --ablation-level`, or `sieve_genes_L{0,1,2,3}.tsv`):
+Point `--real-rankings-dir` at a directory with one subdirectory per annotation level. Each level directory should contain `corrected_gene_rankings_with_significance.csv` (preferred) or `corrected_gene_rankings.csv`.
 
 ```bash
 python scripts/validate_nonlinear_classifier.py \
+    --real-rankings-dir results/ablation/rankings \
     --burden-matrix validation/cohort_b/gene_burden_matrix.parquet \
-    --sieve-genes validation/sieve_gene_lists/ \
-    --phenotypes /path/to/phenotypes.tsv \
-    --output-dir validation/cohort_b/nonlinear_validation \
-    --top-k 50 100 200 500 \
+    --labels /path/to/phenotypes.tsv \
+    --output-tsv validation/cohort_b/nonlinear_validation/nonlinear_validation_summary.tsv \
+    --top-k 50,100,200,500 \
+    --classifiers rf,lr \
+    --levels L0,L1,L2,L3 \
     --n-permutations 1000 \
     --cv-folds 5 \
-    --seed 42 \
-    --n-jobs 4
+    --n-cores 8 \
+    --seed 42
 ```
 
-This automatically detects all level files and runs every level x top-k combination.
+This automatically detects all requested levels and runs every `level x top_k x classifier` combination.
 
 ### Comparing Random Forest vs Logistic Regression
 
-Use `--classifiers both` to run both a random forest and a logistic regression on every combination:
+Use `--classifiers rf,lr` to run both a random forest and a logistic regression on every combination:
 
 ```bash
 python scripts/validate_nonlinear_classifier.py \
+    --real-rankings-dir results/ablation/rankings \
     --burden-matrix validation/cohort_b/gene_burden_matrix.parquet \
-    --sieve-genes validation/sieve_gene_lists/ \
-    --phenotypes /path/to/phenotypes.tsv \
-    --output-dir validation/cohort_b/nonlinear_validation \
-    --top-k 100 200 \
+    --labels /path/to/phenotypes.tsv \
+    --output-tsv validation/cohort_b/nonlinear_validation/nonlinear_validation_summary.tsv \
+    --top-k 100,200 \
     --n-permutations 1000 \
-    --classifiers both \
-    --n-jobs 4
+    --classifiers rf,lr \
+    --n-cores 8
 ```
 
 **Why include logistic regression?** As a linear baseline. If the random forest significantly outperforms logistic regression on SIEVE genes, that is evidence of non-linear signal — directly supporting SIEVE's core claim that multi-gene combinatorial patterns carry disease information. If logistic regression performs equally well, the signal is linear (which could have been captured by a PRS approach).
 
-### Consequence-Stratified Testing
+### Score Column Selection
 
-To test whether signal is driven by specific variant classes (e.g. missense, LoF), use the consequence-stratified burden matrices from `extract_validation_burden.py --consequence-stratify`:
+Use `--score-column z_attribution` for the default corrected-score workflow. The script maps this onto the gene-level `gene_z_score` column inside `corrected_gene_rankings*.csv`.
 
-```bash
-python scripts/validate_nonlinear_classifier.py \
-    --burden-matrix validation/cohort_b/gene_burden_matrix_missense.parquet \
-    --sieve-genes validation/sieve_gene_lists/ \
-    --phenotypes /path/to/phenotypes.tsv \
-    --output-dir validation/cohort_b/nonlinear_validation_missense \
-    --top-k 100 200 \
-    --n-permutations 1000 \
-    --consequence missense \
-    --n-jobs 4
-```
-
-### Exporting Feature Matrices for External Analysis
-
-Use `--also-export-csv` to export the SIEVE feature matrix as a CSV for analysis in R/tidymodels or other tools:
-
-```bash
-python scripts/validate_nonlinear_classifier.py \
-    --burden-matrix validation/cohort_b/gene_burden_matrix.parquet \
-    --sieve-genes validation/sieve_gene_lists/L1_sieve_genes.tsv \
-    --phenotypes /path/to/phenotypes.tsv \
-    --output-dir validation/cohort_b/nonlinear_validation \
-    --top-k 100 \
-    --also-export-csv
-```
-
-The exported CSV has columns: `sample_id, GENE1, GENE2, ..., GENEk, phenotype` with genes in SIEVE rank order and phenotype as 0/1.
+Use `--score-column fdr_gene` when you want to rank genes by their gene-level null-contrast significance instead of corrected effect size. Lower values are treated as better for FDR-based ranking.
 
 ---
 
@@ -164,16 +144,16 @@ Each level x top-k combination produces a YAML file with the full result:
 ```yaml
 parameters:
   ablation_level: L1
-  top_k_requested: 100
-  k_effective: 93          # genes matched in validation VCF
+  top_k: 100
+  k_effective: 93
   missing_genes: [...]
   n_samples: 450
   n_cases: 220
   n_controls: 230
   classifier: random_forest
   cv_folds: 5
-  cv_repeats: 3
   n_permutations: 1000
+  score_column: z_attribution
 
 observed:
   mean_auc: 0.587
@@ -188,13 +168,15 @@ null_distribution:
   p95: 0.567
 
 empirical_p: 0.0034
-percentile_rank: 99.66
+z_score: 2.36
+fdr_bh: 0.0120
 
 # When both classifiers are run (primary YAML only):
 linear_baseline:
   mean_auc: 0.533
   std_auc: 0.038
   empirical_p: 0.089
+  fdr_bh: 0.1740
   rf_minus_lr_auc: 0.054
 ```
 
@@ -203,22 +185,23 @@ linear_baseline:
 | Metric | What it means |
 |--------|--------------|
 | `observed.mean_auc` | How well the SIEVE gene set discriminates cases from controls |
-| `null_distribution.mean` | Expected AUC from a random gene set of the same size |
+| `null_distribution.mean` | Expected AUC from the shared random-gene null of the same top-k |
 | `empirical_p` | Probability that a random gene set performs as well or better |
-| `percentile_rank` | Where the observed AUC falls in the null distribution (higher = better) |
+| `z_score` | Observed AUC expressed as a z-score against the shared null |
+| `fdr_bh` | BH-adjusted empirical p-value across the full result grid |
 | `rf_minus_lr_auc` | AUC gap between random forest and logistic regression (positive = non-linear signal) |
 
 ### Interpretation Guide
 
-| Empirical p | Interpretation |
-|-------------|---------------|
-| < 0.01 | Strong evidence: SIEVE gene set carries discriminative signal beyond random chance |
-| 0.01 - 0.05 | Moderate evidence (check after Bonferroni correction across all tests) |
-| > 0.05 | No significant evidence at this level/top-k combination |
+| FDR | Interpretation |
+|-----|----------------|
+| `fdr_bh < 0.01` | Strong evidence after multiple-testing correction |
+| `0.01 <= fdr_bh < 0.05` | Moderate evidence after multiple-testing correction |
+| `fdr_bh >= 0.05` | No FDR-significant evidence at this level/top-k combination |
 
 ### What to Look For
 
-1. **Significant empirical p-value**: The SIEVE gene set outperforms random gene sets. This supports transfer of the discovery signal to the validation cohort.
+1. **Significant FDR**: The SIEVE gene set outperforms the shared random-gene null after correction across the full grid. This supports transfer of the discovery signal to the validation cohort.
 
 2. **RF > LR gap**: If the random forest outperforms logistic regression on the SIEVE gene set, the signal has non-linear structure — combinations of gene burdens matter, not just their sum. This directly supports SIEVE's model design.
 
@@ -230,14 +213,14 @@ linear_baseline:
 
 Each combination produces a two-panel plot:
 
-1. **Left panel**: Histogram of null AUC distribution with observed AUC marked as a red vertical line. The further right the line, the stronger the evidence.
+1. **Left panel**: Histogram of the shared null AUC distribution with observed AUC marked as a red vertical line. The further right the line, the stronger the evidence.
 
-2. **Right panel**: Box plot comparing observed per-fold AUCs against the null distribution, showing the spread of performance across CV splits.
+2. **Right panel**: Box plot comparing observed per-fold AUCs against the shared null distribution, showing the spread of performance across CV splits.
 
 ### Summary Outputs
 
-- **`nonlinear_validation_summary.tsv`**: One row per level x top-k x classifier combination with all key metrics and Bonferroni significance flags.
-- **`nonlinear_validation_heatmap.png`**: Visual comparison of observed AUC across levels (rows) and top-k values (columns), with significance annotations (`*` for p < 0.05, `**` for Bonferroni-significant).
+- **`nonlinear_validation_summary.tsv`**: One row per level x top-k x classifier combination with all key metrics and a single `fdr_bh` column.
+- **`nonlinear_validation_heatmap.png`**: Visual comparison of observed AUC across levels (rows) and top-k values (columns), with `*` marking `fdr_bh < 0.05`.
 - **`nonlinear_validation_report.md`**: Human-readable summary of significant results, best combinations, and RF vs LR comparison.
 
 ---
@@ -247,7 +230,7 @@ Each combination produces a two-panel plot:
 ```
 nonlinear_validation/
 ├── nonlinear_validation_L0_topK100.yaml
-├── nonlinear_validation_L0_topK100_lr.yaml     # if --classifiers both
+├── nonlinear_validation_L0_topK100_lr.yaml     # if --classifiers rf,lr
 ├── null_aucs_L0_topK100.npz
 ├── null_aucs_L0_topK100_lr.npz
 ├── validation_plot_L0_topK100.png
@@ -255,10 +238,7 @@ nonlinear_validation/
 ├── ...                                          # repeat per level x top-k
 ├── nonlinear_validation_summary.tsv
 ├── nonlinear_validation_heatmap.png
-├── nonlinear_validation_report.md
-└── csv/                                         # if --also-export-csv
-    ├── feature_matrix_total_L0_top100.csv
-    └── ...
+└── nonlinear_validation_report.md
 ```
 
 ---
@@ -335,14 +315,14 @@ done
 
 # --- Step 4: Non-linear classifier validation (all levels at once) ---
 python scripts/validate_nonlinear_classifier.py \
+    --real-rankings-dir results/ablation/rankings \
     --burden-matrix validation/cohort_b/gene_burden_matrix.parquet \
-    --sieve-genes validation/sieve_gene_lists/ \
-    --phenotypes /path/to/validation_phenotypes.tsv \
-    --output-dir validation/cohort_b/nonlinear_validation \
-    --top-k 50 100 200 500 \
+    --labels /path/to/validation_phenotypes.tsv \
+    --output-tsv validation/cohort_b/nonlinear_validation/nonlinear_validation_summary.tsv \
+    --top-k 50,100,200,500 \
     --n-permutations 1000 \
-    --classifiers both \
-    --n-jobs 4 \
+    --classifiers rf,lr \
+    --n-cores 8 \
     --seed 42
 
 # --- Step 5: Collect and plot scalar burden results ---

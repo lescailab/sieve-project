@@ -2,32 +2,45 @@
 """
 Non-linear classifier validation of SIEVE gene sets.
 
-Tests whether SIEVE-identified gene sets carry non-linear discriminative
-information in independent validation cohorts by training a classifier on
-the per-gene burden vector and comparing performance against a null
-distribution from random gene sets of equal size.
+This script validates corrected SIEVE gene rankings from one or more
+annotation levels against an independent validation cohort burden matrix.
+For each ``(top_k, classifier)`` pair it draws one or more shared null
+distributions of random gene sets, reusing each null across all requested
+annotation levels that end up with the same effective gene-set size after
+burden-matrix intersection. Empirical p-values use the ``(k + 1) / (N + 1)``
+convention recommended by Phipson and Smyth (2010), "Permutation P-values
+Should Never Be Zero".
+
+The output TSV contains one row per ``level x top_k x classifier``
+combination. Benjamini-Hochberg FDR is then computed across the entire output
+grid. Interpret ``fdr_bh`` in light of the grid you selected via
+``--levels``, ``--top-k``, and ``--classifiers``.
 
 Usage:
     python scripts/validate_nonlinear_classifier.py \
+        --real-rankings-dir /path/to/corrected_rankings \
         --burden-matrix /path/to/gene_burden_matrix.parquet \
-        --sieve-genes /path/to/sieve_genes_L1.tsv \
-        --phenotypes /path/to/phenotypes.tsv \
-        --output-dir /path/to/nonlinear_validation/ \
-        --top-k 50 100 200 500 \
-        --n-permutations 1000 \
-        --cv-folds 5 \
-        --seed 42 \
-        --n-jobs 4
+        --labels /path/to/phenotypes.tsv \
+        --output-tsv /path/to/nonlinear_validation_summary.tsv \
+        --top-k 100,500,1000,2000 \
+        --classifiers rf,lr
 """
+
 from __future__ import annotations
 
+import os
+
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
+os.environ["NUMEXPR_NUM_THREADS"] = "1"
+
 import argparse
-import math
-import re
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Sequence
 
 import matplotlib
 
@@ -40,9 +53,21 @@ from joblib import Parallel, delayed
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_auc_score
-from sklearn.model_selection import RepeatedStratifiedKFold
+from sklearn.model_selection import StratifiedKFold
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
+
+try:
+    from statsmodels.stats.multitest import multipletests
+
+    _HAS_STATSMODELS = True
+except ImportError:  # pragma: no cover
+    _HAS_STATSMODELS = False
+
+try:
+    from threadpoolctl import threadpool_info
+except ImportError:  # pragma: no cover
+    threadpool_info = None
 
 from src.data.vcf_parser import load_phenotypes
 
@@ -53,194 +78,303 @@ CLASSIFIER_LABELS = {
     "rf": "random_forest",
     "lr": "logistic_regression",
 }
-CV_REPEATS = 3
-PERMUTATION_PROGRESS_EVERY = 100
-
-FoldIndices = List[Tuple[np.ndarray, np.ndarray]]
+SUMMARY_COLUMNS = [
+    "level",
+    "top_k",
+    "k_effective",
+    "classifier",
+    "observed_auc",
+    "observed_std",
+    "null_mean_auc",
+    "null_std_auc",
+    "empirical_p",
+    "z_score",
+    "fdr_bh",
+]
+GENE_COLUMN_CANDIDATES = ["gene_name", "gene_symbol", "gene_id", "gene"]
+LEVEL_RANKING_CANDIDATES = [
+    "corrected_gene_rankings_with_significance.csv",
+    "corrected_gene_rankings.csv",
+    "corrected/corrected_gene_rankings_with_significance.csv",
+    "corrected/corrected_gene_rankings.csv",
+    "results/attribution_comparison_corrected/corrected_gene_rankings_with_significance.csv",
+    "results/explainability/corrected/corrected_gene_rankings.csv",
+]
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
-        description="Non-linear classifier validation of SIEVE gene sets.",
+        description="Validate SIEVE gene sets with shared random-gene nulls.",
+    )
+    parser.add_argument(
+        "--real-rankings-dir",
+        type=Path,
+        required=True,
+        help=(
+            "Directory containing one subdirectory per annotation level "
+            "with corrected gene rankings"
+        ),
     )
     parser.add_argument(
         "--burden-matrix",
         type=Path,
         required=True,
-        help=(
-            "Path to gene-burden matrix parquet file, or a directory containing "
-            "gene_burden_matrix*.parquet outputs"
-        ),
+        help="Validation-cohort gene burden matrix parquet file",
     )
     parser.add_argument(
-        "--sieve-genes",
+        "--labels",
         type=Path,
         required=True,
-        help=(
-            "Path to SIEVE gene list TSV (single level), or directory "
-            "containing sieve_genes_L{0,1,2,3}.tsv files (multi-level mode)"
-        ),
+        help="Validation-cohort phenotype/label TSV",
     )
     parser.add_argument(
-        "--phenotypes",
+        "--output-tsv",
         type=Path,
         required=True,
-        help="Phenotype TSV (sample_id \\t phenotype: 1=ctrl, 2=case)",
-    )
-    parser.add_argument(
-        "--output-dir",
-        type=Path,
-        required=True,
-        help="Output directory",
+        help="Summary TSV to write",
     )
     parser.add_argument(
         "--top-k",
-        type=int,
-        nargs="+",
-        default=[100],
-        help="Gene set size(s) (default: 100)",
+        required=True,
+        help="Comma-separated list of top-k values, e.g. 100,500,1000,2000",
+    )
+    parser.add_argument(
+        "--classifiers",
+        required=True,
+        help="Comma-separated classifier list from {rf,lr}",
+    )
+    parser.add_argument(
+        "--levels",
+        default="L0,L1,L2,L3",
+        help="Comma-separated annotation levels to include (default: L0,L1,L2,L3)",
     )
     parser.add_argument(
         "--n-permutations",
         type=int,
         default=1000,
-        help="Number of random gene set permutations (default: 1000)",
+        help="Number of random-gene null permutations",
     )
     parser.add_argument(
-        "--cv-folds",
+        "--n-cores",
         type=int,
-        default=5,
-        help="Number of stratified CV folds (default: 5)",
+        default=-1,
+        help="Number of outer-loop cores for permutation evaluation (-1 = all)",
     )
     parser.add_argument(
         "--seed",
         type=int,
         default=42,
-        help="Random seed (default: 42)",
+        help="Master seed for random gene-set draws",
     )
     parser.add_argument(
-        "--n-jobs",
+        "--cv-folds",
         type=int,
-        default=4,
-        help="Number of parallel jobs (default: 4)",
+        default=5,
+        help="Number of stratified CV folds",
     )
     parser.add_argument(
-        "--consequence",
-        default="total",
-        choices=["total", "missense", "lof"],
-        help="Which burden matrix to use (default: total)",
-    )
-    parser.add_argument(
-        "--classifiers",
-        default="rf",
-        choices=["rf", "lr", "both"],
-        help="Classifier(s): rf, lr, or both (default: rf)",
-    )
-    parser.add_argument(
-        "--also-export-csv",
-        action="store_true",
-        default=False,
-        help="Export SIEVE feature matrices as CSV for external analysis",
+        "--score-column",
+        default="z_attribution",
+        help=(
+            "Ranking column to use for selecting real genes. "
+            "Use z_attribution (maps to gene_z_score in gene rankings) "
+            "or fdr_gene for significance-driven ranking."
+        ),
     )
     return parser.parse_args(argv)
 
 
+def parse_int_csv(value: str, argument_name: str) -> list[int]:
+    """Parse a comma-separated integer list."""
+    values = [token.strip() for token in value.split(",") if token.strip()]
+    if not values:
+        raise ValueError(f"{argument_name} must not be empty")
+    parsed = [int(token) for token in values]
+    if any(number <= 0 for number in parsed):
+        raise ValueError(f"{argument_name} must contain positive integers")
+    return parsed
+
+
+def parse_choice_csv(
+    value: str,
+    argument_name: str,
+    allowed: Sequence[str],
+) -> list[str]:
+    """Parse a comma-separated string list restricted to *allowed* values."""
+    tokens = [token.strip() for token in value.split(",") if token.strip()]
+    if not tokens:
+        raise ValueError(f"{argument_name} must not be empty")
+    invalid = sorted(set(tokens) - set(allowed))
+    if invalid:
+        raise ValueError(
+            f"{argument_name} contains unsupported values: {invalid}. "
+            f"Allowed: {sorted(allowed)}"
+        )
+    deduplicated: list[str] = []
+    seen: set[str] = set()
+    for token in tokens:
+        if token not in seen:
+            deduplicated.append(token)
+            seen.add(token)
+    return deduplicated
+
+
 def level_sort_key(level: str) -> tuple[int, str]:
-    """Sort known ablation levels first, preserving L0-L3 order."""
+    """Sort known ablation levels in canonical order."""
     if level in LEVEL_ORDER:
         return LEVEL_ORDER.index(level), level
     return len(LEVEL_ORDER), level
 
 
-def resolve_burden_matrix_path(path: Path, consequence: str) -> Path:
-    """
-    Resolve the requested burden matrix.
+def format_duration(seconds: float) -> str:
+    """Format a duration in a compact human-readable form."""
+    total_seconds = max(0, int(round(seconds)))
+    minutes, secs = divmod(total_seconds, 60)
+    hours, mins = divmod(minutes, 60)
+    if hours:
+        return f"{hours}h {mins}m {secs}s"
+    if minutes:
+        return f"{minutes}m {secs}s"
+    return f"{secs}s"
 
-    Supports either:
-    - a direct parquet path
-    - a directory containing extract_validation_burden.py outputs
-    """
-    expected_name = (
-        "gene_burden_matrix.parquet"
-        if consequence == "total"
-        else f"gene_burden_matrix_{consequence}.parquet"
+
+def resolve_score_column(df: pd.DataFrame, requested_score_column: str) -> str:
+    """Map requested score aliases onto the actual gene-ranking columns present."""
+    aliases = [requested_score_column]
+    if requested_score_column == "z_attribution":
+        aliases = ["gene_z_score", "z_attribution", "mean_z_score", "gene_score"]
+
+    for candidate in aliases:
+        if candidate in df.columns:
+            return candidate
+
+    raise ValueError(
+        f"Requested score column '{requested_score_column}' not found. "
+        f"Available columns: {list(df.columns)}"
     )
 
-    if path.is_dir():
-        resolved = path / expected_name
-    else:
-        resolved = path
-        if consequence != "total" and path.name != expected_name:
-            candidate = path.with_name(expected_name)
-            if candidate.exists():
-                resolved = candidate
 
-    if not resolved.exists():
-        raise FileNotFoundError(
-            f"Burden matrix not found for consequence '{consequence}': {resolved}"
+def score_column_is_ascending(score_column: str) -> bool:
+    """Return True when lower values mean higher priority."""
+    lowered = score_column.lower()
+    return lowered.startswith("fdr") or lowered.startswith("empirical_p")
+
+
+def find_level_rankings_path(level_dir: Path) -> Path:
+    """Locate the corrected gene rankings file for one annotation level."""
+    for relative_path in LEVEL_RANKING_CANDIDATES:
+        candidate = level_dir / relative_path
+        if candidate.exists():
+            return candidate
+
+    discovered = sorted(level_dir.rglob("corrected_gene_rankings*.csv"))
+    if len(discovered) == 1:
+        return discovered[0]
+    if len(discovered) > 1:
+        raise ValueError(
+            f"Multiple corrected gene ranking files found under {level_dir}: "
+            f"{[str(path) for path in discovered]}"
         )
 
-    return resolved
+    raise FileNotFoundError(
+        f"No corrected gene rankings found under {level_dir}. "
+        f"Expected one of {LEVEL_RANKING_CANDIDATES}"
+    )
+
+
+def detect_level_ranking_files(
+    real_rankings_dir: Path,
+    requested_levels: Sequence[str],
+) -> dict[str, Path]:
+    """Resolve corrected gene-ranking files for the requested levels."""
+    level_paths: dict[str, Path] = {}
+    for level in requested_levels:
+        level_dir = real_rankings_dir / level
+        if not level_dir.exists():
+            raise FileNotFoundError(
+                f"Requested level directory does not exist: {level_dir}"
+            )
+        level_paths[level] = find_level_rankings_path(level_dir)
+    return level_paths
+
+
+def load_gene_rankings(
+    rankings_path: Path,
+    requested_score_column: str,
+) -> pd.DataFrame:
+    """Load and standardise one gene-ranking file."""
+    df = pd.read_csv(rankings_path)
+
+    gene_column = next(
+        (column for column in GENE_COLUMN_CANDIDATES if column in df.columns),
+        None,
+    )
+    if gene_column is None:
+        raise ValueError(
+            f"No gene identifier column found in {rankings_path}. "
+            f"Expected one of {GENE_COLUMN_CANDIDATES}"
+        )
+
+    actual_score_column = resolve_score_column(df, requested_score_column)
+    ascending = score_column_is_ascending(requested_score_column)
+
+    ranked = (
+        df[[gene_column, actual_score_column]]
+        .copy()
+        .rename(
+            columns={
+                gene_column: "gene_name",
+                actual_score_column: "ranking_score",
+            }
+        )
+    )
+    ranked["gene_name"] = ranked["gene_name"].astype(str)
+    ranked["ranking_score"] = pd.to_numeric(ranked["ranking_score"], errors="coerce")
+    ranked = ranked.dropna(subset=["gene_name", "ranking_score"])
+    ranked = ranked.drop_duplicates(subset=["gene_name"], keep="first")
+    ranked = ranked.sort_values(
+        "ranking_score",
+        ascending=ascending,
+        kind="mergesort",
+    ).reset_index(drop=True)
+    return ranked
 
 
 def load_burden_matrix(path: Path) -> pd.DataFrame:
-    """Load gene-burden matrix from parquet, ensuring sample IDs are the index."""
-    df = pd.read_parquet(path)
-    if "sample_id" in df.columns:
-        df = df.set_index("sample_id")
-    df.index = df.index.astype(str)
-    df.columns = [str(col) for col in df.columns]
-    return df
+    """Load gene-burden matrix from parquet and normalise sample IDs."""
+    burden_df = pd.read_parquet(path)
+    if "sample_id" in burden_df.columns:
+        burden_df = burden_df.set_index("sample_id")
+    burden_df.index = burden_df.index.astype(str)
+    burden_df.columns = [str(column) for column in burden_df.columns]
+    return burden_df
 
 
-def load_sieve_genes(gene_file: Path) -> pd.DataFrame:
-    """Load a SIEVE gene list TSV or CSV."""
-    sep = "\t"
-    with open(gene_file) as handle:
-        first_line = handle.readline()
-        if "," in first_line and "\t" not in first_line:
-            sep = ","
-
-    df = pd.read_csv(gene_file, sep=sep)
-    required = {"gene_name", "gene_rank"}
-    missing = required - set(df.columns)
-    if missing:
-        raise ValueError(f"Gene list missing required columns: {sorted(missing)}")
-
-    return df.sort_values("gene_rank").reset_index(drop=True)
+def load_labels(path: Path) -> dict[str, int]:
+    """Load SIEVE phenotype labels as a sample_id -> 0/1 mapping."""
+    return {
+        str(sample_id): int(label)
+        for sample_id, label in load_phenotypes(path).items()
+    }
 
 
-def detect_sieve_gene_files(sieve_genes_path: Path) -> Dict[str, Path]:
-    """Detect one or more SIEVE gene list files."""
-    if sieve_genes_path.is_file():
-        match = re.search(r"L(\d+)", sieve_genes_path.name)
-        level = f"L{match.group(1)}" if match else "single"
-        return {level: sieve_genes_path}
-
-    if sieve_genes_path.is_dir():
-        files: Dict[str, Path] = {}
-        # Match both naming conventions:
-        #   L0_sieve_genes.tsv  (from --ablation-level L0)
-        #   sieve_genes_L0.tsv
-        for gene_file in sorted(sieve_genes_path.glob("*sieve_genes*.tsv")):
-            match = re.search(r"L(\d+)", gene_file.name)
-            if match:
-                level = f"L{match.group(1)}"
-                if level not in files:
-                    files[level] = gene_file
-        if not files:
-            raise FileNotFoundError(
-                f"No SIEVE gene list files (L*_sieve_genes*.tsv or "
-                f"sieve_genes_L*.tsv) found in {sieve_genes_path}"
-            )
-        return files
-
-    raise FileNotFoundError(f"Path does not exist: {sieve_genes_path}")
+def generate_folds(
+    labels: np.ndarray,
+    cv_folds: int,
+    seed: int,
+) -> list[tuple[np.ndarray, np.ndarray]]:
+    """Create deterministic stratified folds."""
+    splitter = StratifiedKFold(
+        n_splits=cv_folds,
+        shuffle=True,
+        random_state=seed,
+    )
+    return list(splitter.split(np.zeros(len(labels), dtype=np.float64), labels))
 
 
 def build_classifier(classifier_name: str, seed: int) -> Pipeline | RandomForestClassifier:
-    """Construct a fresh classifier instance with a deterministic seed."""
+    """Construct one classifier instance with deterministic random state."""
     if classifier_name == "rf":
         return RandomForestClassifier(
             n_estimators=500,
@@ -259,7 +393,6 @@ def build_classifier(classifier_name: str, seed: int) -> Pipeline | RandomForest
                 (
                     "lr",
                     LogisticRegression(
-                        l1_ratio=0,
                         C=1.0,
                         class_weight="balanced",
                         solver="lbfgs",
@@ -273,211 +406,264 @@ def build_classifier(classifier_name: str, seed: int) -> Pipeline | RandomForest
     raise ValueError(f"Unsupported classifier: {classifier_name}")
 
 
-def generate_fixed_folds(
-    y: np.ndarray,
-    cv_folds: int,
-    seed: int,
-    n_repeats: int = CV_REPEATS,
-) -> FoldIndices:
-    """Generate fixed repeated stratified folds for reuse across all evaluations."""
-    splitter = RepeatedStratifiedKFold(
-        n_splits=cv_folds,
-        n_repeats=n_repeats,
-        random_state=seed,
-    )
-    return list(splitter.split(np.zeros(len(y), dtype=np.float64), y))
-
-
-def evaluate_gene_set(
-    X: np.ndarray,
-    y: np.ndarray,
-    fold_indices: FoldIndices,
+def evaluate_auc_for_feature_indices(
+    burden_values: np.ndarray,
+    labels: np.ndarray,
+    feature_indices: np.ndarray,
+    fold_indices: Sequence[tuple[np.ndarray, np.ndarray]],
     classifier_name: str,
     model_seed: int,
-    warn_context: str = "",
 ) -> np.ndarray:
-    """
-    Evaluate a gene set using pre-defined CV folds.
-
-    Returns an array of per-fold AUC values. Failed folds are recorded as NaN.
-    """
+    """Evaluate one gene set and return per-fold AUCs."""
+    X = burden_values[:, feature_indices]
     aucs: list[float] = []
-    context = warn_context or classifier_name
 
-    for fold_number, (train_idx, test_idx) in enumerate(fold_indices, start=1):
-        X_train = X[train_idx]
-        X_test = X[test_idx]
-        y_train = y[train_idx]
-        y_test = y[test_idx]
-        clf = build_classifier(classifier_name, model_seed)
-
-        try:
-            clf.fit(X_train, y_train)
-            y_prob = clf.predict_proba(X_test)[:, 1]
-            auc = float(roc_auc_score(y_test, y_prob))
-        except ValueError as exc:
-            print(
-                f"  WARNING: AUC computation failed for {context} fold {fold_number}: {exc}",
-                file=sys.stderr,
-            )
-            auc = float("nan")
-
-        aucs.append(auc)
+    for train_idx, test_idx in fold_indices:
+        classifier = build_classifier(classifier_name, model_seed)
+        classifier.fit(X[train_idx], labels[train_idx])
+        probabilities = classifier.predict_proba(X[test_idx])[:, 1]
+        aucs.append(float(roc_auc_score(labels[test_idx], probabilities)))
 
     return np.asarray(aucs, dtype=np.float64)
 
 
-def run_single_permutation(
-    perm_idx: int,
+def evaluate_random_gene_set_mean_auc(
     burden_values: np.ndarray,
-    n_genes_total: int,
-    k_effective: int,
-    y: np.ndarray,
-    fold_indices: FoldIndices,
+    labels: np.ndarray,
+    feature_indices: np.ndarray,
+    fold_indices: Sequence[tuple[np.ndarray, np.ndarray]],
+    classifier_name: str,
+    model_seed: int,
+) -> float:
+    """Evaluate one random gene set and return its mean AUC."""
+    aucs = evaluate_auc_for_feature_indices(
+        burden_values=burden_values,
+        labels=labels,
+        feature_indices=feature_indices,
+        fold_indices=fold_indices,
+        classifier_name=classifier_name,
+        model_seed=model_seed,
+    )
+    return float(np.mean(aucs))
+
+
+def draw_random_gene_sets(
+    gene_universe_size: int,
+    set_size: int,
+    n_permutations: int,
+    seed: int,
+) -> list[np.ndarray]:
+    """Draw random burden-matrix column index sets of equal size."""
+    if set_size > gene_universe_size:
+        raise ValueError(
+            f"Requested top_k={set_size} exceeds the burden-matrix gene universe "
+            f"({gene_universe_size})"
+        )
+
+    rng = np.random.default_rng(seed)
+    return [
+        np.asarray(
+            rng.choice(gene_universe_size, size=set_size, replace=False),
+            dtype=np.int64,
+        )
+        for _ in range(n_permutations)
+    ]
+
+
+def derive_seed(top_k: int, classifier_name: str, master_seed: int) -> int:
+    """Derive a stable child seed from top-k, classifier, and master seed."""
+    classifier_offset = {"rf": 17, "lr": 29}[classifier_name]
+    return int(master_seed + top_k * 1009 + classifier_offset * 100_003)
+
+
+def get_parallel_verbose() -> int:
+    """Read optional joblib verbosity from SIEVE_JOBLIB_VERBOSE."""
+    raw_value = os.environ.get("SIEVE_JOBLIB_VERBOSE", "0").strip()
+    if not raw_value:
+        return 0
+
+    try:
+        return max(0, int(raw_value))
+    except ValueError:
+        print(
+            f"WARNING: Ignoring invalid SIEVE_JOBLIB_VERBOSE={raw_value!r}; "
+            "defaulting to 0"
+        )
+        return 0
+
+
+def run_shared_null_distribution(
+    burden_values: np.ndarray,
+    labels: np.ndarray,
+    random_gene_sets: Sequence[np.ndarray],
+    fold_indices: Sequence[tuple[np.ndarray, np.ndarray]],
     classifier_name: str,
     seed: int,
-    n_permutations: int,
-) -> float:
-    """Sample one random gene set and return its mean AUC."""
-    rng = np.random.RandomState(seed + perm_idx)
-    random_cols = rng.choice(n_genes_total, size=k_effective, replace=False)
-    X_random = burden_values[:, random_cols]
-
-    permutation_seed = seed + n_permutations + perm_idx
-    aucs = evaluate_gene_set(
-        X_random,
-        y,
-        fold_indices,
-        classifier_name,
-        permutation_seed,
-        warn_context=f"{classifier_name} permutation {perm_idx + 1}",
+    n_cores: int,
+    parallel_verbose: int,
+) -> np.ndarray:
+    """Evaluate the shared random-gene null distribution in parallel."""
+    start = time.perf_counter()
+    null_aucs = Parallel(
+        n_jobs=n_cores,
+        backend="loky",
+        verbose=parallel_verbose,
+    )(
+        delayed(evaluate_random_gene_set_mean_auc)(
+            burden_values=burden_values,
+            labels=labels,
+            feature_indices=feature_indices,
+            fold_indices=fold_indices,
+            classifier_name=classifier_name,
+            model_seed=seed + permutation_index + 1,
+        )
+        for permutation_index, feature_indices in enumerate(random_gene_sets)
     )
-    return float(np.nanmean(aucs))
+    elapsed = time.perf_counter() - start
+    print(
+        f"  Shared null complete in {format_duration(elapsed)} "
+        f"for {len(random_gene_sets)} permutations"
+    )
+    return np.asarray(null_aucs, dtype=np.float64)
 
 
-def format_duration(seconds: float) -> str:
-    """Format a duration in a compact human-readable form."""
-    total_seconds = max(0, int(round(seconds)))
-    minutes, secs = divmod(total_seconds, 60)
-    hours, mins = divmod(minutes, 60)
+def select_observed_gene_set(
+    ranked_genes: pd.DataFrame,
+    burden_columns: Sequence[str],
+    top_k: int,
+) -> dict[str, Any]:
+    """Select the observed top-k genes and intersect them with the burden matrix."""
+    selected_gene_names = ranked_genes["gene_name"].head(top_k).tolist()
+    burden_lookup = {
+        str(column).upper(): index for index, column in enumerate(burden_columns)
+    }
 
-    if hours:
-        return f"{hours}h {mins}m {secs}s"
-    if minutes:
-        return f"{minutes}m {secs}s"
-    return f"{secs}s"
-
-
-def summarize_missing_genes(missing_genes: Sequence[str], preview: int = 20) -> str:
-    """Format missing-gene diagnostics for stdout logging."""
-    if not missing_genes:
-        return "none"
-
-    shown = ", ".join(missing_genes[:preview])
-    if len(missing_genes) > preview:
-        return f"{shown}, ... ({len(missing_genes)} total)"
-    return shown
-
-
-def select_sieve_features(
-    burden_matrix: pd.DataFrame,
-    sieve_genes_df: pd.DataFrame,
-    top_k_requested: int,
-) -> Dict[str, Any]:
-    """Match top-ranked SIEVE genes to burden-matrix columns."""
-    ranked = sieve_genes_df.sort_values("gene_rank").head(top_k_requested).copy()
-    selected_gene_names = [str(gene) for gene in ranked["gene_name"].tolist()]
-
-    burden_cols_upper = {str(column).upper(): str(column) for column in burden_matrix.columns}
+    matched_indices: list[int] = []
     matched_genes: list[str] = []
     missing_genes: list[str] = []
-    seen_matches: set[str] = set()
+    seen: set[str] = set()
 
     for gene_name in selected_gene_names:
         gene_upper = gene_name.upper()
-        if gene_upper in burden_cols_upper and gene_upper not in seen_matches:
-            matched_genes.append(burden_cols_upper[gene_upper])
-            seen_matches.add(gene_upper)
-        elif gene_upper not in burden_cols_upper:
+        if gene_upper in burden_lookup and gene_upper not in seen:
+            matched_indices.append(burden_lookup[gene_upper])
+            matched_genes.append(str(burden_columns[burden_lookup[gene_upper]]))
+            seen.add(gene_upper)
+        elif gene_upper not in burden_lookup:
             missing_genes.append(gene_name)
 
-    X_sieve = burden_matrix.loc[:, matched_genes].to_numpy(dtype=np.float64, copy=True)
-
     return {
-        "top_k_requested": int(top_k_requested),
-        "top_k_used": int(len(selected_gene_names)),
-        "requested_gene_names": selected_gene_names,
+        "selected_gene_names": selected_gene_names,
         "matched_genes": matched_genes,
         "missing_genes": missing_genes,
-        "k_effective": int(len(matched_genes)),
-        "X_sieve": X_sieve,
+        "feature_indices": np.asarray(matched_indices, dtype=np.int64),
+        "k_effective": int(len(matched_indices)),
     }
 
 
-def summarize_null_distribution(null_aucs: np.ndarray) -> Dict[str, float]:
-    """Compute summary statistics for a null AUC distribution."""
-    return {
-        "mean": float(round(np.mean(null_aucs), 6)),
-        "std": float(round(np.std(null_aucs), 6)),
-        "median": float(round(np.median(null_aucs), 6)),
-        "p5": float(round(np.percentile(null_aucs, 5), 6)),
-        "p95": float(round(np.percentile(null_aucs, 95), 6)),
-        "max": float(round(np.max(null_aucs), 6)),
-    }
+def resolve_observed_gene_sets(
+    level_rankings: dict[str, pd.DataFrame],
+    burden_columns: Sequence[str],
+    requested_levels: Sequence[str],
+    top_k: int,
+) -> tuple[dict[str, dict[str, Any]], dict[int, list[str]]]:
+    """Resolve observed top-k gene sets and group levels by effective size."""
+    observed_gene_sets: dict[str, dict[str, Any]] = {}
+    levels_by_k_effective: dict[int, list[str]] = {}
 
-
-def run_permutations(
-    burden_values: np.ndarray,
-    k_effective: int,
-    y: np.ndarray,
-    fold_indices: FoldIndices,
-    classifier_name: str,
-    n_permutations: int,
-    seed: int,
-    n_jobs: int,
-    progress_every: int = PERMUTATION_PROGRESS_EVERY,
-) -> np.ndarray:
-    """Evaluate the random-gene null distribution with batched progress reporting."""
-    if n_permutations <= 0:
-        return np.empty(0, dtype=np.float64)
-
-    n_genes_total = burden_values.shape[1]
-    all_results: list[float] = []
-    start_time = time.time()
-
-    for batch_start in range(0, n_permutations, progress_every):
-        batch_end = min(batch_start + progress_every, n_permutations)
-        batch_indices = list(range(batch_start, batch_end))
-
-        batch_results = Parallel(n_jobs=n_jobs, prefer="threads", verbose=0)(
-            delayed(run_single_permutation)(
-                perm_idx,
-                burden_values,
-                n_genes_total,
-                k_effective,
-                y,
-                fold_indices,
-                classifier_name,
-                seed,
-                n_permutations,
-            )
-            for perm_idx in batch_indices
+    for level in requested_levels:
+        observed_gene_set = select_observed_gene_set(
+            ranked_genes=level_rankings[level],
+            burden_columns=burden_columns,
+            top_k=top_k,
         )
-
-        all_results.extend(batch_results)
-        completed = len(all_results)
-        elapsed = time.time() - start_time
-        rate = elapsed / completed if completed else math.nan
-        remaining = rate * (n_permutations - completed) if completed else math.nan
-
+        k_effective = observed_gene_set["k_effective"]
         print(
-            f"  Permutation {completed}/{n_permutations} "
-            f"({(completed / n_permutations) * 100:.1f}%) - "
-            f"elapsed: {format_duration(elapsed)} - "
-            f"estimated remaining: {format_duration(remaining)}"
+            f"  {level}: matched {k_effective}/{top_k} genes "
+            f"({len(observed_gene_set['missing_genes'])} missing)"
         )
 
-    return np.asarray(all_results, dtype=np.float64)
+        if k_effective == 0:
+            raise ValueError(
+                f"No ranked genes for {level} matched the burden matrix "
+                f"for top_k={top_k}"
+            )
+
+        observed_gene_sets[level] = observed_gene_set
+        levels_by_k_effective.setdefault(k_effective, []).append(level)
+
+    if len(levels_by_k_effective) > 1:
+        print(
+            "  WARNING: effective gene-set size differs across levels after "
+            "burden-matrix matching. Shared null distributions will be reused "
+            "only within levels that have the same k_effective."
+        )
+        for k_effective, levels in sorted(levels_by_k_effective.items()):
+            print(f"    k_effective={k_effective}: {', '.join(levels)}")
+
+    return observed_gene_sets, levels_by_k_effective
+
+
+def compute_empirical_p(observed_value: float, null_distribution: np.ndarray) -> float:
+    """
+    Compute an empirical p-value using the (k + 1) / (N + 1) convention.
+
+    ``k`` is the number of null values greater than or equal to the observed
+    value. The +1 adjustment follows Phipson and Smyth (2010), ensuring the
+    empirical p-value is never exactly zero.
+    """
+    k = int(np.sum(null_distribution >= observed_value))
+    return float((k + 1) / (len(null_distribution) + 1))
+
+
+def bh_fdr(p_values: Sequence[float]) -> np.ndarray:
+    """Apply Benjamini-Hochberg FDR correction."""
+    p_array = np.asarray(p_values, dtype=np.float64)
+    if _HAS_STATSMODELS:
+        _, adjusted, _, _ = multipletests(p_array, method="fdr_bh")
+        return adjusted
+
+    n = len(p_array)
+    order = np.argsort(p_array)
+    sorted_p = p_array[order]
+    adjusted_sorted = sorted_p * n / np.arange(1, n + 1)
+    adjusted_sorted = np.minimum.accumulate(adjusted_sorted[::-1])[::-1]
+    adjusted_sorted = np.minimum(adjusted_sorted, 1.0)
+    adjusted = np.empty(n, dtype=np.float64)
+    adjusted[order] = adjusted_sorted
+    return adjusted
+
+
+def log_thread_configuration() -> None:
+    """Log BLAS/OpenMP thread settings for debugging."""
+    print("Thread configuration:")
+    env_names = [
+        "OMP_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "MKL_NUM_THREADS",
+        "VECLIB_MAXIMUM_THREADS",
+        "NUMEXPR_NUM_THREADS",
+    ]
+    for name in env_names:
+        print(f"  {name}={os.environ.get(name, '<unset>')}")
+
+    if threadpool_info is None:
+        print("  threadpoolctl not available; reporting environment variables only")
+        return
+
+    info = threadpool_info()
+    if not info:
+        print("  threadpoolctl reported no active pools yet")
+        return
+
+    for entry in info:
+        internal_api = entry.get("internal_api", "unknown")
+        num_threads = entry.get("num_threads", "unknown")
+        prefix = entry.get("prefix", "unknown")
+        print(
+            f"  pool={prefix} internal_api={internal_api} "
+            f"num_threads={num_threads}"
+        )
 
 
 def plot_validation(
@@ -487,6 +673,7 @@ def plot_validation(
     empirical_p: float,
     level: str,
     top_k: int,
+    k_effective: int,
     classifier_name: str,
     output_path: Path,
 ) -> None:
@@ -504,14 +691,13 @@ def plot_validation(
     axes[0].set_xlabel("Mean AUC")
     axes[0].set_ylabel("Count")
     axes[0].set_title(
-        f"Null distribution - {level} top-{top_k} ({classifier_label})\n"
+        f"Shared null - {level} top-{top_k} (k={k_effective}, {classifier_label})\n"
         f"empirical p = {empirical_p:.4f}"
     )
     axes[0].legend()
 
-    valid_observed = observed_aucs[~np.isnan(observed_aucs)]
     box = axes[1].boxplot(
-        [null_aucs, valid_observed],
+        [null_aucs, observed_aucs],
         tick_labels=["Null (means)", "Observed (folds)"],
         patch_artist=True,
     )
@@ -520,7 +706,7 @@ def plot_validation(
     box["boxes"][1].set_facecolor("salmon")
     box["boxes"][1].set_alpha(0.7)
     axes[1].set_ylabel("AUC")
-    axes[1].set_title("Observed per-fold AUCs vs null distribution")
+    axes[1].set_title("Observed per-fold AUCs vs shared null")
 
     fig.tight_layout()
     fig.savefig(output_path, dpi=150, bbox_inches="tight")
@@ -529,50 +715,58 @@ def plot_validation(
 
 def plot_summary_heatmap(summary_df: pd.DataFrame, output_path: Path) -> None:
     """Plot observed AUC across levels and top-k values."""
-    classifiers = [name for name in CLASSIFIER_ORDER if name in summary_df["classifier"].unique()]
+    classifiers = [
+        name for name in CLASSIFIER_ORDER if name in summary_df["classifier"].unique()
+    ]
     if not classifiers:
         return
 
     levels = sorted(summary_df["level"].unique(), key=level_sort_key)
     top_ks = sorted(summary_df["top_k"].unique())
-    bonferroni_threshold = 0.05 / len(summary_df) if len(summary_df) else 0.05
-
     fig = plt.figure(
-        figsize=(max(6, len(top_ks) * 1.7 * len(classifiers)) + 1.2, max(4, len(levels) * 0.9 + 2)),
+        figsize=(
+            max(6, len(top_ks) * 1.7 * len(classifiers)) + 1.2,
+            max(4, len(levels) * 0.9 + 2),
+        ),
     )
-    gs = fig.add_gridspec(1, len(classifiers) + 1, width_ratios=[*([1] * len(classifiers)), 0.05], wspace=0.4)
+    gs = fig.add_gridspec(
+        1,
+        len(classifiers) + 1,
+        width_ratios=[*([1] * len(classifiers)), 0.05],
+        wspace=0.4,
+    )
     axes = np.array([[fig.add_subplot(gs[0, i]) for i in range(len(classifiers))]])
 
     matrices: list[np.ndarray] = []
-    pval_matrices: list[np.ndarray] = []
+    fdr_matrices: list[np.ndarray] = []
     for classifier_name in classifiers:
         subset = summary_df[summary_df["classifier"] == classifier_name]
         matrix = np.full((len(levels), len(top_ks)), np.nan, dtype=np.float64)
-        pval_matrix = np.full((len(levels), len(top_ks)), np.nan, dtype=np.float64)
+        fdr_matrix = np.full((len(levels), len(top_ks)), np.nan, dtype=np.float64)
 
         for i, level in enumerate(levels):
             for j, top_k in enumerate(top_ks):
                 row = subset[(subset["level"] == level) & (subset["top_k"] == top_k)]
                 if not row.empty:
                     matrix[i, j] = float(row["observed_auc"].iloc[0])
-                    pval_matrix[i, j] = float(row["empirical_p"].iloc[0])
+                    fdr_matrix[i, j] = float(row["fdr_bh"].iloc[0])
 
         matrices.append(matrix)
-        pval_matrices.append(pval_matrix)
+        fdr_matrices.append(fdr_matrix)
 
     finite_arrays = [matrix[np.isfinite(matrix)] for matrix in matrices if np.isfinite(matrix).any()]
     finite_values = np.concatenate(finite_arrays) if finite_arrays else np.empty(0, dtype=np.float64)
     vmin = max(0.40, float(np.min(finite_values)) - 0.02) if finite_values.size else 0.45
     vmax = min(0.90, float(np.max(finite_values)) + 0.02) if finite_values.size else 0.70
-    if math.isclose(vmin, vmax):
+    if np.isclose(vmin, vmax):
         vmax = vmin + 0.05
 
     image = None
-    for axis, classifier_name, matrix, pval_matrix in zip(
+    for axis, classifier_name, matrix, fdr_matrix in zip(
         axes.ravel(),
         classifiers,
         matrices,
-        pval_matrices,
+        fdr_matrices,
     ):
         image = axis.imshow(matrix, cmap="RdYlGn", aspect="auto", vmin=vmin, vmax=vmax)
         axis.set_xticks(range(len(top_ks)))
@@ -590,12 +784,9 @@ def plot_summary_heatmap(summary_df: pd.DataFrame, output_path: Path) -> None:
                     continue
 
                 suffix = ""
-                p_value = pval_matrix[i, j]
-                if not np.isnan(p_value):
-                    if p_value < bonferroni_threshold:
-                        suffix = " **"
-                    elif p_value < 0.05:
-                        suffix = " *"
+                fdr_value = fdr_matrix[i, j]
+                if not np.isnan(fdr_value) and fdr_value < 0.05:
+                    suffix = " *"
 
                 axis.text(
                     j,
@@ -612,149 +803,119 @@ def plot_summary_heatmap(summary_df: pd.DataFrame, output_path: Path) -> None:
         fig.colorbar(image, cax=cbar_ax, label="Observed AUC")
 
     fig.suptitle("Observed AUC across SIEVE ablation levels and top-k selections")
+    fig.subplots_adjust(top=0.84, wspace=0.30)
     fig.savefig(output_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
 
 
 def generate_report(summary_df: pd.DataFrame, output_path: Path) -> None:
     """Write a concise markdown summary of the validation results."""
-    n_tests = len(summary_df)
-    bonferroni_threshold = 0.05 / n_tests if n_tests else 0.05
-
     lines = [
         "# Non-linear classifier validation report",
         "",
-        f"- Tests performed: {n_tests}",
-        f"- Bonferroni threshold: {bonferroni_threshold:.6f}",
+        (
+            "Empirical p-values use the (k + 1) / (N + 1) convention. "
+            "Benjamini-Hochberg FDR is computed across the full result grid."
+        ),
         "",
     ]
 
-    significant = summary_df[summary_df["bonferroni_significant"] == "yes"]
+    significant = summary_df[summary_df["fdr_bh"] < 0.05]
     if significant.empty:
-        lines.extend(
-            [
-                "## Bonferroni-significant results",
-                "",
-                "None.",
-                "",
-            ]
-        )
+        lines.extend(["## FDR-significant results", "", "None.", ""])
     else:
-        lines.extend(["## Bonferroni-significant results", ""])
-        for _, row in significant.sort_values(["empirical_p", "observed_auc"]).iterrows():
+        lines.extend(["## FDR-significant results", ""])
+        for _, row in significant.sort_values(["fdr_bh", "empirical_p"]).iterrows():
             lines.append(
                 f"- {row['level']} top-{row['top_k']} ({row['classifier']}): "
                 f"AUC {row['observed_auc']:.3f}, null mean {row['null_mean_auc']:.3f}, "
-                f"empirical p {row['empirical_p']:.4f}"
+                f"empirical p {row['empirical_p']:.4f}, fdr_bh {row['fdr_bh']:.4f}"
             )
         lines.append("")
 
-    nominal = summary_df[
-        (summary_df["empirical_p"] < 0.05)
-        & (summary_df["bonferroni_significant"] != "yes")
-    ]
-    if nominal.empty:
-        lines.extend(["## Nominal signals", "", "None.", ""])
-    else:
-        lines.extend(["## Nominal signals", ""])
-        for _, row in nominal.sort_values(["empirical_p", "observed_auc"]).iterrows():
-            lines.append(
-                f"- {row['level']} top-{row['top_k']} ({row['classifier']}): "
-                f"AUC {row['observed_auc']:.3f}, empirical p {row['empirical_p']:.4f}"
-            )
-        lines.append("")
-
-    if not summary_df.empty:
-        best_auc = summary_df.loc[summary_df["observed_auc"].idxmax()]
-        best_p = summary_df.loc[summary_df["empirical_p"].idxmin()]
-
-        lines.extend(
-            [
-                "## Best results",
-                "",
-                (
-                    f"- Best observed AUC: {best_auc['level']} top-{best_auc['top_k']} "
-                    f"({best_auc['classifier']}) with AUC {best_auc['observed_auc']:.3f}"
-                ),
-                (
-                    f"- Lowest empirical p-value: {best_p['level']} top-{best_p['top_k']} "
-                    f"({best_p['classifier']}) with p {best_p['empirical_p']:.4f}"
-                ),
-                "",
-            ]
-        )
+    best_auc = summary_df.loc[summary_df["observed_auc"].idxmax()]
+    best_p = summary_df.loc[summary_df["empirical_p"].idxmin()]
+    lines.extend(
+        [
+            "## Best results",
+            "",
+            (
+                f"- Best observed AUC: {best_auc['level']} top-{best_auc['top_k']} "
+                f"({best_auc['classifier']}) with AUC {best_auc['observed_auc']:.3f}"
+            ),
+            (
+                f"- Lowest empirical p-value: {best_p['level']} top-{best_p['top_k']} "
+                f"({best_p['classifier']}) with p {best_p['empirical_p']:.4f}"
+            ),
+            "",
+        ]
+    )
 
     if {"rf", "lr"}.issubset(set(summary_df["classifier"].unique())):
         lines.extend(["## Random forest vs logistic regression", ""])
         rf_rows = summary_df[summary_df["classifier"] == "rf"].set_index(["level", "top_k"])
         lr_rows = summary_df[summary_df["classifier"] == "lr"].set_index(["level", "top_k"])
         shared_index = rf_rows.index.intersection(lr_rows.index)
+        for level, top_k in shared_index:
+            rf_auc = float(rf_rows.loc[(level, top_k), "observed_auc"])
+            lr_auc = float(lr_rows.loc[(level, top_k), "observed_auc"])
+            auc_gap = rf_auc - lr_auc
+            direction = "RF > LR" if auc_gap > 0 else "LR > RF" if auc_gap < 0 else "RF = LR"
+            lines.append(
+                f"- {level} top-{top_k}: RF {rf_auc:.3f}, LR {lr_auc:.3f}, "
+                f"RF-LR {auc_gap:+.3f} ({direction})"
+            )
+        lines.append("")
 
-        if len(shared_index) == 0:
-            lines.extend(["No overlapping level/top-k comparisons.", ""])
-        else:
-            for level, top_k in shared_index:
-                rf_auc = float(rf_rows.loc[(level, top_k), "observed_auc"])
-                lr_auc = float(lr_rows.loc[(level, top_k), "observed_auc"])
-                auc_gap = rf_auc - lr_auc
-                direction = "RF > LR" if auc_gap > 0 else "LR > RF" if auc_gap < 0 else "RF = LR"
-                lines.append(
-                    f"- {level} top-{top_k}: RF {rf_auc:.3f}, LR {lr_auc:.3f}, "
-                    f"RF-LR {auc_gap:+.3f} ({direction})"
-                )
-            lines.append("")
-
-    if significant.empty:
-        conclusion = (
-            "No level/top-k combination showed Bonferroni-corrected evidence that the "
-            "SIEVE gene set transfers non-linear discriminative signal to this cohort."
-        )
-    else:
-        conclusion = (
-            "At least one level/top-k combination exceeded the matched random-gene null, "
-            "supporting transfer of multi-gene cardiovascular signal."
-        )
-
-    lines.extend(["## Conclusion", "", conclusion, ""])
     output_path.write_text("\n".join(lines), encoding="utf-8")
 
 
-def build_yaml_result(
-    result: Dict[str, Any],
+def choose_primary_classifier(classifiers_to_run: Sequence[str]) -> str:
+    """Prefer RF as the primary classifier when present."""
+    for classifier_name in CLASSIFIER_ORDER:
+        if classifier_name in classifiers_to_run:
+            return classifier_name
+    raise ValueError("No classifiers requested")
+
+
+def build_yaml_payload(
+    result: dict[str, Any],
     cv_folds: int,
-    linear_baseline: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
-    """Build the primary YAML payload for one level/top-k result."""
-    payload: Dict[str, Any] = {
+    linear_baseline: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build one YAML payload for a validation result."""
+    payload: dict[str, Any] = {
         "parameters": {
             "ablation_level": result["level"],
-            "top_k_requested": int(result["top_k"]),
-            "top_k_used": int(result["top_k_used"]),
+            "top_k": int(result["top_k"]),
             "k_effective": int(result["k_effective"]),
             "missing_genes": [str(gene) for gene in result["missing_genes"]],
             "n_samples": int(result["n_samples"]),
             "n_cases": int(result["n_cases"]),
             "n_controls": int(result["n_controls"]),
-            "consequence_type": result["consequence"],
             "classifier": CLASSIFIER_LABELS[result["classifier"]],
-            "n_estimators": 500 if result["classifier"] == "rf" else None,
-            "min_samples_leaf": 5 if result["classifier"] == "rf" else None,
             "cv_folds": int(cv_folds),
-            "cv_repeats": int(CV_REPEATS),
             "n_permutations": int(result["n_permutations"]),
             "seed": int(result["seed"]),
+            "score_column": str(result["score_column"]),
         },
         "observed": {
             "mean_auc": float(round(result["observed_auc"], 6)),
             "std_auc": float(round(result["observed_std"], 6)),
-            "per_fold_aucs": [
-                float(round(value, 6)) if not np.isnan(value) else None
-                for value in result["observed_aucs"]
-            ],
+            "per_fold_aucs": [float(round(value, 6)) for value in result["observed_aucs"]],
         },
-        "null_distribution": summarize_null_distribution(result["null_aucs"]),
+        "null_distribution": {
+            "mean": float(round(result["null_mean_auc"], 6)),
+            "std": float(round(result["null_std_auc"], 6)),
+            "median": float(round(float(np.median(result["null_aucs"])), 6)),
+            "p5": float(round(float(np.percentile(result["null_aucs"], 5)), 6)),
+            "p95": float(round(float(np.percentile(result["null_aucs"], 95)), 6)),
+        },
         "empirical_p": float(round(result["empirical_p"], 6)),
-        "percentile_rank": float(round(result["percentile_rank"], 2)),
+        "z_score": float(round(result["z_score"], 6))
+        if pd.notna(result["z_score"])
+        else None,
+        "fdr_bh": float(round(result["fdr_bh"], 6)),
     }
 
     if linear_baseline is not None:
@@ -762,6 +923,7 @@ def build_yaml_result(
             "mean_auc": float(round(linear_baseline["observed_auc"], 6)),
             "std_auc": float(round(linear_baseline["observed_std"], 6)),
             "empirical_p": float(round(linear_baseline["empirical_p"], 6)),
+            "fdr_bh": float(round(linear_baseline["fdr_bh"], 6)),
             "rf_minus_lr_auc": float(
                 round(result["observed_auc"] - linear_baseline["observed_auc"], 6)
             ),
@@ -770,374 +932,324 @@ def build_yaml_result(
     return payload
 
 
-def write_validation_outputs(
-    result: Dict[str, Any],
+def write_auxiliary_outputs(
+    results: Sequence[dict[str, Any]],
     output_dir: Path,
     cv_folds: int,
-    linear_baseline: Optional[Dict[str, Any]] = None,
-    also_export_csv: bool = False,
+    classifiers_to_run: Sequence[str],
 ) -> None:
-    """Persist YAML, NPZ, plots, and optional CSV export for one result."""
-    yaml_payload = build_yaml_result(result, cv_folds, linear_baseline=linear_baseline)
+    """Write YAML, NPZ, plots, heatmap, and report outputs."""
+    primary_classifier = choose_primary_classifier(classifiers_to_run)
+    grouped: dict[tuple[str, int], dict[str, dict[str, Any]]] = {}
+    for result in results:
+        grouped.setdefault((result["level"], result["top_k"]), {})[result["classifier"]] = result
 
-    with open(result["yaml_path"], "w") as handle:
-        yaml.safe_dump(yaml_payload, handle, default_flow_style=False, sort_keys=False)
+    for (level, top_k), classifier_results in grouped.items():
+        primary_result = classifier_results.get(primary_classifier)
+        if primary_result is None:
+            continue
 
-    np.savez_compressed(result["npz_path"], null_aucs=result["null_aucs"])
+        linear_baseline = classifier_results.get("lr") if primary_classifier == "rf" else None
+        for classifier_name, result in classifier_results.items():
+            suffix = "" if classifier_name == primary_classifier else f"_{classifier_name}"
+            tag = f"{level}_topK{top_k}"
 
-    plot_validation(
-        result["observed_aucs"],
-        result["null_aucs"],
-        result["observed_auc"],
-        result["empirical_p"],
-        result["level"],
-        result["top_k"],
-        result["classifier"],
-        result["plot_path"],
-    )
+            yaml_path = output_dir / f"nonlinear_validation_{tag}{suffix}.yaml"
+            npz_path = output_dir / f"null_aucs_{tag}{suffix}.npz"
+            plot_path = output_dir / f"validation_plot_{tag}{suffix}.png"
 
-    if also_export_csv:
-        csv_dir = output_dir / "csv"
-        csv_dir.mkdir(parents=True, exist_ok=True)
-        export_df = pd.DataFrame(
-            result["X_sieve"],
-            columns=result["matched_genes"],
-            index=result["sample_ids"],
-        )
-        export_df.insert(0, "sample_id", result["sample_ids"])
-        export_df["phenotype"] = result["y"]
-        export_df.to_csv(result["csv_path"], index=False)
+            yaml_payload = build_yaml_payload(
+                result,
+                cv_folds=cv_folds,
+                linear_baseline=linear_baseline if classifier_name == primary_classifier else None,
+            )
+            with open(yaml_path, "w", encoding="utf-8") as handle:
+                yaml.safe_dump(yaml_payload, handle, default_flow_style=False, sort_keys=False)
 
-
-def run_validation(
-    burden_matrix: pd.DataFrame,
-    burden_values: np.ndarray,
-    sieve_genes_df: pd.DataFrame,
-    y: np.ndarray,
-    sample_ids: np.ndarray,
-    level: str,
-    top_k_requested: int,
-    top_k_used: int,
-    classifier_name: str,
-    fold_indices: FoldIndices,
-    n_permutations: int,
-    seed: int,
-    n_jobs: int,
-    output_dir: Path,
-    consequence: str,
-    output_suffix: str = "",
-) -> Dict[str, Any]:
-    """Run one level/top-k/classifier evaluation and return the full result payload."""
-    feature_info = select_sieve_features(
-        burden_matrix=burden_matrix,
-        sieve_genes_df=sieve_genes_df,
-        top_k_requested=top_k_used,
-    )
-
-    matched_genes = feature_info["matched_genes"]
-    missing_genes = feature_info["missing_genes"]
-    k_effective = feature_info["k_effective"]
-    X_sieve = feature_info["X_sieve"]
-
-    print(f"  Gene matching: {k_effective}/{top_k_used} found, {len(missing_genes)} missing")
-    if missing_genes:
-        print(f"  Missing genes: {summarize_missing_genes(missing_genes)}")
-
-    if k_effective < 10:
-        print(
-            "  WARNING: Very few SIEVE genes found in validation VCF - "
-            "results may be unreliable"
-        )
-
-    if k_effective == 0:
-        print("  ERROR: No SIEVE genes found in burden matrix. Skipping.")
-        return {}
-
-    observed_aucs = evaluate_gene_set(
-        X_sieve,
-        y,
-        fold_indices,
-        classifier_name,
-        seed,
-        warn_context=f"{classifier_name} observed",
-    )
-    valid_observed = observed_aucs[~np.isnan(observed_aucs)]
-    if valid_observed.size == 0:
-        print("  ERROR: All observed folds failed. Skipping.")
-        return {}
-
-    observed_mean = float(np.nanmean(observed_aucs))
-    observed_std = float(np.nanstd(observed_aucs))
-    print(f"  Observed AUC: {observed_mean:.4f} +/- {observed_std:.4f}")
-
-    print(f"  Running {n_permutations} permutations ({n_jobs} jobs)...")
-    null_aucs = run_permutations(
-        burden_values=burden_values,
-        k_effective=k_effective,
-        y=y,
-        fold_indices=fold_indices,
-        classifier_name=classifier_name,
-        n_permutations=n_permutations,
-        seed=seed,
-        n_jobs=n_jobs,
-    )
-
-    valid_null_aucs = null_aucs[~np.isnan(null_aucs)]
-    if valid_null_aucs.size == 0:
-        print("  ERROR: All null permutations failed. Skipping.")
-        return {}
-
-    if valid_null_aucs.size != len(null_aucs):
-        print(
-            f"  WARNING: {len(null_aucs) - len(valid_null_aucs)} null permutations produced NaN "
-            "and were excluded from summary statistics"
-        )
-
-    empirical_p = float(
-        (np.sum(valid_null_aucs >= observed_mean) + 1) / (len(valid_null_aucs) + 1)
-    )
-    percentile_rank = float(np.mean(valid_null_aucs < observed_mean) * 100)
-    print(f"  Empirical p = {empirical_p:.4f}, percentile = {percentile_rank:.1f}%")
-
-    n_cases = int(np.sum(y == 1))
-    n_controls = int(np.sum(y == 0))
-    tag = f"{level}_topK{top_k_requested}"
-
-    return {
-        "level": level,
-        "top_k": int(top_k_requested),
-        "top_k_used": int(feature_info["top_k_used"]),
-        "k_effective": int(k_effective),
-        "classifier": classifier_name,
-        "matched_genes": matched_genes,
-        "missing_genes": missing_genes,
-        "n_samples": int(len(y)),
-        "n_cases": n_cases,
-        "n_controls": n_controls,
-        "consequence": consequence,
-        "n_permutations": int(n_permutations),
-        "seed": int(seed),
-        "observed_auc": float(observed_mean),
-        "observed_std": float(observed_std),
-        "observed_aucs": observed_aucs,
-        "null_aucs": valid_null_aucs,
-        "empirical_p": float(empirical_p),
-        "percentile_rank": float(percentile_rank),
-        "X_sieve": X_sieve,
-        "y": y,
-        "sample_ids": sample_ids,
-        "yaml_path": output_dir / f"nonlinear_validation_{tag}{output_suffix}.yaml",
-        "npz_path": output_dir / f"null_aucs_{tag}{output_suffix}.npz",
-        "plot_path": output_dir / f"validation_plot_{tag}{output_suffix}.png",
-        "csv_path": output_dir / "csv" / f"feature_matrix_{consequence}_{level}_top{top_k_requested}.csv",
-    }
-
-
-def result_to_summary_row(result: Dict[str, Any]) -> Dict[str, Any]:
-    """Convert a validation result into one summary-table row."""
-    return {
-        "level": result["level"],
-        "top_k": int(result["top_k"]),
-        "k_effective": int(result["k_effective"]),
-        "classifier": result["classifier"],
-        "observed_auc": round(float(result["observed_auc"]), 6),
-        "observed_std": round(float(result["observed_std"]), 6),
-        "null_mean_auc": round(float(np.mean(result["null_aucs"])), 6),
-        "null_std_auc": round(float(np.std(result["null_aucs"])), 6),
-        "empirical_p": round(float(result["empirical_p"]), 6),
-        "percentile_rank": round(float(result["percentile_rank"]), 2),
-    }
-
-
-def choose_primary_classifier(classifiers_to_run: Sequence[str]) -> str:
-    """Prefer RF as the primary output when present."""
-    for classifier_name in CLASSIFIER_ORDER:
-        if classifier_name in classifiers_to_run:
-            return classifier_name
-    raise ValueError("No classifiers requested")
+            np.savez_compressed(npz_path, null_aucs=result["null_aucs"])
+            plot_validation(
+                observed_aucs=result["observed_aucs"],
+                null_aucs=result["null_aucs"],
+                observed_mean=result["observed_auc"],
+                empirical_p=result["empirical_p"],
+                level=result["level"],
+                top_k=result["top_k"],
+                k_effective=result["k_effective"],
+                classifier_name=result["classifier"],
+                output_path=plot_path,
+            )
 
 
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
 
-    burden_matrix_path = resolve_burden_matrix_path(args.burden_matrix, args.consequence)
-    print(f"Loading burden matrix from {burden_matrix_path}...")
-    burden_matrix = load_burden_matrix(burden_matrix_path).fillna(0.0)
+    try:
+        top_k_values = parse_int_csv(args.top_k, "--top-k")
+        classifiers_to_run = parse_choice_csv(
+            args.classifiers,
+            "--classifiers",
+            CLASSIFIER_ORDER,
+        )
+        requested_levels = parse_choice_csv(
+            args.levels,
+            "--levels",
+            LEVEL_ORDER,
+        )
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    log_thread_configuration()
+    parallel_verbose = get_parallel_verbose()
+    print(f"joblib.Parallel verbosity: {parallel_verbose}")
+    print("")
+
+    print(f"Loading burden matrix from {args.burden_matrix}...")
+    burden_matrix = load_burden_matrix(args.burden_matrix).fillna(0.0)
     print(f"  Shape: {burden_matrix.shape}")
 
-    print("Loading phenotypes...")
-    phenotype_map = {str(sample_id): label for sample_id, label in load_phenotypes(args.phenotypes).items()}
-    print(f"  Loaded {len(phenotype_map)} samples")
+    print(f"Loading labels from {args.labels}...")
+    label_map = load_labels(args.labels)
+    print(f"  Loaded {len(label_map)} labelled samples")
 
-    common_samples = [sample_id for sample_id in burden_matrix.index if sample_id in phenotype_map]
+    common_samples = [
+        sample_id for sample_id in burden_matrix.index if sample_id in label_map
+    ]
     if not common_samples:
-        print("ERROR: No overlapping samples between burden matrix and phenotypes.")
+        print(
+            "ERROR: No overlapping samples between burden matrix and labels.",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     burden_matrix = burden_matrix.loc[common_samples]
     burden_values = burden_matrix.to_numpy(dtype=np.float64, copy=True)
-    sample_ids = np.asarray(common_samples, dtype=object)
-    y = np.asarray([phenotype_map[sample_id] for sample_id in common_samples], dtype=np.int64)
+    labels = np.asarray([label_map[sample_id] for sample_id in common_samples], dtype=np.int64)
 
-    n_cases = int(np.sum(y == 1))
-    n_controls = int(np.sum(y == 0))
-    minority_fraction = min(n_cases, n_controls) / len(y)
-    print(f"  Intersected: {len(common_samples)} samples ({n_cases} cases, {n_controls} controls)")
+    n_cases = int(np.sum(labels == 1))
+    n_controls = int(np.sum(labels == 0))
+    print(
+        f"  Intersected samples: {len(common_samples)} "
+        f"({n_cases} cases, {n_controls} controls)"
+    )
+
     if n_cases == 0 or n_controls == 0:
         print(
-            f"ERROR: Only one class present ({n_cases} cases, {n_controls} controls). "
-            "Cannot run stratified cross-validation."
+            "ERROR: Both case and control samples are required.",
+            file=sys.stderr,
         )
         sys.exit(1)
 
     if min(n_cases, n_controls) < args.cv_folds:
         print(
             f"ERROR: Minority class has {min(n_cases, n_controls)} samples, "
-            f"but --cv-folds requires at least {args.cv_folds}. "
-            "Reduce --cv-folds or provide more samples."
+            f"but --cv-folds={args.cv_folds} requires at least that many.",
+            file=sys.stderr,
         )
         sys.exit(1)
 
-    if minority_fraction < 0.20:
-        print(
-            "  WARNING: Minority class fraction is below 20%; "
-            "class_weight='balanced' is enabled for all classifiers"
-        )
-
-    gene_files = detect_sieve_gene_files(args.sieve_genes)
-    sorted_levels = sorted(gene_files.keys(), key=level_sort_key)
-    print(f"  Detected levels: {sorted_levels}")
-
-    if args.classifiers == "both":
-        classifiers_to_run = ["rf", "lr"]
-    else:
-        classifiers_to_run = [args.classifiers]
-    primary_classifier = choose_primary_classifier(classifiers_to_run)
-
-    fold_indices = generate_fixed_folds(y, args.cv_folds, args.seed)
-    print(
-        f"  CV: {args.cv_folds} folds x {CV_REPEATS} repeats = "
-        f"{len(fold_indices)} splits"
+    level_ranking_files = detect_level_ranking_files(
+        real_rankings_dir=args.real_rankings_dir,
+        requested_levels=requested_levels,
     )
+    level_rankings = {
+        level: load_gene_rankings(path, args.score_column)
+        for level, path in level_ranking_files.items()
+    }
 
-    args.output_dir.mkdir(parents=True, exist_ok=True)
+    print("Resolved corrected gene rankings:")
+    for level in sorted(level_ranking_files, key=level_sort_key):
+        print(f"  {level}: {level_ranking_files[level]}")
 
-    summary_rows: list[Dict[str, Any]] = []
-    for level in sorted_levels:
-        gene_file = gene_files[level]
-        print(f"\n{'=' * 60}")
-        print(f"Level: {level}")
-        print(f"{'=' * 60}")
+    fold_indices = generate_folds(labels, args.cv_folds, args.seed)
+    print(f"Using {args.cv_folds} stratified CV folds")
 
-        sieve_genes_df = load_sieve_genes(gene_file)
-        n_available = len(sieve_genes_df)
-        print(f"  SIEVE genes available: {n_available}")
+    output_dir = args.output_tsv.parent
+    output_dir.mkdir(parents=True, exist_ok=True)
 
-        for requested_top_k in args.top_k:
-            top_k_used = min(requested_top_k, n_available)
-            if requested_top_k > n_available:
-                print(
-                    f"\n  top-{requested_top_k}: only {n_available} genes available; "
-                    f"using all available genes"
-                )
+    results: list[dict[str, Any]] = []
+    gene_universe_size = burden_values.shape[1]
 
-            print(f"\n  Selected top-{top_k_used} genes for requested top-{requested_top_k}")
-            level_results: Dict[str, Dict[str, Any]] = {}
+    for top_k in top_k_values:
+        print(f"\n{'=' * 72}")
+        print(f"top_k = {top_k}")
+        print(f"{'=' * 72}")
 
-            for classifier_name in classifiers_to_run:
-                print(f"\n  --- {level} top-{requested_top_k} ({classifier_name}) ---")
-                output_suffix = "" if classifier_name == primary_classifier else f"_{classifier_name}"
-                result = run_validation(
-                    burden_matrix=burden_matrix,
-                    burden_values=burden_values,
-                    sieve_genes_df=sieve_genes_df,
-                    y=y,
-                    sample_ids=sample_ids,
-                    level=level,
-                    top_k_requested=requested_top_k,
-                    top_k_used=top_k_used,
-                    classifier_name=classifier_name,
-                    fold_indices=fold_indices,
-                    n_permutations=args.n_permutations,
-                    seed=args.seed,
-                    n_jobs=args.n_jobs,
-                    output_dir=args.output_dir,
-                    consequence=args.consequence,
-                    output_suffix=output_suffix,
-                )
-                if not result:
-                    continue
-
-                level_results[classifier_name] = result
-                summary_rows.append(result_to_summary_row(result))
-
-            if primary_classifier not in level_results:
-                continue
-
-            linear_baseline = None
-            if primary_classifier == "rf" and "lr" in level_results:
-                linear_baseline = level_results["lr"]
-
-            write_validation_outputs(
-                level_results[primary_classifier],
-                output_dir=args.output_dir,
-                cv_folds=args.cv_folds,
-                linear_baseline=linear_baseline,
-                also_export_csv=args.also_export_csv,
+        if top_k > gene_universe_size:
+            raise ValueError(
+                f"Requested top_k={top_k} exceeds burden matrix width "
+                f"({gene_universe_size} genes)"
             )
 
-            for classifier_name, result in level_results.items():
-                if classifier_name == primary_classifier:
-                    continue
-                write_validation_outputs(
-                    result,
-                    output_dir=args.output_dir,
-                    cv_folds=args.cv_folds,
-                    also_export_csv=False,
+        observed_gene_sets, levels_by_k_effective = resolve_observed_gene_sets(
+            level_rankings=level_rankings,
+            burden_columns=burden_matrix.columns,
+            requested_levels=requested_levels,
+            top_k=top_k,
+        )
+
+        for classifier_name in classifiers_to_run:
+            for k_effective, grouped_levels in sorted(levels_by_k_effective.items()):
+                print(
+                    f"\nShared null for classifier={classifier_name}, "
+                    f"k_effective={k_effective}"
+                )
+                permutation_seed = (
+                    derive_seed(top_k, classifier_name, args.seed)
+                    + k_effective * 1_000_003
+                )
+                random_gene_sets = draw_random_gene_sets(
+                    gene_universe_size=gene_universe_size,
+                    set_size=k_effective,
+                    n_permutations=args.n_permutations,
+                    seed=permutation_seed,
+                )
+                null_aucs = run_shared_null_distribution(
+                    burden_values=burden_values,
+                    labels=labels,
+                    random_gene_sets=random_gene_sets,
+                    fold_indices=fold_indices,
+                    classifier_name=classifier_name,
+                    seed=permutation_seed,
+                    n_cores=args.n_cores,
+                    parallel_verbose=parallel_verbose,
+                )
+                null_mean_auc = float(np.mean(null_aucs))
+                null_std_auc = float(np.std(null_aucs))
+                print(
+                    f"  Shared null mean AUC = {null_mean_auc:.4f}, "
+                    f"std = {null_std_auc:.4f}"
                 )
 
-    if not summary_rows:
-        print("\nNo results produced.")
+                for level in grouped_levels:
+                    observed_gene_set = observed_gene_sets[level]
+                    observed_aucs = evaluate_auc_for_feature_indices(
+                        burden_values=burden_values,
+                        labels=labels,
+                        feature_indices=observed_gene_set["feature_indices"],
+                        fold_indices=fold_indices,
+                        classifier_name=classifier_name,
+                        model_seed=derive_seed(top_k, classifier_name, args.seed) + 1_000_000,
+                    )
+                    observed_auc = float(np.mean(observed_aucs))
+                    observed_std = float(np.std(observed_aucs))
+                    empirical_p = compute_empirical_p(observed_auc, null_aucs)
+                    if null_std_auc > 0:
+                        z_score = float((observed_auc - null_mean_auc) / null_std_auc)
+                    else:
+                        z_score = float("nan")
+
+                    results.append(
+                        {
+                            "level": level,
+                            "top_k": int(top_k),
+                            "k_effective": int(k_effective),
+                            "classifier": classifier_name,
+                            "observed_auc": observed_auc,
+                            "observed_std": observed_std,
+                            "null_mean_auc": null_mean_auc,
+                            "null_std_auc": null_std_auc,
+                            "empirical_p": empirical_p,
+                            "z_score": z_score,
+                            "observed_aucs": observed_aucs,
+                            "null_aucs": null_aucs,
+                            "missing_genes": observed_gene_set["missing_genes"],
+                            "matched_genes": observed_gene_set["matched_genes"],
+                            "n_samples": int(len(labels)),
+                            "n_cases": int(n_cases),
+                            "n_controls": int(n_controls),
+                            "n_permutations": int(args.n_permutations),
+                            "seed": int(args.seed),
+                            "score_column": args.score_column,
+                        }
+                    )
+                    print(
+                        f"    {level}: observed_auc={observed_auc:.4f} "
+                        f"empirical_p={empirical_p:.4f}"
+                    )
+
+    if not results:
+        print("ERROR: No results were produced.", file=sys.stderr)
         sys.exit(1)
 
-    summary_df = pd.DataFrame(summary_rows)
-    n_tests = len(summary_df)
-    bonferroni_threshold = 0.05 / n_tests
-    summary_df["bonferroni_significant"] = summary_df["empirical_p"].apply(
-        lambda p_value: "yes" if p_value < bonferroni_threshold else "no"
+    summary_df = pd.DataFrame(results)
+    summary_df["fdr_bh"] = bh_fdr(summary_df["empirical_p"].to_numpy())
+
+    summary_df = summary_df.sort_values(
+        by=["level", "top_k", "classifier"],
+        key=lambda series: (
+            series.map(lambda value: level_sort_key(value)[0])
+            if series.name == "level"
+            else series.map(CLASSIFIER_ORDER.index)
+            if series.name == "classifier"
+            else series
+        ),
+        kind="mergesort",
+    ).reset_index(drop=True)
+
+    for (top_k, classifier_name, k_effective), group in summary_df.groupby(
+        ["top_k", "classifier", "k_effective"]
+    ):
+        if group["null_mean_auc"].nunique() != 1:
+            raise AssertionError(
+                f"Null mean AUC differs within the shared-null group for "
+                f"top_k={top_k}, classifier={classifier_name}, k_effective={k_effective}"
+            )
+        if group["null_std_auc"].nunique() != 1:
+            raise AssertionError(
+                f"Null std AUC differs within the shared-null group for "
+                f"top_k={top_k}, classifier={classifier_name}, k_effective={k_effective}"
+            )
+
+    sorted_fdr = summary_df.sort_values("empirical_p")["fdr_bh"].to_numpy()
+    if np.any(np.diff(sorted_fdr) < -1e-12):
+        raise AssertionError("fdr_bh is not monotone non-decreasing when sorted by empirical_p")
+
+    summary_df = summary_df[SUMMARY_COLUMNS]
+    summary_df.to_csv(
+        args.output_tsv,
+        sep="\t",
+        index=False,
+        float_format="%.10g",
+    )
+    print(f"\nSummary written to {args.output_tsv}")
+
+    result_lookup = {
+        (result["level"], result["top_k"], result["classifier"]): result
+        for result in results
+    }
+    for _, row in summary_df.iterrows():
+        result = result_lookup[(row["level"], row["top_k"], row["classifier"])]
+        result["fdr_bh"] = float(row["fdr_bh"])
+
+    write_auxiliary_outputs(
+        results=results,
+        output_dir=output_dir,
+        cv_folds=args.cv_folds,
+        classifiers_to_run=classifiers_to_run,
     )
 
-    summary_path = args.output_dir / "nonlinear_validation_summary.tsv"
-    summary_df.to_csv(summary_path, sep="\t", index=False)
-    print(f"\nSummary written to {summary_path}")
-
-    heatmap_path = args.output_dir / "nonlinear_validation_heatmap.png"
+    heatmap_path = output_dir / "nonlinear_validation_heatmap.png"
     plot_summary_heatmap(summary_df, heatmap_path)
     print(f"Heatmap written to {heatmap_path}")
 
-    report_path = args.output_dir / "nonlinear_validation_report.md"
+    report_path = output_dir / "nonlinear_validation_report.md"
     generate_report(summary_df, report_path)
     print(f"Report written to {report_path}")
 
     print(f"\n{'=' * 80}")
     print("SUMMARY")
     print(f"{'=' * 80}")
-    print(f"Bonferroni threshold: {bonferroni_threshold:.6f} ({n_tests} tests)")
-    print()
     for _, row in summary_df.iterrows():
-        significance = ""
-        if row["bonferroni_significant"] == "yes":
-            significance = " **"
-        elif row["empirical_p"] < 0.05:
-            significance = " *"
-
+        significance = " *" if row["fdr_bh"] < 0.05 else ""
         print(
             f"  {row['level']:>4s} top-{int(row['top_k']):<5d} {row['classifier']:>3s}: "
             f"AUC={row['observed_auc']:.4f} "
             f"(null={row['null_mean_auc']:.4f}), "
-            f"p={row['empirical_p']:.4f}{significance}"
+            f"p={row['empirical_p']:.4f}, "
+            f"fdr={row['fdr_bh']:.4f}{significance}"
         )
-    print()
+    print("")
 
 
 if __name__ == "__main__":

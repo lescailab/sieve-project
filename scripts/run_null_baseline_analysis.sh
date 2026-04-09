@@ -6,13 +6,29 @@
 # 1. Creates permuted dataset
 # 2. Trains null model (identical conditions to real model, only labels permuted)
 # 3. Runs explainability on null model
-# 4. Compares real vs null attributions
+# 4. Ensures real rankings are chrX-corrected
+#    (runs correct_chrx_bias.py on real rankings if not already done)
+# 5. Applies chrX bias correction to null rankings
+# 6. Compares corrected real vs corrected null attributions,
+#    producing empirical p-values and BH-FDR significance columns
+#
+# This script produces null-contrasted rankings with empirical p-values and FDR
+# correction.  The significance columns are written to
+#   ${OUTPUT_BASE}/results/attribution_comparison_corrected/
+#     corrected_variant_rankings_with_significance.csv
+# and the corresponding gene file.
 #
 # IMPORTANT: The null model must be trained under identical conditions to the
-# real model. The only difference is the permuted labels. Hyperparameters are
+# real model.  The only difference is the permuted labels.  Hyperparameters are
 # read from the real experiment's config.yaml to guarantee an exact match.
 # Ploidy correction is baked into the preprocessed data, so using the same
 # .pt file preserves it automatically — only labels are permuted.
+#
+# IMPORTANT: chrX bias correction is applied independently to the real and null
+# rankings BEFORE the null comparison is computed.  The null comparison then
+# operates on the chrX-corrected z_attribution column on both sides.  This
+# ordering removes the hemizygosity artefact (which inflates chrX on both
+# sides) before any significance computation.  Do not change this ordering.
 #
 # Usage:
 #   INPUT_DATA=/path/to/preprocessed.pt \
@@ -22,7 +38,8 @@
 #   bash scripts/run_null_baseline_analysis.sh
 #
 # Optional:
-#   NULL_DATA=/path/to/permuted.pt \   # Skip permutation step if already generated
+#   NULL_DATA=/path/to/permuted.pt \      # Skip permutation step if already generated
+#   EXCLUDE_SEX_CHROMS=1 \                # Pass --exclude-sex-chroms to compare step
 
 set -e  # Exit on error
 
@@ -44,6 +61,7 @@ REAL_RESULTS="${REAL_RESULTS:-}"
 OUTPUT_BASE="${OUTPUT_BASE:-}"
 NULL_DATA="${NULL_DATA:-}"
 DEVICE="${DEVICE:-cuda}"
+EXCLUDE_SEX_CHROMS="${EXCLUDE_SEX_CHROMS:-0}"
 
 echo "=============================================="
 echo "Null Baseline Attribution Analysis Pipeline"
@@ -185,16 +203,19 @@ if [ -n "$NULL_DATA" ]; then
         echo "ERROR: NULL_DATA was set but file not found at: $NULL_DATA"
         exit 1
     fi
-    echo "[Step 1/4] Using pre-existing permuted dataset: $NULL_DATA"
+    echo "[Step 1/6] Using pre-existing permuted dataset: $NULL_DATA"
 else
-    echo "[Step 1/4] Creating permuted dataset..."
     INPUT_BASENAME="$(basename "$INPUT_DATA" .pt)"
     NULL_DATA="${OUTPUT_BASE}/data/${INPUT_BASENAME}_NULL.pt"
-
-    "$PYTHON" "$REPO_ROOT/scripts/create_null_baseline.py" \
-        --input "$INPUT_DATA" \
-        --output "$NULL_DATA" \
-        --seed "$CFG_SEED"
+    if [ -f "$NULL_DATA" ]; then
+        echo "[Step 1/6] Reusing existing permuted dataset: $NULL_DATA"
+    else
+        echo "[Step 1/6] Creating permuted dataset..."
+        "$PYTHON" "$REPO_ROOT/scripts/create_null_baseline.py" \
+            --input "$INPUT_DATA" \
+            --output "$NULL_DATA" \
+            --seed "$CFG_SEED"
+    fi
 fi
 
 echo ""
@@ -207,8 +228,9 @@ echo ""
 #   - --preprocessed-data points to the null (permuted) .pt file
 #   - --experiment-name is NULL_BASELINE
 #   - --val-split 0.2 (single split instead of full CV — sufficient for null)
-echo "[Step 2/4] Training null model..."
+echo "[Step 2/6] Training null model..."
 NULL_EXPERIMENT="${OUTPUT_BASE}/experiments/NULL_BASELINE"
+NULL_MODEL_CHECKPOINT="${NULL_EXPERIMENT}/best_model.pt"
 
 TRAIN_CMD=(
     "$PYTHON" "$REPO_ROOT/scripts/train.py"
@@ -245,66 +267,117 @@ if [ -n "$CFG_SEX_MAP" ]; then
     TRAIN_CMD+=(--sex-map "$CFG_SEX_MAP")
 fi
 
-"${TRAIN_CMD[@]}"
+if [ -f "$NULL_MODEL_CHECKPOINT" ]; then
+    echo "  Found existing null model checkpoint at: $NULL_MODEL_CHECKPOINT"
+    echo "  Skipping null model training."
+else
+    "${TRAIN_CMD[@]}"
+fi
 
 echo ""
 
 # -------------------------------------------------------------------
 # Step 3: Run explainability on null model
 # -------------------------------------------------------------------
-echo "[Step 3/4] Running explainability on null model..."
+echo "[Step 3/6] Running explainability on null model..."
 NULL_EXPLAIN_DIR="${OUTPUT_BASE}/results/null_attributions"
+NULL_RAW_RANKINGS="${NULL_EXPLAIN_DIR}/sieve_variant_rankings.csv"
 
-"$PYTHON" "$REPO_ROOT/scripts/explain.py" \
-    --experiment-dir "$NULL_EXPERIMENT" \
-    --preprocessed-data "$NULL_DATA" \
-    --output-dir "$NULL_EXPLAIN_DIR" \
-    --genome-build "$CFG_GENOME_BUILD" \
-    --device "$DEVICE" \
-    --is-null-baseline
+if [ -f "$NULL_RAW_RANKINGS" ]; then
+    echo "  Found existing null explainability output at: $NULL_RAW_RANKINGS"
+    echo "  Skipping null explainability."
+else
+    "$PYTHON" "$REPO_ROOT/scripts/explain.py" \
+        --experiment-dir "$NULL_EXPERIMENT" \
+        --preprocessed-data "$NULL_DATA" \
+        --output-dir "$NULL_EXPLAIN_DIR" \
+        --genome-build "$CFG_GENOME_BUILD" \
+        --device "$DEVICE" \
+        --is-null-baseline
+fi
 
 echo ""
 
 # -------------------------------------------------------------------
-# Step 4: Compare real vs null
+# Step 4: Ensure real rankings are chrX-corrected
 # -------------------------------------------------------------------
-echo "[Step 4/4] Comparing real vs null attributions..."
-NULL_RANKINGS="${NULL_EXPLAIN_DIR}/sieve_variant_rankings.csv"
-COMPARISON_DIR="${OUTPUT_BASE}/results/attribution_comparison"
+# Locate the raw real rankings from REAL_RESULTS (must be set by caller).
+echo "[Step 4/6] Ensuring real rankings are chrX-corrected..."
 
-# Locate real rankings — try several known locations
-REAL_RANKINGS=""
-CANDIDATE_PATHS=(
-    "${REAL_RESULTS}/sieve_variant_rankings.csv"
-    "${REAL_EXPERIMENT}/explainability/sieve_variant_rankings.csv"
-    "${REAL_EXPERIMENT}/sieve_variant_rankings.csv"
-    "${OUTPUT_BASE}/results/explainability/sieve_variant_rankings.csv"
-)
+REAL_RAW_RANKINGS="${REAL_RESULTS}/sieve_variant_rankings.csv"
+REAL_CORRECTED_DIR="${REAL_RESULTS}/corrected"
+REAL_CORRECTED_RANKINGS="${REAL_CORRECTED_DIR}/corrected_variant_rankings.csv"
 
-for candidate in "${CANDIDATE_PATHS[@]}"; do
-    if [ -f "$candidate" ]; then
-        REAL_RANKINGS="$candidate"
-        echo "Found real rankings at: $REAL_RANKINGS"
-        break
-    fi
-done
-
-if [ -z "$REAL_RANKINGS" ]; then
-    echo "ERROR: Real rankings not found. Tried:"
-    for candidate in "${CANDIDATE_PATHS[@]}"; do
-        echo "  - $candidate"
-    done
-    echo "Ensure sieve_variant_rankings.csv exists in one of the locations above,"
-    echo "or set REAL_RESULTS to the directory containing it."
+if [ -z "$REAL_RESULTS" ]; then
+    echo "ERROR: REAL_RESULTS is not set."
+    echo "Set REAL_RESULTS to the directory containing sieve_variant_rankings.csv"
+    echo "from the real model's explainability run."
     exit 1
 fi
 
-"$PYTHON" "$REPO_ROOT/scripts/compare_attributions.py" \
-    --real "$REAL_RANKINGS" \
-    --null "$NULL_RANKINGS" \
-    --output-dir "$COMPARISON_DIR" \
-    --genome-build "$CFG_GENOME_BUILD" \
-    --top-k 100
+if [ ! -f "$REAL_RAW_RANKINGS" ]; then
+    echo "ERROR: Real rankings not found at: $REAL_RAW_RANKINGS"
+    echo "Ensure sieve_variant_rankings.csv exists in REAL_RESULTS."
+    exit 1
+fi
+
+if [ -f "$REAL_CORRECTED_RANKINGS" ]; then
+    echo "  Found existing corrected real rankings at: $REAL_CORRECTED_RANKINGS"
+    echo "  Skipping correction step for real rankings."
+else
+    echo "  Corrected real rankings not found — running correct_chrx_bias.py..."
+    "$PYTHON" "$REPO_ROOT/scripts/correct_chrx_bias.py" \
+        --rankings "$REAL_RAW_RANKINGS" \
+        --output-dir "$REAL_CORRECTED_DIR" \
+        --include-sex-chroms \
+        --genome-build "$CFG_GENOME_BUILD"
+    echo "  Corrected real rankings written to: $REAL_CORRECTED_DIR"
+fi
+
+echo ""
+
+# -------------------------------------------------------------------
+# Step 5: Apply chrX bias correction to null rankings
+# -------------------------------------------------------------------
+echo "[Step 5/6] Applying chrX bias correction to null rankings..."
+NULL_CORRECTED_DIR="${NULL_EXPLAIN_DIR}/corrected"
+NULL_CORRECTED_RANKINGS="${NULL_CORRECTED_DIR}/corrected_variant_rankings.csv"
+
+if [ -f "$NULL_CORRECTED_RANKINGS" ]; then
+    echo "  Found existing corrected null rankings at: $NULL_CORRECTED_RANKINGS"
+    echo "  Skipping correction step for null rankings."
+else
+    echo "  Corrected null rankings not found — running correct_chrx_bias.py..."
+    "$PYTHON" "$REPO_ROOT/scripts/correct_chrx_bias.py" \
+        --rankings "$NULL_RAW_RANKINGS" \
+        --output-dir "$NULL_CORRECTED_DIR" \
+        --include-sex-chroms \
+        --genome-build "$CFG_GENOME_BUILD"
+    echo "  Corrected null rankings written to: $NULL_CORRECTED_DIR"
+fi
+echo ""
+
+# -------------------------------------------------------------------
+# Step 6: Compare corrected real vs corrected null attributions
+# -------------------------------------------------------------------
+echo "[Step 6/6] Comparing corrected real vs corrected null attributions..."
+COMPARISON_DIR="${OUTPUT_BASE}/results/attribution_comparison_corrected"
+
+COMPARE_CMD=(
+    "$PYTHON" "$REPO_ROOT/scripts/compare_attributions.py"
+    --corrected-real "$REAL_CORRECTED_RANKINGS"
+    --corrected-null "$NULL_CORRECTED_RANKINGS"
+    --output-dir "$COMPARISON_DIR"
+    --genome-build "$CFG_GENOME_BUILD"
+)
+
+# Optionally exclude sex chromosomes from the significance computation.
+# Set EXCLUDE_SEX_CHROMS=1 in the calling environment to enable this.
+if [ "${EXCLUDE_SEX_CHROMS:-0}" = "1" ]; then
+    COMPARE_CMD+=(--exclude-sex-chroms)
+fi
+
+"${COMPARE_CMD[@]}"
 
 echo ""
 echo "=============================================="
@@ -312,11 +385,13 @@ echo "Null Baseline Analysis Complete!"
 echo "=============================================="
 echo ""
 echo "Results saved to:"
-echo "  - Null model: $NULL_EXPERIMENT"
-echo "  - Null attributions: $NULL_EXPLAIN_DIR"
-echo "  - Comparison results: $COMPARISON_DIR"
+echo "  - Null model:                $NULL_EXPERIMENT"
+echo "  - Null attributions:         $NULL_EXPLAIN_DIR"
+echo "  - Corrected real rankings:   $REAL_CORRECTED_DIR"
+echo "  - Corrected null rankings:   $NULL_CORRECTED_DIR"
+echo "  - Significance results:      $COMPARISON_DIR"
 echo ""
 echo "Key files to review:"
-echo "  - ${COMPARISON_DIR}/comparison_summary.yaml"
-echo "  - ${COMPARISON_DIR}/real_vs_null_comparison.png"
-echo "  - ${COMPARISON_DIR}/significant_variants_p01.csv"
+echo "  - ${COMPARISON_DIR}/corrected_variant_rankings_with_significance.csv"
+echo "  - ${COMPARISON_DIR}/corrected_gene_rankings_with_significance.csv"
+echo "  - ${COMPARISON_DIR}/significance_summary.yaml"
