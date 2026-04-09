@@ -2,14 +2,17 @@
 """
 Post-hoc attribution correction for chrX ploidy bias.
 
-Takes existing attribution rankings and produces corrected rankings with
+Takes a single attribution rankings file and produces corrected rankings with
 chrX/chrY bias removed via per-chromosome z-score normalisation.
+
+To compare real and null rankings with empirical p-values and FDR, first run
+this script independently on both files, then pass the two corrected outputs
+to compare_attributions.py.
 
 Usage:
     python scripts/correct_chrx_bias.py \
         --rankings /path/to/sieve_variant_rankings.csv \
         --output-dir /path/to/corrected_results \
-        --null-rankings /path/to/null/sieve_variant_rankings.csv \
         --exclude-sex-chroms \
         --genome-build GRCh37 \
         --top-k 100
@@ -27,14 +30,12 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import yaml
-from scipy import stats
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.data.genome import (
     GenomeBuild,
     get_genome_build,
-    is_autosomal,
     is_sex_chrom,
 )
 
@@ -49,8 +50,6 @@ def parse_args():
                         help='Path to variant rankings CSV')
     parser.add_argument('--output-dir', type=str, required=True,
                         help='Output directory for corrected files')
-    parser.add_argument('--null-rankings', type=str, default=None,
-                        help='Path to null model rankings for enrichment recomputation')
     parser.set_defaults(exclude_sex_chroms=True)
     sex_chrom_group = parser.add_mutually_exclusive_group()
     sex_chrom_group.add_argument('--exclude-sex-chroms', dest='exclude_sex_chroms',
@@ -108,67 +107,6 @@ def compute_chromosome_zscores(
     ).astype(int)
 
     return df
-
-
-def compute_enrichment_stats(
-    real_df: pd.DataFrame, null_df: pd.DataFrame, build: GenomeBuild,
-) -> dict:
-    """
-    Recompute enrichment statistics using autosomal variants only.
-
-    Parameters
-    ----------
-    real_df : pd.DataFrame
-        Corrected real variant rankings.
-    null_df : pd.DataFrame
-        Corrected null variant rankings.
-    build : GenomeBuild
-        Genome build.
-
-    Returns
-    -------
-    dict
-        Enrichment statistics dictionary.
-    """
-    real_auto = real_df[real_df['chromosome'].apply(
-        lambda c: is_autosomal(str(c), build)
-    )]['z_attribution'].dropna()
-    null_auto = null_df[null_df['chromosome'].apply(
-        lambda c: is_autosomal(str(c), build)
-    )]['z_attribution'].dropna()
-
-    if len(real_auto) == 0 or len(null_auto) == 0:
-        return {'error': 'No autosomal variants for enrichment computation'}
-
-    # KS test
-    ks_stat, ks_pval = stats.ks_2samp(real_auto, null_auto)
-
-    # Mann-Whitney U test
-    u_stat, u_pval = stats.mannwhitneyu(real_auto, null_auto, alternative='greater')
-
-    # Enrichment at various thresholds
-    enrichment = {}
-    for threshold in [0.10, 0.05, 0.01, 0.001]:
-        null_cutoff = np.quantile(null_auto, 1 - threshold) if len(null_auto) > 0 else 0
-        real_above = (real_auto > null_cutoff).sum()
-        expected = threshold * len(real_auto)
-        fold = real_above / expected if expected > 0 else 0
-        enrichment[f'p_{threshold}'] = {
-            'n_above_threshold': int(real_above),
-            'expected': float(expected),
-            'fold_enrichment': float(fold),
-        }
-
-    return {
-        'genome_build': build.name,
-        'n_real_autosomal_variants': int(len(real_auto)),
-        'n_null_autosomal_variants': int(len(null_auto)),
-        'ks_statistic': float(ks_stat),
-        'ks_pvalue': float(ks_pval),
-        'mannwhitney_u_statistic': float(u_stat),
-        'mannwhitney_u_pvalue': float(u_pval),
-        'enrichment_thresholds': enrichment,
-    }
 
 
 def create_manhattan_plot(
@@ -369,22 +307,6 @@ def main():
     gene_path = output_dir / 'corrected_gene_rankings.csv'
     gene_rankings.to_csv(gene_path, index=False)
     print(f"Saved corrected gene rankings to {gene_path}")
-
-    # Enrichment recomputation
-    if args.null_rankings:
-        print("\nRecomputing enrichment statistics (autosomes only)...")
-        null_df = pd.read_csv(args.null_rankings)
-        null_df['chromosome'] = null_df['chromosome'].astype(str)
-        null_corrected = compute_chromosome_zscores(null_df, build)
-
-        enrichment_stats = compute_enrichment_stats(corrected, null_corrected, build)
-        enrichment_path = output_dir / 'corrected_comparison_summary.yaml'
-        with open(enrichment_path, 'w') as f:
-            yaml.dump(enrichment_stats, f, default_flow_style=False, sort_keys=False)
-        print(f"Saved enrichment stats to {enrichment_path}")
-
-        print(f"  KS statistic: {enrichment_stats.get('ks_statistic', 'N/A'):.4f}")
-        print(f"  KS p-value: {enrichment_stats.get('ks_pvalue', 'N/A'):.2e}")
 
     # Manhattan plot
     print("\nGenerating corrected Manhattan plot...")

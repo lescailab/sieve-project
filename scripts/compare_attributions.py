@@ -1,23 +1,24 @@
 #!/usr/bin/env python3
 """
-Compare real variant attributions against null baseline.
+Compare corrected real variant attributions against a corrected null baseline.
 
-This script compares attribution scores from a model trained on real labels
-against scores from a model trained on permuted labels (null baseline).
-It establishes significance thresholds and identifies variants with
-attributions unlikely to arise by chance.
+This script expects two inputs that have already been processed by
+correct_chrx_bias.py — that is, both must contain a ``z_attribution`` column.
+It computes per-variant and per-gene empirical p-values using the
+``(k + 1) / (N + 1)`` convention (Phipson & Smyth 2010, "Permutation P-values
+Should Never Be Zero") and applies Benjamini–Hochberg FDR correction.
+
+The ordering of operations is intentional and must not be changed:
+  1. correct_chrx_bias.py on real rankings  →  corrected_variant_rankings.csv
+  2. correct_chrx_bias.py on null rankings  →  corrected_variant_rankings.csv
+  3. THIS SCRIPT on the two corrected files →  significance columns
 
 Usage:
-    python scripts/compare_attributions.py \
-        --real results/real/sieve_variant_rankings.csv \
-        --null results/null/sieve_variant_rankings.csv \
-        --output-dir results/comparison
-
-    # With multiple null permutations
-    python scripts/compare_attributions.py \
-        --real results/real/sieve_variant_rankings.csv \
-        --null-dir results/null_permutations \
-        --output-dir results/comparison
+    python scripts/compare_attributions.py \\
+        --corrected-real  /path/to/real/corrected/corrected_variant_rankings.csv \\
+        --corrected-null  /path/to/null/corrected/corrected_variant_rankings.csv \\
+        --output-dir      /path/to/comparison_output \\
+        --genome-build    GRCh37
 
 Author: Francesco Lescai
 """
@@ -25,546 +26,342 @@ Author: Francesco Lescai
 import argparse
 import sys
 from pathlib import Path
-from typing import Optional, Dict, Any
 
 import numpy as np
 import pandas as pd
-from scipy import stats
 import yaml
+from scipy import stats
 
-# Allow imports from project root
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.data.genome import get_genome_build, is_sex_chrom
 
+try:
+    from statsmodels.stats.multitest import multipletests
+    _HAS_STATSMODELS = True
+except ImportError:  # pragma: no cover
+    _HAS_STATSMODELS = False
 
-def filter_sex_chroms(
-    df: pd.DataFrame,
-    genome_build_name: str,
-) -> pd.DataFrame:
+
+# ---------------------------------------------------------------------------
+# Argument parsing
+# ---------------------------------------------------------------------------
+
+def parse_args() -> argparse.Namespace:
+    """Parse command-line arguments."""
+    parser = argparse.ArgumentParser(
+        description=(
+            'Compare corrected real and null variant attributions, '
+            'producing empirical p-values and BH-FDR correction.'
+        ),
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument(
+        '--corrected-real', type=str, required=True,
+        help=(
+            'Path to real corrected_variant_rankings.csv '
+            '(output of correct_chrx_bias.py — must have z_attribution column)'
+        ),
+    )
+    parser.add_argument(
+        '--corrected-null', type=str, required=True,
+        help=(
+            'Path to null corrected_variant_rankings.csv '
+            '(output of correct_chrx_bias.py — must have z_attribution column)'
+        ),
+    )
+    parser.add_argument(
+        '--output-dir', type=str, required=True,
+        help='Output directory for significance-annotated files',
+    )
+    parser.add_argument(
+        '--genome-build', type=str, default='GRCh37',
+        help='Reference genome build (GRCh37 or GRCh38)',
+    )
+    parser.add_argument(
+        '--exclude-sex-chroms', action='store_true', default=False,
+        help=(
+            'Drop sex-chromosome variants from both real and null before '
+            'computing empirical p-values'
+        ),
+    )
+    return parser.parse_args()
+
+
+# ---------------------------------------------------------------------------
+# Validation helpers
+# ---------------------------------------------------------------------------
+
+def _require_z_attribution(df: pd.DataFrame, label: str) -> None:
+    """Raise ValueError if ``z_attribution`` is absent from *df*."""
+    if 'z_attribution' not in df.columns:
+        raise ValueError(
+            f"The {label} rankings file does not have a 'z_attribution' column. "
+            "Run correct_chrx_bias.py on this file before calling "
+            "compare_attributions.py."
+        )
+
+
+# ---------------------------------------------------------------------------
+# Sex-chromosome filtering
+# ---------------------------------------------------------------------------
+
+def _filter_sex_chroms(df: pd.DataFrame, genome_build_name: str) -> pd.DataFrame:
+    """Remove sex-chromosome variants from *df* and return the filtered copy."""
+    if 'chromosome' not in df.columns:
+        print("  WARNING: 'chromosome' column not found — cannot filter sex chromosomes")
+        return df
+    build = get_genome_build(genome_build_name)
+    mask = ~df['chromosome'].apply(lambda c: is_sex_chrom(str(c), build))
+    n_removed = (~mask).sum()
+    print(f"  Removed {n_removed} sex-chromosome variants "
+          f"({len(df)} → {mask.sum()} autosomal)")
+    return df[mask].copy()
+
+
+# ---------------------------------------------------------------------------
+# Empirical p-value computation
+# ---------------------------------------------------------------------------
+
+def compute_empirical_pvalues(
+    real_z: np.ndarray,
+    null_z: np.ndarray,
+) -> np.ndarray:
     """
-    Remove variants on sex chromosomes from a rankings DataFrame.
+    Compute per-variant empirical p-values against a null distribution.
+
+    For each real value z_i, the empirical p-value is::
+
+        p_i = (k + 1) / (N + 1)
+
+    where k is the number of null values >= z_i and N is the total number of
+    null values.  The ``+1`` in both numerator and denominator follows the
+    recommendation in Phipson & Smyth (2010), "Permutation P-values Should
+    Never Be Zero", ensuring that p-values are never exactly zero.
+
+    Implementation uses ``np.searchsorted`` on a pre-sorted null array, giving
+    O(N log N) for the sort and O(M log N) for the M lookups, where M is the
+    number of real variants.
+
+    Parameters
+    ----------
+    real_z : np.ndarray, shape (M,)
+        z_attribution values for the real variants.
+    null_z : np.ndarray, shape (N,)
+        z_attribution values for the null variants.
+
+    Returns
+    -------
+    np.ndarray, shape (M,)
+        Empirical p-values in [1/(N+1), 1].
+    """
+    null_sorted = np.sort(null_z)
+    N = len(null_sorted)
+    # searchsorted(side='left') returns the number of null values < real_z[i]
+    n_below = np.searchsorted(null_sorted, real_z, side='left')
+    k = N - n_below  # number of null values >= real_z[i]
+    return (k + 1) / (N + 1)
+
+
+def _bh_fdr(p_values: np.ndarray) -> np.ndarray:
+    """Apply Benjamini–Hochberg FDR correction and return adjusted p-values."""
+    if _HAS_STATSMODELS:
+        _, fdr, _, _ = multipletests(p_values, method='fdr_bh')
+        return fdr
+    # Minimal fallback: manual BH
+    n = len(p_values)
+    order = np.argsort(p_values)
+    fdr = np.empty(n, dtype=float)
+    fdr[order] = p_values[order] * n / (np.arange(1, n + 1))
+    # Enforce monotonicity from right to left
+    fdr = np.minimum.accumulate(fdr[order[::-1]])[::-1]
+    fdr = np.minimum(fdr, 1.0)
+    result = np.empty(n, dtype=float)
+    result[order] = fdr
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Gene-level aggregation (mirrors create_gene_rankings in correct_chrx_bias.py)
+# ---------------------------------------------------------------------------
+
+def _aggregate_genes(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Aggregate a corrected variant rankings dataframe to gene level.
+
+    Groups by gene symbol (``gene_name`` if present, else ``gene_id``), takes
+    the max ``z_attribution`` as ``gene_z_score``, and counts variants.
 
     Parameters
     ----------
     df : pd.DataFrame
-        Variant rankings with a 'chromosome' column
-    genome_build_name : str
-        Genome build name (e.g. 'GRCh37')
+        Corrected variant rankings with ``z_attribution`` column.
 
     Returns
     -------
     pd.DataFrame
-        Filtered DataFrame with only autosomal variants
+        Gene-level dataframe sorted descending by ``gene_z_score``.
     """
-    if 'chromosome' not in df.columns:
-        print("  WARNING: 'chromosome' column not found — cannot filter sex chromosomes")
-        return df
-
-    build = get_genome_build(genome_build_name)
-    mask = df['chromosome'].apply(lambda c: not is_sex_chrom(str(c), build))
-    n_before = len(df)
-    filtered = df[mask].copy()
-    n_removed = n_before - len(filtered)
-    print(f"  Removed {n_removed} sex-chromosome variants "
-          f"({n_before} -> {len(filtered)} autosomal)")
-    return filtered
+    gene_col = 'gene_name' if 'gene_name' in df.columns else 'gene_id'
+    gene_agg = df.groupby(gene_col).agg(
+        gene_z_score=('z_attribution', 'max'),
+        num_variants=('z_attribution', 'count'),
+    ).reset_index()
+    gene_agg = gene_agg.sort_values('gene_z_score', ascending=False).reset_index(drop=True)
+    return gene_agg
 
 
-def load_null_attributions(
-    null_path: Optional[str] = None,
-    null_dir: Optional[str] = None
-) -> pd.DataFrame:
-    """
-    Load null attribution(s) from single file or directory.
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
 
-    Parameters
-    ----------
-    null_path : str, optional
-        Path to single null rankings CSV
-    null_dir : str, optional
-        Directory containing multiple null rankings CSVs
-
-    Returns
-    -------
-    pd.DataFrame
-        Combined null attributions with 'permutation' column if multiple
-    """
-    if null_path:
-        df = pd.read_csv(null_path)
-        df['permutation'] = 0
-        return df
-
-    if null_dir:
-        null_dir = Path(null_dir)
-        null_files = sorted(null_dir.glob("*/sieve_variant_rankings.csv"))
-
-        if not null_files:
-            # Try direct CSV files
-            null_files = sorted(null_dir.glob("*_variant_rankings*.csv"))
-
-        if not null_files:
-            raise ValueError(f"No null ranking files found in {null_dir}")
-
-        dfs = []
-        for i, f in enumerate(null_files):
-            df = pd.read_csv(f)
-            df['permutation'] = i
-            dfs.append(df)
-            print(f"  Loaded permutation {i}: {f.name}")
-
-        return pd.concat(dfs, ignore_index=True)
-
-    raise ValueError("Must provide either --null or --null-dir")
-
-
-def compute_null_thresholds(null_attr: np.ndarray) -> Dict[str, float]:
-    """
-    Compute significance thresholds from null distribution.
-
-    Parameters
-    ----------
-    null_attr : np.ndarray
-        Null attribution values
-
-    Returns
-    -------
-    dict
-        Thresholds at various percentiles
-    """
-    return {
-        'p_0.10': np.percentile(null_attr, 90),
-        'p_0.05': np.percentile(null_attr, 95),
-        'p_0.01': np.percentile(null_attr, 99),
-        'p_0.001': np.percentile(null_attr, 99.9),
-        'p_0.0001': np.percentile(null_attr, 99.99),
-    }
-
-
-def compare_distributions(
-    real_attr: np.ndarray,
-    null_attr: np.ndarray
-) -> Dict[str, Any]:
-    """
-    Statistical comparison of real vs null distributions.
-
-    Parameters
-    ----------
-    real_attr : np.ndarray
-        Real attribution values
-    null_attr : np.ndarray
-        Null attribution values
-
-    Returns
-    -------
-    dict
-        Statistical comparison results
-    """
-    # Kolmogorov-Smirnov test
-    ks_stat, ks_pval = stats.ks_2samp(real_attr, null_attr)
-
-    # Mann-Whitney U test
-    mw_stat, mw_pval = stats.mannwhitneyu(real_attr, null_attr, alternative='greater')
-
-    # Basic statistics
-    results = {
-        'real_mean': float(np.mean(real_attr)),
-        'real_std': float(np.std(real_attr)),
-        'real_median': float(np.median(real_attr)),
-        'real_max': float(np.max(real_attr)),
-        'real_p95': float(np.percentile(real_attr, 95)),
-        'real_p99': float(np.percentile(real_attr, 99)),
-
-        'null_mean': float(np.mean(null_attr)),
-        'null_std': float(np.std(null_attr)),
-        'null_median': float(np.median(null_attr)),
-        'null_max': float(np.max(null_attr)),
-        'null_p95': float(np.percentile(null_attr, 95)),
-        'null_p99': float(np.percentile(null_attr, 99)),
-
-        'ks_statistic': float(ks_stat),
-        'ks_pvalue': float(ks_pval),
-        'mannwhitney_statistic': float(mw_stat),
-        'mannwhitney_pvalue': float(mw_pval),
-    }
-
-    return results
-
-
-def count_significant_variants(
-    real_attr: np.ndarray,
-    thresholds: Dict[str, float]
-) -> Dict[str, Dict[str, Any]]:
-    """
-    Count variants exceeding null-derived thresholds.
-
-    Parameters
-    ----------
-    real_attr : np.ndarray
-        Real attribution values
-    thresholds : dict
-        Significance thresholds from null distribution
-
-    Returns
-    -------
-    dict
-        Counts and enrichments at each threshold
-    """
-    n_total = len(real_attr)
-    results = {}
-
-    for name, threshold in thresholds.items():
-        # Parse p-value from name (e.g., 'p_0.05' -> 0.05)
-        p_val = float(name.split('_')[1])
-        expected = n_total * p_val
-        observed = (real_attr > threshold).sum()
-
-        enrichment = observed / expected if expected > 0 else np.nan
-
-        results[name] = {
-            'threshold': float(threshold),
-            'observed': int(observed),
-            'expected': float(expected),
-            'enrichment': float(enrichment),
-            'p_value': p_val,
-        }
-
-    return results
-
-
-def generate_comparison_plots(
-    real_df: pd.DataFrame,
-    null_df: pd.DataFrame,
-    thresholds: Dict[str, float],
-    output_dir: Path
-):
-    """
-    Generate comparison visualisations.
-
-    Parameters
-    ----------
-    real_df : pd.DataFrame
-        Real variant rankings
-    null_df : pd.DataFrame
-        Null variant rankings
-    thresholds : dict
-        Significance thresholds
-    output_dir : Path
-        Output directory for plots
-    """
-    try:
-        import matplotlib
-        matplotlib.use('Agg')
-        import matplotlib.pyplot as plt
-    except ImportError:
-        print("Warning: matplotlib not available, skipping plots")
-        return
-
-    real_attr = real_df['mean_attribution'].values
-    null_attr = null_df['mean_attribution'].values
-
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-
-    # 1. Distribution comparison (histogram)
-    ax1 = axes[0, 0]
-    ax1.hist(null_attr, bins=100, alpha=0.5, label='Null', density=True, color='grey')
-    ax1.hist(real_attr, bins=100, alpha=0.5, label='Real', density=True, color='steelblue')
-    ax1.axvline(thresholds['p_0.05'], color='orange', linestyle='--',
-                label=f"p<0.05: {thresholds['p_0.05']:.3f}")
-    ax1.axvline(thresholds['p_0.01'], color='red', linestyle='--',
-                label=f"p<0.01: {thresholds['p_0.01']:.3f}")
-    ax1.set_xlabel('Mean Attribution')
-    ax1.set_ylabel('Density')
-    ax1.set_title('Attribution Distributions')
-    ax1.legend()
-
-    # 2. Q-Q plot
-    ax2 = axes[0, 1]
-    n_points = 1000
-    real_quantiles = np.percentile(real_attr, np.linspace(0, 100, n_points))
-    null_quantiles = np.percentile(null_attr, np.linspace(0, 100, n_points))
-    ax2.scatter(null_quantiles, real_quantiles, alpha=0.5, s=5, color='steelblue')
-    max_val = max(null_quantiles.max(), real_quantiles.max())
-    ax2.plot([0, max_val], [0, max_val], 'r--', label='y=x (no difference)')
-    ax2.set_xlabel('Null Quantiles')
-    ax2.set_ylabel('Real Quantiles')
-    ax2.set_title('Q-Q Plot: Real vs Null')
-    ax2.legend()
-
-    # 3. Top variants comparison
-    ax3 = axes[1, 0]
-
-    # Use the minimum number of variants available per permutation (or overall)
-    if 'permutation' in null_df.columns:
-        group_sizes = null_df.groupby('permutation').size()
-        min_group_size = int(group_sizes.min()) if not group_sizes.empty else 0
-    else:
-        min_group_size = len(null_df)
-
-    top_n = min(100, len(real_df), min_group_size)
-
-    # If there are no variants to compare, skip this panel
-    if top_n == 0:
-        ax3.set_title('Top variants comparison (no data)')
-        ax3.set_xlabel('Rank')
-        ax3.set_ylabel('Mean Attribution')
-    else:
-        real_top = real_df.nlargest(top_n, 'mean_attribution')['mean_attribution'].values
-        null_top = null_df.groupby('permutation').apply(
-            lambda x: x.nlargest(top_n, 'mean_attribution')['mean_attribution'].values
-        )
-
-        # Plot null as range
-        if len(null_top) > 1:
-            null_matrix = np.vstack(null_top.values)
-            null_mean = null_matrix.mean(axis=0)
-            null_std = null_matrix.std(axis=0)
-            ax3.fill_between(
-                range(1, top_n + 1),
-                null_mean - null_std,
-                null_mean + null_std,
-                alpha=0.3,
-                color='grey',
-                label='Null ± 1 std'
-            )
-            ax3.plot(range(1, top_n + 1), null_mean, color='grey', label='Null mean')
-        else:
-            ax3.plot(
-                range(1, top_n + 1),
-                null_top.values[0],
-                color='grey',
-                label='Null',
-                marker='.',
-                markersize=3
-            )
-
-        ax3.plot(
-            range(1, top_n + 1),
-            real_top,
-            color='steelblue',
-            label='Real',
-            marker='.',
-            markersize=3
-        )
-        ax3.set_xlabel('Rank')
-        ax3.set_ylabel('Mean Attribution')
-        ax3.set_title(f'Top {top_n} Variants by Attribution')
-        ax3.legend()
-
-    # 4. Enrichment bar plot
-    ax4 = axes[1, 1]
-    p_levels = ['p_0.10', 'p_0.05', 'p_0.01', 'p_0.001']
-    enrichments = []
-    for p in p_levels:
-        threshold = thresholds[p]
-        p_val = float(p.split('_')[1])
-        observed = (real_attr > threshold).sum()
-        expected = len(real_attr) * p_val
-        enrichments.append(observed / expected if expected > 0 else 0)
-
-    bars = ax4.bar(range(len(p_levels)), enrichments, color='steelblue')
-    ax4.axhline(1.0, color='red', linestyle='--', label='Expected (no enrichment)')
-    ax4.set_xticks(range(len(p_levels)))
-    ax4.set_xticklabels([p.replace('p_', 'p<') for p in p_levels])
-    ax4.set_ylabel('Enrichment Factor')
-    ax4.set_title('Enrichment Above Null Thresholds')
-    ax4.legend()
-
-    # Add enrichment values on bars
-    for bar, enrich in zip(bars, enrichments):
-        ax4.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.1,
-                f'{enrich:.1f}×', ha='center', va='bottom', fontsize=10)
-
-    plt.tight_layout()
-    plt.savefig(output_dir / 'real_vs_null_comparison.png', dpi=150, bbox_inches='tight')
-    plt.close()
-    print(f"Saved comparison plot to {output_dir / 'real_vs_null_comparison.png'}")
-
-
-def main():
-    parser = argparse.ArgumentParser(
-        description='Compare real attributions against null baseline',
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter
-    )
-
-    parser.add_argument('--real', type=str, required=True,
-                       help='Path to real variant rankings CSV')
-    parser.add_argument('--null', type=str, default=None,
-                       help='Path to single null variant rankings CSV')
-    parser.add_argument('--null-dir', type=str, default=None,
-                       help='Directory containing multiple null results')
-    parser.add_argument('--output-dir', type=str, required=True,
-                       help='Output directory for comparison results')
-    parser.add_argument('--top-k', type=int, default=100,
-                       help='Number of top variants to output')
-    parser.add_argument('--genome-build', type=str, default='GRCh37',
-                       help='Reference genome build (GRCh37 or GRCh38)')
-    parser.add_argument('--exclude-sex-chroms', action='store_true',
-                       help='Exclude sex chromosome variants from comparison '
-                            '(recommended when ploidy correction may bias attributions)')
-
-    args = parser.parse_args()
-
-    if not args.null and not args.null_dir:
-        raise ValueError("Must provide either --null or --null-dir")
+def main() -> None:
+    """Entry point."""
+    args = parse_args()
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Load data
-    print("Loading real attributions...")
-    real_df = pd.read_csv(args.real)
+    print('=' * 60)
+    print('SIEVE Null-Contrast Significance Analysis')
+    print('=' * 60)
 
-    print("Loading null attributions...")
-    null_df = load_null_attributions(args.null, args.null_dir)
+    # ------------------------------------------------------------------
+    # Load inputs
+    # ------------------------------------------------------------------
+    print(f'\nLoading corrected real rankings from {args.corrected_real}')
+    real_df = pd.read_csv(args.corrected_real)
+    _require_z_attribution(real_df, 'real')
+    real_df['chromosome'] = real_df['chromosome'].astype(str)
+    print(f'  {len(real_df):,} real variants loaded')
 
-    n_permutations = null_df['permutation'].nunique()
-    print(f"  Loaded {n_permutations} null permutation(s)")
+    print(f'Loading corrected null rankings from {args.corrected_null}')
+    null_df = pd.read_csv(args.corrected_null)
+    _require_z_attribution(null_df, 'null')
+    null_df['chromosome'] = null_df['chromosome'].astype(str)
+    print(f'  {len(null_df):,} null variants loaded')
 
+    # ------------------------------------------------------------------
     # Optionally filter sex chromosomes
-    sex_chroms_excluded = False
+    # ------------------------------------------------------------------
     if args.exclude_sex_chroms:
-        print("\nFiltering sex chromosome variants...")
-        print("  Real:")
-        real_df = filter_sex_chroms(real_df, args.genome_build)
-        print("  Null:")
-        null_df = filter_sex_chroms(null_df, args.genome_build)
-        sex_chroms_excluded = True
+        print('\nFiltering sex chromosomes...')
+        print('  Real:')
+        real_df = _filter_sex_chroms(real_df, args.genome_build)
+        print('  Null:')
+        null_df = _filter_sex_chroms(null_df, args.genome_build)
 
-    real_attr = real_df['mean_attribution'].values
-    null_attr = null_df['mean_attribution'].values
+    # ------------------------------------------------------------------
+    # Distributional sanity check (stdout only — not written to any file)
+    # ------------------------------------------------------------------
+    real_z = real_df['z_attribution'].dropna().values
+    null_z = null_df['z_attribution'].dropna().values
 
-    # Compute thresholds from null
-    print("\nComputing null-derived significance thresholds...")
-    thresholds = compute_null_thresholds(null_attr)
+    ks_stat, ks_pval = stats.ks_2samp(real_z, null_z)
+    mw_stat, mw_pval = stats.mannwhitneyu(real_z, null_z, alternative='greater')
+    print(f'\nDistributional sanity check (not written to output):')
+    print(f'  KS test:          statistic={ks_stat:.4f}, p={ks_pval:.2e}')
+    print(f'  Mann-Whitney U:   statistic={mw_stat:.4f}, p={mw_pval:.2e}')
+    print(f'  Real z-scores:    mean={real_z.mean():.4f}, std={real_z.std():.4f}')
+    print(f'  Null z-scores:    mean={null_z.mean():.4f}, std={null_z.std():.4f}')
 
-    print("\nSignificance Thresholds (from null distribution):")
-    print("-" * 50)
-    for name, value in thresholds.items():
-        print(f"  {name.replace('p_', 'p < ')}: attribution > {value:.4f}")
+    N = len(null_z)
+    min_achievable_p = 1.0 / (N + 1)
+    print(f'\n  Null size N = {N:,}')
+    print(f'  Minimum achievable empirical p = 1 / (N+1) = {min_achievable_p:.2e}')
 
-    # Statistical comparison
-    print("\nComparing distributions...")
-    dist_comparison = compare_distributions(real_attr, null_attr)
+    # ------------------------------------------------------------------
+    # Variant-level empirical p-values and FDR
+    # ------------------------------------------------------------------
+    print('\nComputing per-variant empirical p-values...')
+    real_df_out = real_df.copy()
+    empirical_p_variant = compute_empirical_pvalues(
+        real_df_out['z_attribution'].values, null_z,
+    )
+    real_df_out['empirical_p_variant'] = empirical_p_variant
+    fdr_variant = _bh_fdr(empirical_p_variant)
+    real_df_out['fdr_variant'] = fdr_variant
 
-    print("\nDistribution Statistics:")
-    print("-" * 50)
-    print(f"  {'Metric':<25} {'Real':>12} {'Null':>12}")
-    print(f"  {'-'*25} {'-'*12} {'-'*12}")
-    print(f"  {'Mean':<25} {dist_comparison['real_mean']:>12.4f} {dist_comparison['null_mean']:>12.4f}")
-    print(f"  {'Std':<25} {dist_comparison['real_std']:>12.4f} {dist_comparison['null_std']:>12.4f}")
-    print(f"  {'Median':<25} {dist_comparison['real_median']:>12.4f} {dist_comparison['null_median']:>12.4f}")
-    print(f"  {'Max':<25} {dist_comparison['real_max']:>12.4f} {dist_comparison['null_max']:>12.4f}")
-    print(f"  {'95th percentile':<25} {dist_comparison['real_p95']:>12.4f} {dist_comparison['null_p95']:>12.4f}")
-    print(f"  {'99th percentile':<25} {dist_comparison['real_p99']:>12.4f} {dist_comparison['null_p99']:>12.4f}")
+    n_sig_05_var = (fdr_variant < 0.05).sum()
+    n_sig_01_var = (fdr_variant < 0.01).sum()
+    print(f'  Variants with fdr_variant < 0.05: {n_sig_05_var:,}')
+    print(f'  Variants with fdr_variant < 0.01: {n_sig_01_var:,}')
 
-    print(f"\n  Kolmogorov-Smirnov test: statistic={dist_comparison['ks_statistic']:.4f}, "
-          f"p-value={dist_comparison['ks_pvalue']:.2e}")
-    print(f"  Mann-Whitney U test: statistic={dist_comparison['mannwhitney_statistic']:.4f}, "
-          f"p-value={dist_comparison['mannwhitney_pvalue']:.2e}")
+    # ------------------------------------------------------------------
+    # Gene-level empirical p-values and FDR
+    # ------------------------------------------------------------------
+    print('\nAggregating to gene level...')
+    real_genes = _aggregate_genes(real_df_out)
+    null_genes = _aggregate_genes(null_df)
 
-    # Count significant variants
-    print("\nSignificant Variants (exceeding null thresholds):")
-    print("-" * 70)
-    significance = count_significant_variants(real_attr, thresholds)
+    null_gene_z = null_genes['gene_z_score'].dropna().values
+    real_gene_z = real_genes['gene_z_score'].values
+    print(f'  {len(real_genes):,} real genes, {len(null_genes):,} null genes')
 
-    print(f"  {'Threshold':<15} {'Observed':>10} {'Expected':>10} {'Enrichment':>12} {'Interpretation':<20}")
-    print(f"  {'-'*15} {'-'*10} {'-'*10} {'-'*12} {'-'*20}")
+    empirical_p_gene = compute_empirical_pvalues(real_gene_z, null_gene_z)
+    real_genes['empirical_p_gene'] = empirical_p_gene
+    fdr_gene = _bh_fdr(empirical_p_gene)
+    real_genes['fdr_gene'] = fdr_gene
 
-    for name, data in significance.items():
-        interp = "Strong signal" if data['enrichment'] > 2 else "Weak/no signal"
-        print(f"  {name.replace('p_', 'p < '):<15} {data['observed']:>10} "
-              f"{data['expected']:>10.1f} {data['enrichment']:>11.1f}× {interp:<20}")
+    n_sig_05_gene = (fdr_gene < 0.05).sum()
+    n_sig_01_gene = (fdr_gene < 0.01).sum()
+    print(f'  Genes with fdr_gene < 0.05: {n_sig_05_gene:,}')
+    print(f'  Genes with fdr_gene < 0.01: {n_sig_01_gene:,}')
 
-    # Generate plots
-    print("\nGenerating comparison plots...")
-    generate_comparison_plots(real_df, null_df, thresholds, output_dir)
+    # ------------------------------------------------------------------
+    # Write outputs
+    # ------------------------------------------------------------------
+    var_sig_path = output_dir / 'corrected_variant_rankings_with_significance.csv'
+    real_df_out.to_csv(var_sig_path, index=False)
+    print(f'\nSaved variant significance file to {var_sig_path}')
 
-    # Annotate real variants with significance
-    print("\nAnnotating variants with significance levels...")
-    real_df['null_p05_threshold'] = thresholds['p_0.05']
-    real_df['null_p01_threshold'] = thresholds['p_0.01']
-    real_df['null_p001_threshold'] = thresholds['p_0.001']
-    real_df['exceeds_null_p05'] = real_df['mean_attribution'] > thresholds['p_0.05']
-    real_df['exceeds_null_p01'] = real_df['mean_attribution'] > thresholds['p_0.01']
-    real_df['exceeds_null_p001'] = real_df['mean_attribution'] > thresholds['p_0.001']
+    gene_sig_path = output_dir / 'corrected_gene_rankings_with_significance.csv'
+    real_genes.to_csv(gene_sig_path, index=False)
+    print(f'Saved gene significance file to {gene_sig_path}')
 
-    # Save annotated rankings
-    annotated_path = output_dir / 'variant_rankings_with_significance.csv'
-    real_df.to_csv(annotated_path, index=False)
-    print(f"Saved annotated rankings to {annotated_path}")
+    # ------------------------------------------------------------------
+    # Significance summary YAML
+    # ------------------------------------------------------------------
+    def _count_passing(arr: np.ndarray, threshold: float) -> int:
+        return int((arr < threshold).sum())
 
-    # Save significant variants only
-    sig_variants = real_df[real_df['exceeds_null_p01']].copy()
-    sig_path = output_dir / 'significant_variants_p01.csv'
-    sig_variants.to_csv(sig_path, index=False)
-    print(f"Saved {len(sig_variants)} significant variants (p<0.01) to {sig_path}")
-
-    # Save top-k with significance annotation
-    top_k = real_df.nlargest(args.top_k, 'mean_attribution').copy()
-    top_k_path = output_dir / f'top{args.top_k}_variants_annotated.csv'
-    top_k.to_csv(top_k_path, index=False)
-    print(f"Saved top {args.top_k} variants to {top_k_path}")
-
-    # Save summary YAML
     summary = {
-        'analysis_parameters': {
-            'real_rankings': args.real,
-            'null_source': args.null or args.null_dir,
-            'n_null_permutations': n_permutations,
-            'n_real_variants': len(real_df),
-            'n_null_variants': len(null_df),
-            'genome_build': args.genome_build,
-            'sex_chroms_excluded': sex_chroms_excluded,
+        'genome_build': args.genome_build,
+        'exclude_sex_chroms': args.exclude_sex_chroms,
+        'n_real_variants_tested': int(len(real_df_out)),
+        'n_null_variants': int(N),
+        'n_real_genes_tested': int(len(real_genes)),
+        'n_null_genes': int(len(null_genes)),
+        'min_achievable_empirical_p': float(min_achievable_p),
+        'variant_significance': {
+            'fdr_0.05': _count_passing(fdr_variant, 0.05),
+            'fdr_0.01': _count_passing(fdr_variant, 0.01),
+            'fdr_0.001': _count_passing(fdr_variant, 0.001),
         },
-        'thresholds': {k: float(v) for k, v in thresholds.items()},
-        'distribution_comparison': dist_comparison,
-        'significance_counts': {
-            k: {kk: float(vv) if isinstance(vv, (int, float, np.floating, np.integer)) else vv
-                for kk, vv in v.items()}
-            for k, v in significance.items()
+        'gene_significance': {
+            'fdr_0.05': _count_passing(fdr_gene, 0.05),
+            'fdr_0.01': _count_passing(fdr_gene, 0.01),
+            'fdr_0.001': _count_passing(fdr_gene, 0.001),
         },
-        'interpretation': {
-            'distributions_differ': dist_comparison['ks_pvalue'] < 0.001,
-            'real_higher_than_null': dist_comparison['mannwhitney_pvalue'] < 0.001,
-            'enrichment_at_p01': significance['p_0.01']['enrichment'],
-            'n_significant_p01': significance['p_0.01']['observed'],
-            'n_significant_p001': significance['p_0.001']['observed'],
-        }
     }
 
-    summary_path = output_dir / 'comparison_summary.yaml'
-    with open(summary_path, 'w') as f:
-        yaml.dump(summary, f, default_flow_style=False, sort_keys=False)
-    print(f"Saved summary to {summary_path}")
+    summary_path = output_dir / 'significance_summary.yaml'
+    with open(summary_path, 'w') as fh:
+        yaml.dump(summary, fh, default_flow_style=False, sort_keys=False)
+    print(f'Saved significance summary to {summary_path}')
 
-    # Final interpretation
-    print("\n" + "=" * 70)
-    print("INTERPRETATION")
-    print("=" * 70)
-
-    if dist_comparison['ks_pvalue'] < 0.001:
-        print("✓ Real and null distributions are significantly different (KS p < 0.001)")
-    else:
-        print("✗ Real and null distributions are NOT significantly different")
-
-    if significance['p_0.01']['enrichment'] > 2:
-        print(f"✓ Strong enrichment at p<0.01: {significance['p_0.01']['enrichment']:.1f}× more variants than expected")
-        print(f"  → {significance['p_0.01']['observed']} variants exceed null threshold")
-        print("  → These variants are candidates for biological validation")
-    elif significance['p_0.01']['enrichment'] > 1.5:
-        print(f"~ Moderate enrichment at p<0.01: {significance['p_0.01']['enrichment']:.1f}×")
-        print("  → Some signal present but interpret with caution")
-    else:
-        print(f"✗ Weak or no enrichment at p<0.01: {significance['p_0.01']['enrichment']:.1f}×")
-        print("  → Attributions may not be distinguishable from noise")
-
-    print("\nOutput files:")
-    print(f"  - {annotated_path}")
-    print(f"  - {sig_path}")
-    print(f"  - {top_k_path}")
-    print(f"  - {output_dir / 'real_vs_null_comparison.png'}")
-    print(f"  - {summary_path}")
+    # ------------------------------------------------------------------
+    # Final stdout summary
+    # ------------------------------------------------------------------
+    print('\n' + '=' * 60)
+    print('SUMMARY')
+    print('=' * 60)
+    print(f'  Real variants tested:       {len(real_df_out):,}')
+    print(f'  Null variants:              {N:,}')
+    print(f'  Min achievable p:           {min_achievable_p:.2e}')
+    print(f'  Variants fdr_variant < 0.05: {n_sig_05_var:,}')
+    print(f'  Genes fdr_gene < 0.05:       {n_sig_05_gene:,}')
+    print('=' * 60)
 
 
 if __name__ == '__main__':
