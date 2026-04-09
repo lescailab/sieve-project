@@ -100,7 +100,7 @@ If you used sex-aware preprocessing or observe chrX inflation in rankings, run `
 
 By default, the corrected rankings exclude sex chromosomes. Use `--include-sex-chroms` if you want to keep them in the output (they remain flagged).
 
-To use corrected rankings in the ablation comparison, pass `--score-column z_attribution` to `compare_ablation_rankings.py`. This ensures variants are ranked by their chromosome-normalised z-scores rather than raw `mean_attribution`, removing systematic chrX inflation from the cross-level comparison.
+For ablation comparison, use the null-contrasted files `corrected_variant_rankings_with_significance.csv` produced by `run_null_baseline_analysis.sh` and rank variants with `--score-column empirical_p_variant`. Lower empirical p-values are treated as better ranks automatically, so the cross-level comparison operates on null-compared evidence rather than raw or merely chrX-corrected effect sizes.
 
 #### Gene Rankings
 
