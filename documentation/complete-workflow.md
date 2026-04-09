@@ -743,7 +743,7 @@ python scripts/validate_nonlinear_classifier.py \
 **How it works**:
 1. For each ablation level and top-k threshold, extracts the per-gene burden sub-matrix for the corrected SIEVE gene set
 2. Trains the requested classifier using fixed stratified CV folds
-3. Generates one shared null distribution per `(top_k, classifier)` pair and reuses it across all levels
+3. Groups levels by effective matched gene count and generates one shared null distribution per `(top_k, classifier, k_effective)` group
 4. Reports an empirical p-value, a null-relative z-score, and a single BH-FDR column across the full result grid
 
 **Outputs**:

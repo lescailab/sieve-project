@@ -343,13 +343,18 @@ echo "[Step 5/6] Applying chrX bias correction to null rankings..."
 NULL_CORRECTED_DIR="${NULL_EXPLAIN_DIR}/corrected"
 NULL_CORRECTED_RANKINGS="${NULL_CORRECTED_DIR}/corrected_variant_rankings.csv"
 
-"$PYTHON" "$REPO_ROOT/scripts/correct_chrx_bias.py" \
-    --rankings "$NULL_RAW_RANKINGS" \
-    --output-dir "$NULL_CORRECTED_DIR" \
-    --include-sex-chroms \
-    --genome-build "$CFG_GENOME_BUILD"
-
-echo "  Corrected null rankings written to: $NULL_CORRECTED_DIR"
+if [ -f "$NULL_CORRECTED_RANKINGS" ]; then
+    echo "  Found existing corrected null rankings at: $NULL_CORRECTED_RANKINGS"
+    echo "  Skipping correction step for null rankings."
+else
+    echo "  Corrected null rankings not found — running correct_chrx_bias.py..."
+    "$PYTHON" "$REPO_ROOT/scripts/correct_chrx_bias.py" \
+        --rankings "$NULL_RAW_RANKINGS" \
+        --output-dir "$NULL_CORRECTED_DIR" \
+        --include-sex-chroms \
+        --genome-build "$CFG_GENOME_BUILD"
+    echo "  Corrected null rankings written to: $NULL_CORRECTED_DIR"
+fi
 echo ""
 
 # -------------------------------------------------------------------
