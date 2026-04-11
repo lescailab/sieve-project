@@ -101,12 +101,11 @@ export OUTPUT_BASE="results/null_baseline_run"           # where null outputs wi
 bash scripts/run_null_baseline_analysis.sh
 
 # 7. (Optional) Correct chrX ploidy bias for ranking/visualisation
-#    NOTE: run_null_baseline_analysis.sh compares raw attributions directly.
-#    Apply chrX correction separately to the real rankings for cross-chromosome
-#    comparability in visualisation and ablation comparison.
+#    Run AFTER step 6 on the significance-annotated file so that
+#    empirical_p_variant and fdr_variant columns are preserved.
 python scripts/correct_chrx_bias.py \
-    --rankings results/explainability/sieve_variant_rankings.csv \
-    --output-dir results/explainability_corrected \
+    --rankings results/null_baseline_run/results/attribution_comparison/variant_rankings_with_significance.csv \
+    --output-dir results/null_baseline_run/results/attribution_comparison/corrected \
     --include-sex-chroms \
     --genome-build GRCh37
 ```
@@ -412,10 +411,11 @@ python scripts/compare_attributions.py \
     --output-dir results/attribution_comparison \
     --genome-build GRCh37
 
-# 5. (Separate) Apply chrX correction to real rankings for ranking/visualisation
+# 5. (Separate) Apply chrX correction to the significance-annotated file
+#    Run AFTER step 4 so empirical_p_variant and fdr_variant are preserved.
 python scripts/correct_chrx_bias.py \
-    --rankings results/explainability/sieve_variant_rankings.csv \
-    --output-dir results/explainability/corrected \
+    --rankings results/attribution_comparison/variant_rankings_with_significance.csv \
+    --output-dir results/attribution_comparison/corrected \
     --include-sex-chroms \
     --genome-build GRCh37
 ```
@@ -455,14 +455,17 @@ python scripts/ablation_compare.py \
     --out-summary-yaml results/ablation/ablation_summary.yaml
 ```
 
-**Step 5b: Compare null-contrasted variant rankings across levels**:
+**Step 5b: Compare null-contrasted variant attribution rankings across levels**:
 ```bash
-# Collect null-contrasted significance files into one directory with level prefixes
+# Collect chrX-corrected significance files into one directory with level prefixes.
+# Use corrected_variant_rankings.csv — it contains significance + chrX-corrected z-scores.
+# PROJECT_DIR should match what was used in Step 5a.
+PROJECT_DIR=/data/CohortName
 mkdir -p results/ablation/rankings
-cp results/null_baseline_L0/results/attribution_comparison/variant_rankings_with_significance.csv results/ablation/rankings/L0_sieve_variant_rankings.csv
-cp results/null_baseline_L1/results/attribution_comparison/variant_rankings_with_significance.csv results/ablation/rankings/L1_sieve_variant_rankings.csv
-cp results/null_baseline_L2/results/attribution_comparison/variant_rankings_with_significance.csv results/ablation/rankings/L2_sieve_variant_rankings.csv
-cp results/null_baseline_L3/results/attribution_comparison/variant_rankings_with_significance.csv results/ablation/rankings/L3_sieve_variant_rankings.csv
+for LEVEL in L0 L1 L2 L3; do
+    cp "${PROJECT_DIR}/real_experiments/${LEVEL}/attributions/corrected/corrected_variant_rankings.csv" \
+       results/ablation/rankings/${LEVEL}_sieve_variant_rankings.csv
+done
 
 # Run comparison
 python scripts/compare_ablation_rankings.py \
@@ -1032,19 +1035,19 @@ python scripts/ablation_compare.py \
     --out-summary-tsv results/ablation/ablation_summary.tsv \
     --out-summary-yaml results/ablation/ablation_summary.yaml
 
-# Run the required null baseline at each level
+# Run the required null baseline at each level (preferred: cohort-centric layout)
+# Set PROJECT_DIR once; reuse it in the loop.
+PROJECT_DIR=/data/CohortName
 for LEVEL in L0 L1 L2 L3; do
-    export INPUT_DATA=preprocessed.pt
-    export REAL_EXPERIMENT=experiments/ablation_${LEVEL}
-    export REAL_RESULTS=results/${LEVEL}_explainability
-    export OUTPUT_BASE=results/null_baseline_${LEVEL}
+    PROJECT_DIR=$PROJECT_DIR \
+    LEVEL=$LEVEL \
     bash scripts/run_null_baseline_analysis.sh
 done
 
-# Compare null-contrasted significance rankings
+# Compare null-contrasted significance rankings (use chrX-corrected files)
 mkdir -p results/ablation/significance_rankings
 for LEVEL in L0 L1 L2 L3; do
-    cp results/null_baseline_${LEVEL}/results/attribution_comparison/variant_rankings_with_significance.csv \
+    cp "${PROJECT_DIR}/real_experiments/${LEVEL}/attributions/corrected/corrected_variant_rankings.csv" \
        results/ablation/significance_rankings/${LEVEL}_sieve_variant_rankings.csv
 done
 
@@ -1068,11 +1071,12 @@ python scripts/plot_ablation_comparison.py \
 If your ranking files are not in a single directory with level prefixes, you can specify them individually:
 
 ```bash
+PROJECT_DIR=/data/CohortName
 python scripts/compare_ablation_rankings.py \
-    --rankings L0:results/null_baseline_L0/results/attribution_comparison/variant_rankings_with_significance.csv \
-               L1:results/null_baseline_L1/results/attribution_comparison/variant_rankings_with_significance.csv \
-               L2:results/null_baseline_L2/results/attribution_comparison/variant_rankings_with_significance.csv \
-               L3:results/null_baseline_L3/results/attribution_comparison/variant_rankings_with_significance.csv \
+    --rankings L0:"${PROJECT_DIR}/real_experiments/L0/attributions/corrected/corrected_variant_rankings.csv" \
+               L1:"${PROJECT_DIR}/real_experiments/L1/attributions/corrected/corrected_variant_rankings.csv" \
+               L2:"${PROJECT_DIR}/real_experiments/L2/attributions/corrected/corrected_variant_rankings.csv" \
+               L3:"${PROJECT_DIR}/real_experiments/L3/attributions/corrected/corrected_variant_rankings.csv" \
     --score-column empirical_p_variant \
     --out-comparison results/ablation/ablation_ranking_comparison.yaml \
     --out-jaccard results/ablation/ablation_jaccard_matrix.tsv \
@@ -1090,22 +1094,26 @@ Tighter thresholds (e.g., `--high-rank-threshold 50 --low-rank-threshold 200`) p
 
 #### Using Chromosome-Normalised Rankings
 
-When chrX ploidy bias inflates attributions on sex chromosomes, run `correct_chrx_bias.py` on each level's rankings before comparing:
+When chrX ploidy bias inflates attributions on sex chromosomes, run `correct_chrx_bias.py` on the significance-annotated file from each level.  Running it on `variant_rankings_with_significance.csv` (output of `compare_attributions.py`) preserves `empirical_p_variant` and `fdr_variant` alongside the new chrX-corrected z-scores:
 
 ```bash
-# 1. Normalise each level's rankings by chromosome
+# Set PROJECT_DIR once; reuse it throughout.
+PROJECT_DIR=/data/CohortName
+
+# 1. Apply chrX correction to each level's significance-annotated file
 for LEVEL in L0 L1 L2 L3; do
     python scripts/correct_chrx_bias.py \
-        --rankings results/${LEVEL}_explainability/sieve_variant_rankings.csv \
-        --output-dir results/${LEVEL}_explainability/corrected/ \
+        --rankings "${PROJECT_DIR}/real_experiments/${LEVEL}/attributions/variant_rankings_with_significance.csv" \
+        --project-dir "$PROJECT_DIR" \
         --include-sex-chroms \
         --genome-build GRCh37
 done
+# Output: ${PROJECT_DIR}/real_experiments/{LEVEL}/attributions/corrected/corrected_variant_rankings.csv
 
-# 2. Copy null-contrasted significance files into a comparison directory
+# 2. Copy corrected files into a comparison directory
 mkdir -p results/ablation/significance_rankings
 for LEVEL in L0 L1 L2 L3; do
-    cp results/null_baseline_${LEVEL}/results/attribution_comparison/variant_rankings_with_significance.csv \
+    cp "${PROJECT_DIR}/real_experiments/${LEVEL}/attributions/corrected/corrected_variant_rankings.csv" \
        results/ablation/significance_rankings/${LEVEL}_sieve_variant_rankings.csv
 done
 
@@ -1370,23 +1378,42 @@ python scripts/create_null_baseline.py \
 bash scripts/run_null_baseline_analysis.sh
 ```
 
-This wrapper is configured through environment variables:
+This wrapper is configured through environment variables.
+
+**Preferred interface (cohort-centric layout)**:
 
 | Variable | Required | Description |
 |---------|----------|-------------|
-| `INPUT_DATA` | Yes | Path to real preprocessed `.pt` file |
-| `REAL_EXPERIMENT` | Yes | Real experiment directory (single run) or fold directory (CV) |
-| `OUTPUT_BASE` | Yes | Base directory where null outputs are written |
-| `REAL_RESULTS` | No (recommended) | Directory containing real `sieve_variant_rankings.csv` |
+| `PROJECT_DIR` | Yes | Cohort project root directory (e.g. `/data/CohortName`) |
+| `LEVEL` | Yes | Annotation level to run (e.g. `L3`) |
+| `NULL_DATA` | No | Pre-existing permuted `.pt` file — skips Step 1 if set |
 | `DEVICE` | No | `cuda` or `cpu` (default: `cuda`) |
 | `PYTHON` | No | Python interpreter path override |
+| `EXCLUDE_SEX_CHROMS` | No | Set to `1` to exclude sex chromosomes from significance computation |
+
+**Legacy variables (override derived paths when set)**:
+
+| Variable | Description |
+|---------|-------------|
+| `INPUT_DATA` | Path to real preprocessed `.pt` file |
+| `REAL_EXPERIMENT` | Real experiment training directory |
+| `REAL_RESULTS` | Directory containing real `sieve_variant_rankings.csv` |
+| `OUTPUT_BASE` | Base directory for null outputs |
 
 Behaviour:
 - Reads model/training hyperparameters from real `config.yaml` (in `REAL_EXPERIMENT` or parent).
 - Carries over `sex_map` automatically when the real model used sex covariates.
 - Resolves script paths relative to wrapper location, so it can be run from any working directory.
 
-**Example**:
+**Preferred example**:
+```bash
+PROJECT_DIR=/data/CohortName \
+LEVEL=L3 \
+DEVICE=cuda \
+bash scripts/run_null_baseline_analysis.sh
+```
+
+**Legacy example**:
 ```bash
 export INPUT_DATA=data/preprocessed.pt
 export REAL_EXPERIMENT=experiments/my_model
@@ -1409,9 +1436,12 @@ python scripts/compare_attributions.py [OPTIONS]
 |--------|------|---------|-------------|
 | `--real` | path | required | Raw real variant rankings CSV (`sieve_variant_rankings.csv`) |
 | `--null` | path | required | Raw null variant rankings CSV (`sieve_variant_rankings.csv`) |
-| `--output-dir` | path | required | Output directory |
+| `--output-dir` | path | required* | Output directory. Mutually exclusive with `--project-dir` |
+| `--project-dir` | path | required* | Cohort project root; routes output to `{project-dir}/real_experiments/{LEVEL}/attributions/`. Mutually exclusive with `--output-dir` |
 | `--genome-build` | str | GRCh37 | Reference genome build |
 | `--exclude-sex-chroms` | flag | False | Exclude chrX/chrY before empirical p-value and FDR computation |
+
+\* Exactly one of `--output-dir` or `--project-dir` is required.
 
 **Example**:
 ```bash
@@ -1430,20 +1460,25 @@ python scripts/compare_attributions.py \
 python scripts/correct_chrx_bias.py [OPTIONS]
 ```
 
+Run on `variant_rankings_with_significance.csv` (output of `compare_attributions.py`) to preserve `empirical_p_variant` and `fdr_variant` alongside the chrX-corrected z-scores. Do not run on null rankings.
+
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `--rankings` | path | required | Variant rankings CSV |
-| `--output-dir` | path | required | Output directory |
+| `--rankings` | path | required | Variant rankings CSV (typically `variant_rankings_with_significance.csv`) |
+| `--output-dir` | path | required* | Output directory. Mutually exclusive with `--project-dir` |
+| `--project-dir` | path | required* | Cohort project root; routes output to `{project-dir}/real_experiments/{LEVEL}/attributions/corrected/`. Mutually exclusive with `--output-dir` |
 | `--exclude-sex-chroms` | flag | True | Exclude chrX/chrY from final rankings (default) |
 | `--include-sex-chroms` | flag | False | Include chrX/chrY (flagged) in rankings |
 | `--genome-build` | str | GRCh37 | Reference genome build |
 | `--top-k` | int | 100 | Top variants to annotate in plot |
 
+\* Exactly one of `--output-dir` or `--project-dir` is required.
+
 **Example**:
 ```bash
 python scripts/correct_chrx_bias.py \
-    --rankings results/explainability/sieve_variant_rankings.csv \
-    --output-dir results/explainability_corrected \
+    --rankings results/attribution_comparison/variant_rankings_with_significance.csv \
+    --output-dir results/attribution_comparison/corrected \
     --include-sex-chroms \
     --genome-build GRCh37
 ```
@@ -1737,15 +1772,15 @@ samples. Likely a genuine disease-associated variant.
 
 #### chrX Ploidy Bias Correction (Optional)
 
-If you used sex-aware preprocessing or observe chrX inflation in rankings, run `correct_chrx_bias.py` to standardise mean attributions per chromosome. The script adds:
+If you used sex-aware preprocessing or observe chrX inflation in rankings, run `correct_chrx_bias.py` on `variant_rankings_with_significance.csv` (the output of `compare_attributions.py`) to standardise mean attributions per chromosome while preserving the significance columns. The script adds:
 
 - `z_attribution`: per-chromosome z-scored attribution
 - `corrected_rank`: rank based on `z_attribution`
 - `is_sex_chrom`: flags chrX/chrY variants
 
-By default, the corrected rankings exclude sex chromosomes. Use `--include-sex-chroms` if you want to keep them in the output (they remain flagged).
+All existing columns — including `empirical_p_variant` and `fdr_variant` — are preserved unchanged. By default, the corrected rankings exclude sex chromosomes. Use `--include-sex-chroms` if you want to keep them in the output (they remain flagged).
 
-For ablation comparison, use the null-contrasted files `variant_rankings_with_significance.csv` produced by `run_null_baseline_analysis.sh` and rank variants with `--score-column empirical_p_variant`. Lower empirical p-values are treated as better ranks automatically, so the cross-level comparison operates on null-compared evidence rather than raw or merely chrX-corrected effect sizes.
+For ablation comparison, use the chrX-corrected files `corrected_variant_rankings.csv` from the `corrected/` subdirectory and rank variants with `--score-column empirical_p_variant`. Lower empirical p-values are treated as better ranks automatically, so the cross-level comparison operates on null-compared evidence while benefiting from cross-chromosome normalised z-scores.
 
 #### Gene Rankings
 

@@ -90,7 +90,16 @@ sieve-explain \
 
 ### 5. Run null baseline
 
-Use the full wrapper:
+Use the full wrapper (preferred — cohort-centric layout):
+
+```bash
+PROJECT_DIR=/data/CohortName \
+LEVEL=L3 \
+DEVICE="cuda" \
+sieve-run-null-baseline
+```
+
+Or use the legacy variable interface:
 
 ```bash
 export INPUT_DATA="preprocessed.pt"
@@ -124,17 +133,17 @@ sieve-explain \
 sieve-compare-attributions \
     --real results/explainability/sieve_variant_rankings.csv \
     --null results/null_attributions/sieve_variant_rankings.csv \
-    --output-dir results/comparison
+    --output-dir results/attribution_comparison
 ```
 
 ### 6. Optional post-processing and biological checks
 
 ```bash
+# Apply chrX correction to the significance-annotated file (run AFTER step 5)
 sieve-correct-chrx-bias \
-    --rankings results/explainability/sieve_variant_rankings.csv \
-    --null-rankings results/null_attributions/sieve_variant_rankings.csv \
-    --output-dir results/explainability_corrected \
-    --exclude-sex-chroms
+    --rankings results/attribution_comparison/variant_rankings_with_significance.csv \
+    --output-dir results/attribution_comparison/corrected \
+    --include-sex-chroms
 
 sieve-validate-discoveries \
     --variant-rankings results/explainability/sieve_variant_rankings.csv \
