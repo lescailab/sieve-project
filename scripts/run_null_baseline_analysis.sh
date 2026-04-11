@@ -16,13 +16,15 @@
 # are equally inflated.
 #
 # ChrX correction (correct_chrx_bias.py) should be applied SEPARATELY to the
-# real rankings for ranking and visualisation purposes, AFTER this pipeline.
+# significance-annotated real rankings for ranking and visualisation purposes,
+# AFTER this pipeline completes.
 #
 # This script produces null-contrasted rankings with empirical p-values and FDR
-# correction.  The significance columns are written to
-#   ${OUTPUT_BASE}/results/attribution_comparison/
+# correction.  The significance columns are written to:
+#   ${PROJECT_DIR}/real_experiments/${LEVEL}/attributions/
 #     variant_rankings_with_significance.csv
-# and the corresponding gene file.
+#     gene_rankings_with_significance.csv
+#     significance_summary.yaml
 #
 # IMPORTANT: The null model must be trained under identical conditions to the
 # real model.  The only difference is the permuted labels.  Hyperparameters are
@@ -30,10 +32,15 @@
 # Ploidy correction is baked into the preprocessed data, so using the same
 # .pt file preserves it automatically — only labels are permuted.
 #
-# Usage:
+# Usage (preferred):
+#   PROJECT_DIR=/path/to/CohortName \
+#   LEVEL=L3 \
+#   bash scripts/run_null_baseline_analysis.sh
+#
+# Usage (legacy, still supported):
 #   INPUT_DATA=/path/to/preprocessed.pt \
-#   REAL_EXPERIMENT=/path/to/experiments/EXPERIMENT_NAME/fold_N \
-#   REAL_RESULTS=/path/to/results/explainability \
+#   REAL_EXPERIMENT=/path/to/training \
+#   REAL_RESULTS=/path/to/attributions \
 #   OUTPUT_BASE=/path/to/output \
 #   bash scripts/run_null_baseline_analysis.sh
 #
@@ -54,7 +61,39 @@ if [ -z "$PYTHON" ]; then
     exit 1
 fi
 
-# Required parameters (set via environment variables)
+# ---------------------------------------------------------------------------
+# Path derivation: PROJECT_DIR + LEVEL → all other paths
+# ---------------------------------------------------------------------------
+# When PROJECT_DIR and LEVEL are set, derive the standard layout paths.
+# Explicit overrides (REAL_EXPERIMENT, REAL_RESULTS, OUTPUT_BASE, INPUT_DATA,
+# NULL_DATA) take precedence if set before calling this script.
+# ---------------------------------------------------------------------------
+PROJECT_DIR="${PROJECT_DIR:-}"
+LEVEL="${LEVEL:-}"
+
+if [ -n "$PROJECT_DIR" ] && [ -n "$LEVEL" ]; then
+    # Real-side paths (read-only inputs)
+    REAL_EXPERIMENT="${REAL_EXPERIMENT:-${PROJECT_DIR}/real_experiments/${LEVEL}/training}"
+    REAL_RESULTS="${REAL_RESULTS:-${PROJECT_DIR}/real_experiments/${LEVEL}/attributions}"
+
+    # Auto-detect input data from ${PROJECT_DIR}/data/ if not already set
+    if [ -z "$INPUT_DATA" ]; then
+        INPUT_DATA=$(find "${PROJECT_DIR}/data" -maxdepth 1 -name 'preprocessed*.pt' \
+                     ! -name '*_NULL*' 2>/dev/null | head -1)
+    fi
+
+    # Auto-detect null data from ${PROJECT_DIR}/data/ if not already set
+    if [ -z "$NULL_DATA" ]; then
+        NULL_DATA_CANDIDATE=$(find "${PROJECT_DIR}/data" -maxdepth 1 -name '*_NULL.pt' \
+                              2>/dev/null | head -1)
+        [ -f "${NULL_DATA_CANDIDATE:-}" ] && NULL_DATA="$NULL_DATA_CANDIDATE"
+    fi
+
+    # Output base for null model and null attributions
+    OUTPUT_BASE="${OUTPUT_BASE:-${PROJECT_DIR}}"
+fi
+
+# Required parameters (set via environment variables or derived above)
 INPUT_DATA="${INPUT_DATA:-}"
 REAL_EXPERIMENT="${REAL_EXPERIMENT:-}"
 REAL_RESULTS="${REAL_RESULTS:-}"
@@ -66,6 +105,10 @@ EXCLUDE_SEX_CHROMS="${EXCLUDE_SEX_CHROMS:-0}"
 echo "=============================================="
 echo "Null Baseline Attribution Analysis Pipeline"
 echo "=============================================="
+if [ -n "$PROJECT_DIR" ] && [ -n "$LEVEL" ]; then
+    echo "Project dir:      $PROJECT_DIR"
+    echo "Level:            $LEVEL"
+fi
 echo "Input data:       $INPUT_DATA"
 echo "Real experiment:  $REAL_EXPERIMENT"
 echo "Real results:     $REAL_RESULTS"
@@ -77,16 +120,19 @@ echo ""
 # Validate required parameters
 # -------------------------------------------------------------------
 if [ -z "$INPUT_DATA" ]; then
-    echo "ERROR: INPUT_DATA is not set. Set it to the path of your preprocessed .pt file."
+    echo "ERROR: INPUT_DATA is not set."
+    echo "  Either set PROJECT_DIR and LEVEL (preferred), or set INPUT_DATA directly."
     exit 1
 fi
 if [ -z "$OUTPUT_BASE" ]; then
-    echo "ERROR: OUTPUT_BASE is not set. Set it to the base output directory."
+    echo "ERROR: OUTPUT_BASE is not set."
+    echo "  Either set PROJECT_DIR and LEVEL (preferred), or set OUTPUT_BASE directly."
     exit 1
 fi
 if [ -z "$REAL_EXPERIMENT" ]; then
-    echo "ERROR: REAL_EXPERIMENT is not set. Set it to the fold directory of the real experiment"
-    echo "       (e.g. /path/to/experiments/CONFIG_G_FINAL_CV/fold_4)."
+    echo "ERROR: REAL_EXPERIMENT is not set."
+    echo "  Either set PROJECT_DIR and LEVEL (preferred), or set REAL_EXPERIMENT directly"
+    echo "  to the training directory of the real experiment."
     exit 1
 fi
 
@@ -211,6 +257,7 @@ else
         echo "[Step 1/4] Reusing existing permuted dataset: $NULL_DATA"
     else
         echo "[Step 1/4] Creating permuted dataset..."
+        mkdir -p "$(dirname "$NULL_DATA")"
         "$PYTHON" "$REPO_ROOT/scripts/create_null_baseline.py" \
             --input "$INPUT_DATA" \
             --output "$NULL_DATA" \
@@ -226,11 +273,23 @@ echo ""
 # All hyperparameters are read from the real experiment's config.yaml.
 # The only differences are:
 #   - --preprocessed-data points to the null (permuted) .pt file
-#   - --experiment-name is NULL_BASELINE
+#   - --experiment-name is training (nested under null_baselines/{LEVEL})
 #   - --val-split 0.2 (single split instead of full CV — sufficient for null)
 echo "[Step 2/4] Training null model..."
-NULL_EXPERIMENT="${OUTPUT_BASE}/experiments/NULL_BASELINE"
+if [ -n "$PROJECT_DIR" ] && [ -n "$LEVEL" ]; then
+    NULL_EXPERIMENT="${OUTPUT_BASE}/null_baselines/${LEVEL}/training"
+else
+    NULL_EXPERIMENT="${OUTPUT_BASE}/experiments/NULL_BASELINE"
+fi
 NULL_MODEL_CHECKPOINT="${NULL_EXPERIMENT}/best_model.pt"
+
+if [ -n "$PROJECT_DIR" ] && [ -n "$LEVEL" ]; then
+    TRAIN_OUTPUT_DIR="${OUTPUT_BASE}/null_baselines/${LEVEL}"
+    TRAIN_EXPERIMENT_NAME="training"
+else
+    TRAIN_OUTPUT_DIR="${OUTPUT_BASE}/experiments"
+    TRAIN_EXPERIMENT_NAME="NULL_BASELINE"
+fi
 
 TRAIN_CMD=(
     "$PYTHON" "$REPO_ROOT/scripts/train.py"
@@ -251,8 +310,8 @@ TRAIN_CMD=(
     --num-heads "$CFG_NUM_HEADS"
     --num-attention-layers "$CFG_NUM_LAYERS"
     --seed "$CFG_SEED"
-    --output-dir "${OUTPUT_BASE}/experiments"
-    --experiment-name NULL_BASELINE
+    --output-dir "$TRAIN_OUTPUT_DIR"
+    --experiment-name "$TRAIN_EXPERIMENT_NAME"
     --genome-build "$CFG_GENOME_BUILD"
     --device "$DEVICE"
 )
@@ -280,7 +339,11 @@ echo ""
 # Step 3: Run explainability on null model
 # -------------------------------------------------------------------
 echo "[Step 3/4] Running explainability on null model..."
-NULL_EXPLAIN_DIR="${OUTPUT_BASE}/results/null_attributions"
+if [ -n "$PROJECT_DIR" ] && [ -n "$LEVEL" ]; then
+    NULL_EXPLAIN_DIR="${OUTPUT_BASE}/null_baselines/${LEVEL}/attributions"
+else
+    NULL_EXPLAIN_DIR="${OUTPUT_BASE}/results/null_attributions"
+fi
 NULL_RAW_RANKINGS="${NULL_EXPLAIN_DIR}/sieve_variant_rankings.csv"
 
 if [ -f "$NULL_RAW_RANKINGS" ]; then
@@ -304,7 +367,8 @@ echo ""
 # The comparison operates on raw mean_attribution from both models.
 # Both models saw the same input data (same chrX inflation), so the
 # chrX effect cancels in the empirical comparison.  ChrX correction
-# should be applied separately to real rankings for visualisation.
+# should be applied separately to the significance-annotated real
+# rankings for visualisation.
 echo "[Step 4/4] Comparing raw real vs raw null attributions..."
 
 REAL_RAW_RANKINGS="${REAL_RESULTS}/sieve_variant_rankings.csv"
@@ -322,7 +386,12 @@ if [ ! -f "$REAL_RAW_RANKINGS" ]; then
     exit 1
 fi
 
-COMPARISON_DIR="${OUTPUT_BASE}/results/attribution_comparison"
+# Significance output goes into the real-side attributions directory
+if [ -n "$PROJECT_DIR" ] && [ -n "$LEVEL" ]; then
+    COMPARISON_DIR="${OUTPUT_BASE}/real_experiments/${LEVEL}/attributions"
+else
+    COMPARISON_DIR="${OUTPUT_BASE}/results/attribution_comparison"
+fi
 
 COMPARE_CMD=(
     "$PYTHON" "$REPO_ROOT/scripts/compare_attributions.py"
@@ -346,9 +415,15 @@ echo "Null Baseline Analysis Complete!"
 echo "=============================================="
 echo ""
 echo "Results saved to:"
-echo "  - Null model:                $NULL_EXPERIMENT"
-echo "  - Null attributions:         $NULL_EXPLAIN_DIR"
-echo "  - Significance results:      $COMPARISON_DIR"
+if [ -n "$PROJECT_DIR" ] && [ -n "$LEVEL" ]; then
+    echo "  - Null model:                ${OUTPUT_BASE}/null_baselines/${LEVEL}/training"
+    echo "  - Null attributions:         ${OUTPUT_BASE}/null_baselines/${LEVEL}/attributions"
+    echo "  - Significance results:      $COMPARISON_DIR"
+else
+    echo "  - Null model:                $NULL_EXPERIMENT"
+    echo "  - Null attributions:         $NULL_EXPLAIN_DIR"
+    echo "  - Significance results:      $COMPARISON_DIR"
+fi
 echo ""
 echo "Key files to review:"
 echo "  - ${COMPARISON_DIR}/variant_rankings_with_significance.csv"
@@ -357,7 +432,11 @@ echo "  - ${COMPARISON_DIR}/significance_summary.yaml"
 echo ""
 echo "Next step: apply chrX correction to real rankings for visualisation:"
 echo "  python scripts/correct_chrx_bias.py \\"
-echo "      --rankings ${REAL_RAW_RANKINGS} \\"
-echo "      --output-dir ${REAL_RESULTS}/corrected \\"
+echo "      --rankings ${COMPARISON_DIR}/variant_rankings_with_significance.csv \\"
+if [ -n "$PROJECT_DIR" ] && [ -n "$LEVEL" ]; then
+    echo "      --project-dir ${PROJECT_DIR} \\"
+else
+    echo "      --output-dir ${REAL_RESULTS}/corrected \\"
+fi
 echo "      --include-sex-chroms \\"
 echo "      --genome-build ${CFG_GENOME_BUILD}"

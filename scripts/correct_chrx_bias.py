@@ -2,22 +2,30 @@
 """
 Post-hoc attribution correction for chrX ploidy bias.
 
-Takes a single attribution rankings file and produces corrected rankings with
-chrX/chrY bias removed via per-chromosome z-score normalisation.
+Takes a significance-annotated rankings file and produces corrected rankings
+with chrX/chrY bias removed via per-chromosome z-score normalisation.  All
+existing columns — including ``empirical_p_variant`` and ``fdr_variant`` from
+the null comparison — are preserved in the output.
 
-This script corrects chrX ploidy bias for ranking and visualisation purposes.
-It should be run on the real rankings AFTER the null comparison
-(compare_attributions.py) has been computed on raw attributions.  Do not apply
-this correction to null rankings — the null comparison must operate on raw
-mean_attribution values.
+Run this script on the significance-annotated file
+(``variant_rankings_with_significance.csv`` from ``compare_attributions.py``)
+to add chrX-corrected rankings while preserving significance columns.  Do not
+run on null rankings — the null comparison must operate on raw
+``mean_attribution`` values and must precede this correction step.
 
 Usage:
-    python scripts/correct_chrx_bias.py \
-        --rankings /path/to/sieve_variant_rankings.csv \
-        --output-dir /path/to/corrected_results \
-        --exclude-sex-chroms \
-        --genome-build GRCh37 \
+    python scripts/correct_chrx_bias.py \\
+        --rankings /path/to/variant_rankings_with_significance.csv \\
+        --output-dir /path/to/corrected_results \\
+        --exclude-sex-chroms \\
+        --genome-build GRCh37 \\
         --top-k 100
+
+    # Or using --project-dir for automatic routing:
+    python scripts/correct_chrx_bias.py \\
+        --rankings /path/to/CohortName/real_experiments/L3/attributions/variant_rankings_with_significance.csv \\
+        --project-dir /path/to/CohortName \\
+        --genome-build GRCh37
 
 Author: Francesco Lescai
 """
@@ -42,6 +50,35 @@ from src.data.genome import (
 )
 
 
+def _infer_level_from_path(path: str) -> str:
+    """
+    Infer the annotation level from a file path.
+
+    Looks for ``/real_experiments/L{N}/`` in *path*.  Raises ``ValueError``
+    if no level can be found.
+
+    Parameters
+    ----------
+    path : str
+        File path to inspect.
+
+    Returns
+    -------
+    str
+        Annotation level string such as ``'L0'``, ``'L1'``, ``'L2'``, or
+        ``'L3'``.
+    """
+    import re
+    match = re.search(r'/real_experiments/(L\d+)/', path)
+    if match:
+        return match.group(1)
+    raise ValueError(
+        f"Cannot infer annotation level from path: {path!r}. "
+        "The --rankings path must contain '/real_experiments/L{{N}}/' to use "
+        "--project-dir. Use --output-dir to specify the output directory explicitly."
+    )
+
+
 def parse_args():
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
@@ -50,8 +87,23 @@ def parse_args():
 
     parser.add_argument('--rankings', type=str, required=True,
                         help='Path to variant rankings CSV')
-    parser.add_argument('--output-dir', type=str, required=True,
-                        help='Output directory for corrected files')
+    output_group = parser.add_mutually_exclusive_group(required=True)
+    output_group.add_argument(
+        '--output-dir', type=str,
+        help=(
+            'Output directory for corrected files. '
+            'Mutually exclusive with --project-dir.'
+        ),
+    )
+    output_group.add_argument(
+        '--project-dir', type=str,
+        help=(
+            'Cohort project root directory. Output is routed automatically to '
+            '{project-dir}/real_experiments/{LEVEL}/attributions/corrected/, '
+            'where LEVEL is inferred from the --rankings path. '
+            'Mutually exclusive with --output-dir.'
+        ),
+    )
     parser.set_defaults(exclude_sex_chroms=True)
     sex_chrom_group = parser.add_mutually_exclusive_group()
     sex_chrom_group.add_argument('--exclude-sex-chroms', dest='exclude_sex_chroms',
@@ -248,7 +300,13 @@ def main():
 
     build = get_genome_build(args.genome_build)
 
-    output_dir = Path(args.output_dir)
+    if args.project_dir is not None:
+        level = _infer_level_from_path(args.rankings)
+        output_dir = (
+            Path(args.project_dir) / 'real_experiments' / level / 'attributions' / 'corrected'
+        )
+    else:
+        output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     print("=" * 60)

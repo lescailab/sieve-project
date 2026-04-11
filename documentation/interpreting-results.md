@@ -92,15 +92,24 @@ samples. Likely a genuine disease-associated variant.
 
 #### chrX Ploidy Bias Correction (Optional)
 
-If you used sex-aware preprocessing or observe chrX inflation in rankings, run `correct_chrx_bias.py` to standardise mean attributions per chromosome. The script adds:
+If you used sex-aware preprocessing or observe chrX inflation in rankings, run `correct_chrx_bias.py` to standardise mean attributions per chromosome. Run this script on `variant_rankings_with_significance.csv` (the output of `compare_attributions.py`) so that the significance columns are preserved alongside the chrX-corrected z-scores:
+
+```bash
+python scripts/correct_chrx_bias.py \
+    --rankings results/attribution_comparison/variant_rankings_with_significance.csv \
+    --output-dir results/attribution_comparison/corrected \
+    --include-sex-chroms
+```
+
+The script adds:
 
 - `z_attribution`: per-chromosome z-scored attribution
 - `corrected_rank`: rank based on `z_attribution`
 - `is_sex_chrom`: flags chrX/chrY variants
 
-By default, the corrected rankings exclude sex chromosomes. Use `--include-sex-chroms` if you want to keep them in the output (they remain flagged).
+All existing columns — including `empirical_p_variant` and `fdr_variant` — are preserved unchanged. By default, the corrected rankings exclude sex chromosomes. Use `--include-sex-chroms` if you want to keep them in the output (they remain flagged).
 
-For ablation comparison, use the null-contrasted files `variant_rankings_with_significance.csv` produced by `run_null_baseline_analysis.sh` and rank variants with `--score-column empirical_p_variant`. Lower empirical p-values are treated as better ranks automatically, so the cross-level comparison operates on null-compared evidence rather than raw or merely chrX-corrected effect sizes.
+For ablation comparison, use the chrX-corrected files `corrected_variant_rankings.csv` from `corrected/` and rank variants with `--score-column empirical_p_variant`. Lower empirical p-values are treated as better ranks automatically, so the cross-level comparison operates on null-compared evidence while also having cross-chromosome-normalised z-scores available.
 
 #### Gene Rankings
 
