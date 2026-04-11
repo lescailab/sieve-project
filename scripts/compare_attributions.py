@@ -54,6 +54,38 @@ except ImportError:  # pragma: no cover
 # Argument parsing
 # ---------------------------------------------------------------------------
 
+def _infer_level_from_path(path: str) -> str:
+    """
+    Infer the annotation level from a file path.
+
+    Looks for ``/real_experiments/L{N}/`` or ``/null_baselines/L{N}/``
+    components in *path*.  Raises ``ValueError`` if no level can be found.
+
+    Parameters
+    ----------
+    path : str
+        File path to inspect.
+
+    Returns
+    -------
+    str
+        Annotation level string such as ``'L0'``, ``'L1'``, ``'L2'``, or
+        ``'L3'``.
+    """
+    import re
+    match = re.search(
+        r'/(?:real_experiments|null_baselines)/(L\d+)/', path
+    )
+    if match:
+        return match.group(1)
+    raise ValueError(
+        f"Cannot infer annotation level from path: {path!r}. "
+        "The path must contain '/real_experiments/L{{N}}/' or "
+        "'/null_baselines/L{{N}}/' to use --project-dir. "
+        "Use --output-dir to specify the output directory explicitly."
+    )
+
+
 def parse_args() -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
@@ -77,9 +109,22 @@ def parse_args() -> argparse.Namespace:
             '(must have mean_attribution column)'
         ),
     )
-    parser.add_argument(
-        '--output-dir', type=str, required=True,
-        help='Output directory for significance-annotated files',
+    output_group = parser.add_mutually_exclusive_group(required=True)
+    output_group.add_argument(
+        '--output-dir', type=str,
+        help=(
+            'Output directory for significance-annotated files. '
+            'Mutually exclusive with --project-dir.'
+        ),
+    )
+    output_group.add_argument(
+        '--project-dir', type=str,
+        help=(
+            'Cohort project root directory. Output is routed automatically to '
+            '{project-dir}/real_experiments/{LEVEL}/attributions/, where LEVEL '
+            'is inferred from the --real path. '
+            'Mutually exclusive with --output-dir.'
+        ),
     )
     parser.add_argument(
         '--genome-build', type=str, default='GRCh37',
@@ -226,7 +271,11 @@ def main() -> None:
     """Entry point."""
     args = parse_args()
 
-    output_dir = Path(args.output_dir)
+    if args.project_dir is not None:
+        level = _infer_level_from_path(args.real)
+        output_dir = Path(args.project_dir) / 'real_experiments' / level / 'attributions'
+    else:
+        output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     print('=' * 60)

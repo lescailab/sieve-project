@@ -67,13 +67,11 @@ export OUTPUT_BASE="results/null_baseline_run"           # where null outputs wi
 bash scripts/run_null_baseline_analysis.sh
 
 # 7. (Optional) Correct chrX ploidy bias for ranking/visualisation
-#    NOTE: run_null_baseline_analysis.sh compares raw attributions directly.
-#    Apply chrX correction separately to the real rankings for cross-chromosome
-#    comparability.  Ablation comparison should use
-#    variant_rankings_with_significance.csv from the null baseline wrapper.
+#    Run AFTER step 6 on the significance-annotated file so that
+#    empirical_p_variant and fdr_variant columns are preserved in the output.
 python scripts/correct_chrx_bias.py \
-    --rankings results/explainability/sieve_variant_rankings.csv \
-    --output-dir results/explainability_corrected \
+    --rankings results/null_baseline_run/results/attribution_comparison/variant_rankings_with_significance.csv \
+    --output-dir results/null_baseline_run/results/attribution_comparison/corrected \
     --include-sex-chroms
 ```
 

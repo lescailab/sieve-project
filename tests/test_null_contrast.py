@@ -1,7 +1,7 @@
 """
 Unit tests for the null-contrast ranking pipeline:
   - compare_attributions.py  (empirical p-value / FDR logic on raw mean_attribution)
-  - correct_chrx_bias.py     (removal of --null-rankings flag)
+  - correct_chrx_bias.py     (removal of --null-rankings flag; significance column passthrough)
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import scripts.compare_attributions as compare_mod
+import scripts.correct_chrx_bias as chrx_mod
 
 
 # ---------------------------------------------------------------------------
@@ -318,5 +319,213 @@ class TestCorrectChrxBiasNoNullRankings:
         )
         assert result.returncode == 2, (
             f"Expected exit code 2 from argparse error, got {result.returncode}. "
+            f"stderr: {result.stderr}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# correct_chrx_bias.py preserves significance columns from compare_attributions
+# ---------------------------------------------------------------------------
+
+class TestCorrectChrxBiasPreservesSignificanceColumns:
+
+    def test_significance_columns_preserved(self, tmp_path: Path) -> None:
+        """
+        compute_chromosome_zscores() must pass through empirical_p_variant and
+        fdr_variant when they are present in the input DataFrame.
+        """
+        from src.data.genome import get_genome_build
+        rng = np.random.default_rng(77)
+        n = 100
+        df = pd.DataFrame({
+            'chromosome': [str(rng.integers(1, 23)) for _ in range(n)],
+            'position': rng.integers(1_000_000, 250_000_000, size=n),
+            'mean_attribution': rng.normal(0.5, 1, size=n),
+            'gene_name': [f'GENE_{i}' for i in range(n)],
+            'empirical_p_variant': rng.uniform(0, 1, size=n),
+            'fdr_variant': rng.uniform(0, 1, size=n),
+        })
+        df['chromosome'] = df['chromosome'].astype(str)
+        build = get_genome_build('GRCh37')
+        corrected = chrx_mod.compute_chromosome_zscores(df, build)
+        assert 'empirical_p_variant' in corrected.columns, \
+            "empirical_p_variant must be preserved after chrX correction"
+        assert 'fdr_variant' in corrected.columns, \
+            "fdr_variant must be preserved after chrX correction"
+        # Values should be identical (column is not modified by z-scoring)
+        pd.testing.assert_series_equal(
+            corrected['empirical_p_variant'].reset_index(drop=True),
+            df['empirical_p_variant'].reset_index(drop=True),
+        )
+        pd.testing.assert_series_equal(
+            corrected['fdr_variant'].reset_index(drop=True),
+            df['fdr_variant'].reset_index(drop=True),
+        )
+
+    def test_z_attribution_added(self, tmp_path: Path) -> None:
+        """compute_chromosome_zscores() adds z_attribution, corrected_rank, is_sex_chrom."""
+        from src.data.genome import get_genome_build
+        rng = np.random.default_rng(88)
+        n = 50
+        df = pd.DataFrame({
+            'chromosome': (['1'] * 25) + (['2'] * 25),
+            'position': rng.integers(1_000_000, 200_000_000, size=n),
+            'mean_attribution': rng.normal(0, 1, size=n),
+        })
+        df['chromosome'] = df['chromosome'].astype(str)
+        build = get_genome_build('GRCh37')
+        corrected = chrx_mod.compute_chromosome_zscores(df, build)
+        for col in ('z_attribution', 'corrected_rank', 'is_sex_chrom'):
+            assert col in corrected.columns, f"Column '{col}' missing from corrected output"
+
+
+# ---------------------------------------------------------------------------
+# compare_attributions.py --project-dir routing
+# ---------------------------------------------------------------------------
+
+class TestCompareAttributionsProjectDir:
+
+    def test_project_dir_routes_output_correctly(self, tmp_path: Path) -> None:
+        """
+        Using --project-dir should place output in
+        {project_dir}/real_experiments/{LEVEL}/attributions/.
+        The LEVEL is inferred from the --real path.
+        """
+        rng = np.random.default_rng(55)
+        project_dir = tmp_path / 'CohortX'
+        level = 'L2'
+        real_dir = project_dir / 'real_experiments' / level / 'attributions'
+        real_dir.mkdir(parents=True)
+
+        real_df = _make_raw_df(rng.normal(0.5, 1, size=200))
+        null_df = _make_raw_df(rng.normal(0, 1, size=300))
+
+        real_path = real_dir / 'sieve_variant_rankings.csv'
+        null_path = tmp_path / 'null.csv'
+        real_df.to_csv(real_path, index=False)
+        null_df.to_csv(null_path, index=False)
+
+        import sys as _sys
+        old_argv = _sys.argv[:]
+        _sys.argv = [
+            'compare_attributions.py',
+            '--real', str(real_path),
+            '--null', str(null_path),
+            '--project-dir', str(project_dir),
+        ]
+        try:
+            compare_mod.main()
+        finally:
+            _sys.argv = old_argv
+
+        expected_out = real_dir
+        assert (expected_out / 'variant_rankings_with_significance.csv').exists(), \
+            "variant_rankings_with_significance.csv should be in real_experiments/L2/attributions/"
+        assert (expected_out / 'gene_rankings_with_significance.csv').exists()
+        assert (expected_out / 'significance_summary.yaml').exists()
+
+    def test_infer_level_from_path_real_experiments(self) -> None:
+        """_infer_level_from_path extracts level from real_experiments paths."""
+        path = '/data/CohortX/real_experiments/L3/attributions/sieve_variant_rankings.csv'
+        assert compare_mod._infer_level_from_path(path) == 'L3'
+
+    def test_infer_level_from_path_null_baselines(self) -> None:
+        """_infer_level_from_path extracts level from null_baselines paths."""
+        path = '/data/CohortX/null_baselines/L1/attributions/sieve_variant_rankings.csv'
+        assert compare_mod._infer_level_from_path(path) == 'L1'
+
+    def test_infer_level_from_path_raises_on_unknown(self) -> None:
+        """_infer_level_from_path raises ValueError when level cannot be found."""
+        path = '/data/CohortX/some_other_dir/sieve_variant_rankings.csv'
+        with pytest.raises(ValueError, match='Cannot infer annotation level'):
+            compare_mod._infer_level_from_path(path)
+
+    def test_project_dir_and_output_dir_mutually_exclusive(
+        self, tmp_path: Path,
+    ) -> None:
+        """Passing both --project-dir and --output-dir should fail with exit code 2."""
+        script = (
+            Path(__file__).parent.parent / 'scripts' / 'compare_attributions.py'
+        )
+        result = subprocess.run(
+            [sys.executable, str(script),
+             '--real', '/some/real.csv',
+             '--null', '/some/null.csv',
+             '--output-dir', '/some/out',
+             '--project-dir', '/some/project'],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 2, (
+            f"Expected exit code 2 from argparse, got {result.returncode}. "
+            f"stderr: {result.stderr}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# correct_chrx_bias.py --project-dir routing
+# ---------------------------------------------------------------------------
+
+class TestCorrectChrxBiasProjectDir:
+
+    def test_project_dir_routes_output_correctly(self, tmp_path: Path) -> None:
+        """
+        Using --project-dir should place output in
+        {project_dir}/real_experiments/{LEVEL}/attributions/corrected/.
+        LEVEL is inferred from the --rankings path.
+        """
+        rng = np.random.default_rng(33)
+        project_dir = tmp_path / 'CohortY'
+        level = 'L1'
+        attr_dir = project_dir / 'real_experiments' / level / 'attributions'
+        attr_dir.mkdir(parents=True)
+
+        n = 80
+        df = pd.DataFrame({
+            'chromosome': (['1'] * 40) + (['2'] * 40),
+            'position': rng.integers(1_000_000, 200_000_000, size=n),
+            'mean_attribution': rng.normal(0.5, 1, size=n),
+            'gene_name': [f'GENE_{i}' for i in range(n)],
+            'empirical_p_variant': rng.uniform(0, 1, size=n),
+            'fdr_variant': rng.uniform(0, 1, size=n),
+        })
+        rankings_path = attr_dir / 'variant_rankings_with_significance.csv'
+        df.to_csv(rankings_path, index=False)
+
+        script = (
+            Path(__file__).parent.parent / 'scripts' / 'correct_chrx_bias.py'
+        )
+        result = subprocess.run(
+            [sys.executable, str(script),
+             '--rankings', str(rankings_path),
+             '--project-dir', str(project_dir),
+             '--include-sex-chroms',
+             '--genome-build', 'GRCh37'],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, (
+            f"correct_chrx_bias.py failed with exit {result.returncode}.\n"
+            f"stdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+        expected_out = attr_dir / 'corrected'
+        assert (expected_out / 'corrected_variant_rankings.csv').exists(), \
+            "corrected_variant_rankings.csv should be in real_experiments/L1/attributions/corrected/"
+
+    def test_project_dir_and_output_dir_mutually_exclusive(self) -> None:
+        """Passing both --project-dir and --output-dir should fail with exit code 2."""
+        script = (
+            Path(__file__).parent.parent / 'scripts' / 'correct_chrx_bias.py'
+        )
+        result = subprocess.run(
+            [sys.executable, str(script),
+             '--rankings', '/some/rankings.csv',
+             '--output-dir', '/some/out',
+             '--project-dir', '/some/project'],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 2, (
+            f"Expected exit code 2 from argparse, got {result.returncode}. "
             f"stderr: {result.stderr}"
         )
