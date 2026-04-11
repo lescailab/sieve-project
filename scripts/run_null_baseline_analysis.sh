@@ -20,11 +20,16 @@
 # AFTER this pipeline completes.
 #
 # This script produces null-contrasted rankings with empirical p-values and FDR
-# correction.  The significance columns are written to:
-#   ${PROJECT_DIR}/real_experiments/${LEVEL}/attributions/
-#     variant_rankings_with_significance.csv
-#     gene_rankings_with_significance.csv
-#     significance_summary.yaml
+# correction.  The significance output directory (COMPARISON_DIR) is derived
+# from OUTPUT_BASE:
+#   - Preferred mode (PROJECT_DIR + LEVEL):
+#       ${OUTPUT_BASE}/real_experiments/${LEVEL}/attributions/
+#   - Legacy mode (OUTPUT_BASE set explicitly):
+#       ${OUTPUT_BASE}/results/attribution_comparison/
+# The following files are written to COMPARISON_DIR:
+#   variant_rankings_with_significance.csv
+#   gene_rankings_with_significance.csv
+#   significance_summary.yaml
 #
 # IMPORTANT: The null model must be trained under identical conditions to the
 # real model.  The only difference is the permuted labels.  Hyperparameters are
@@ -233,6 +238,19 @@ echo "  epochs:               $CFG_EPOCHS"
 echo "  genome_build:         $CFG_GENOME_BUILD"
 echo "  sex_map:              ${CFG_SEX_MAP:-<not set>}"
 echo ""
+
+# Validate that LEVEL (directory routing) matches CFG_LEVEL (model config).
+# When PROJECT_DIR+LEVEL are used for path derivation, a mismatch would
+# silently place outputs under the wrong level directory.
+if [ -n "$LEVEL" ] && [ "$LEVEL" != "$CFG_LEVEL" ]; then
+    echo "ERROR: LEVEL=${LEVEL} does not match the annotation level in the real experiment"
+    echo "       config (level=${CFG_LEVEL} from ${REAL_CONFIG})."
+    echo "  The directory layout uses LEVEL for path routing, but the model will be"
+    echo "  trained with the config's level (${CFG_LEVEL}). These must match to avoid"
+    echo "  placing outputs in the wrong directory."
+    echo "  Either set LEVEL=${CFG_LEVEL} or correct the real experiment config."
+    exit 1
+fi
 
 # Validate sex map file if config says one was used
 if [ -n "$CFG_SEX_MAP" ] && [ ! -f "$CFG_SEX_MAP" ]; then

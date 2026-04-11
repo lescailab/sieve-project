@@ -460,3 +460,72 @@ class TestCompareAttributionsProjectDir:
             f"Expected exit code 2 from argparse, got {result.returncode}. "
             f"stderr: {result.stderr}"
         )
+
+
+# ---------------------------------------------------------------------------
+# correct_chrx_bias.py --project-dir routing
+# ---------------------------------------------------------------------------
+
+class TestCorrectChrxBiasProjectDir:
+
+    def test_project_dir_routes_output_correctly(self, tmp_path: Path) -> None:
+        """
+        Using --project-dir should place output in
+        {project_dir}/real_experiments/{LEVEL}/attributions/corrected/.
+        LEVEL is inferred from the --rankings path.
+        """
+        rng = np.random.default_rng(33)
+        project_dir = tmp_path / 'CohortY'
+        level = 'L1'
+        attr_dir = project_dir / 'real_experiments' / level / 'attributions'
+        attr_dir.mkdir(parents=True)
+
+        n = 80
+        df = pd.DataFrame({
+            'chromosome': (['1'] * 40) + (['2'] * 40),
+            'position': rng.integers(1_000_000, 200_000_000, size=n),
+            'mean_attribution': rng.normal(0.5, 1, size=n),
+            'gene_name': [f'GENE_{i}' for i in range(n)],
+            'empirical_p_variant': rng.uniform(0, 1, size=n),
+            'fdr_variant': rng.uniform(0, 1, size=n),
+        })
+        rankings_path = attr_dir / 'variant_rankings_with_significance.csv'
+        df.to_csv(rankings_path, index=False)
+
+        script = (
+            Path(__file__).parent.parent / 'scripts' / 'correct_chrx_bias.py'
+        )
+        result = subprocess.run(
+            [sys.executable, str(script),
+             '--rankings', str(rankings_path),
+             '--project-dir', str(project_dir),
+             '--include-sex-chroms',
+             '--genome-build', 'GRCh37'],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, (
+            f"correct_chrx_bias.py failed with exit {result.returncode}.\n"
+            f"stdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+        expected_out = attr_dir / 'corrected'
+        assert (expected_out / 'corrected_variant_rankings.csv').exists(), \
+            "corrected_variant_rankings.csv should be in real_experiments/L1/attributions/corrected/"
+
+    def test_project_dir_and_output_dir_mutually_exclusive(self) -> None:
+        """Passing both --project-dir and --output-dir should fail with exit code 2."""
+        script = (
+            Path(__file__).parent.parent / 'scripts' / 'correct_chrx_bias.py'
+        )
+        result = subprocess.run(
+            [sys.executable, str(script),
+             '--rankings', '/some/rankings.csv',
+             '--output-dir', '/some/out',
+             '--project-dir', '/some/project'],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 2, (
+            f"Expected exit code 2 from argparse, got {result.returncode}. "
+            f"stderr: {result.stderr}"
+        )
