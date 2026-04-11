@@ -356,11 +356,11 @@ for i in {0..4}; do
         --is-null-baseline
 done
 
-# Compare one corrected real run against one corrected null run
+# Compare raw real run against one raw null run
 # (multi-permutation null support is not implemented in compare_attributions.py)
 python scripts/compare_attributions.py \
-    --corrected-real results/explainability/corrected/corrected_variant_rankings.csv \
-    --corrected-null results/null_permutations/perm0/corrected/corrected_variant_rankings.csv \
+    --real results/explainability/sieve_variant_rankings.csv \
+    --null results/null_permutations/perm0/sieve_variant_rankings.csv \
     --output-dir results/comparison_robust \
     --genome-build GRCh37
 ```

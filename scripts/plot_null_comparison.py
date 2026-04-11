@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 """
-Plot real vs null z_attribution distributions.
+Plot real vs null mean_attribution distributions.
 
-Consumes the two corrected rankings files produced by correct_chrx_bias.py
-(both must contain a z_attribution column) and writes a two-panel PNG:
+Consumes two raw rankings files (sieve_variant_rankings.csv from real and null
+explainability runs) and writes a two-panel PNG:
 
-  Panel 1 — overlaid histograms of z_attribution (real = blue, null = grey)
+  Panel 1 — overlaid histograms of mean_attribution (real = blue, null = grey)
   Panel 2 — Q-Q plot of real quantiles vs null quantiles
 
 Usage:
     python scripts/plot_null_comparison.py \
-        --corrected-real  /path/to/real/corrected/corrected_variant_rankings.csv \
-        --corrected-null  /path/to/null/corrected/corrected_variant_rankings.csv \
-        --output-png      /path/to/real_vs_null_z_attribution_comparison.png
+        --real  /path/to/real/sieve_variant_rankings.csv \
+        --null  /path/to/null/sieve_variant_rankings.csv \
+        --output-png      /path/to/real_vs_null_attribution_comparison.png
 
 Author: Francesco Lescai
 """
@@ -30,12 +30,12 @@ import pandas as pd
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description='Plot real vs null z_attribution distributions',
+        description='Plot real vs null mean_attribution distributions',
     )
-    parser.add_argument('--corrected-real', type=str, required=True,
-                        help='Corrected real variant rankings CSV (must have z_attribution)')
-    parser.add_argument('--corrected-null', type=str, required=True,
-                        help='Corrected null variant rankings CSV (must have z_attribution)')
+    parser.add_argument('--real', type=str, required=True,
+                        help='Raw real variant rankings CSV (must have mean_attribution)')
+    parser.add_argument('--null', type=str, required=True,
+                        help='Raw null variant rankings CSV (must have mean_attribution)')
     parser.add_argument('--output-png', type=str, required=True,
                         help='Path for the output PNG file')
     parser.add_argument('--title-suffix', type=str, default='',
@@ -43,29 +43,29 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _require_z_attribution(df: pd.DataFrame, label: str) -> None:
-    if 'z_attribution' not in df.columns:
-        print(f"ERROR: '{label}' file does not have a 'z_attribution' column.")
-        print("Run correct_chrx_bias.py on this file first.")
+def _require_mean_attribution(df: pd.DataFrame, label: str) -> None:
+    if 'mean_attribution' not in df.columns:
+        print(f"ERROR: '{label}' file does not have a 'mean_attribution' column.")
+        print("Ensure you are passing the raw sieve_variant_rankings.csv file.")
         sys.exit(1)
 
 
 def main() -> None:
     args = parse_args()
 
-    real_df = pd.read_csv(args.corrected_real)
-    _require_z_attribution(real_df, 'corrected-real')
-    null_df = pd.read_csv(args.corrected_null)
-    _require_z_attribution(null_df, 'corrected-null')
+    real_df = pd.read_csv(args.real)
+    _require_mean_attribution(real_df, 'real')
+    null_df = pd.read_csv(args.null)
+    _require_mean_attribution(null_df, 'null')
 
-    real_z = pd.to_numeric(real_df['z_attribution'], errors='coerce').dropna().values
-    null_z = pd.to_numeric(null_df['z_attribution'], errors='coerce').dropna().values
+    real_attr = pd.to_numeric(real_df['mean_attribution'], errors='coerce').dropna().values
+    null_attr = pd.to_numeric(null_df['mean_attribution'], errors='coerce').dropna().values
 
-    if real_z.size == 0:
-        print("ERROR: no finite z_attribution values found in corrected-real file.")
+    if real_attr.size == 0:
+        print("ERROR: no finite mean_attribution values found in real file.")
         sys.exit(1)
-    if null_z.size == 0:
-        print("ERROR: no finite z_attribution values found in corrected-null file.")
+    if null_attr.size == 0:
+        print("ERROR: no finite mean_attribution values found in null file.")
         sys.exit(1)
 
     suffix = f' — {args.title_suffix}' if args.title_suffix else ''
@@ -75,18 +75,15 @@ def main() -> None:
     # --- Panel 1: overlaid histograms ---
     ax = axes[0]
     bins = np.linspace(
-        min(real_z.min(), null_z.min()),
-        max(real_z.max(), null_z.max()),
+        min(real_attr.min(), null_attr.min()),
+        max(real_attr.max(), null_attr.max()),
         80,
     )
-    ax.hist(null_z, bins=bins, alpha=0.55, label='Null', density=True,
+    ax.hist(null_attr, bins=bins, alpha=0.55, label='Null', density=True,
             color='#888888', edgecolor='none')
-    ax.hist(real_z, bins=bins, alpha=0.55, label='Real', density=True,
+    ax.hist(real_attr, bins=bins, alpha=0.55, label='Real', density=True,
             color='steelblue', edgecolor='none')
-    for xv, ls in [(2.0, '--'), (3.0, '-')]:
-        ax.axvline(xv, color='tomato', linestyle=ls, linewidth=0.9,
-                   label=f'z = {xv:.0f}')
-    ax.set_xlabel('z_attribution (per-chromosome z-score)')
+    ax.set_xlabel('mean_attribution')
     ax.set_ylabel('Density')
     ax.set_title(f'Real vs Null attribution distributions{suffix}')
     ax.legend(fontsize=8)
@@ -95,8 +92,8 @@ def main() -> None:
     ax = axes[1]
     n_points = 500
     quantiles = np.linspace(0, 100, n_points)
-    real_q = np.percentile(real_z, quantiles)
-    null_q = np.percentile(null_z, quantiles)
+    real_q = np.percentile(real_attr, quantiles)
+    null_q = np.percentile(null_attr, quantiles)
     ax.scatter(null_q, real_q, s=6, alpha=0.6, color='steelblue')
     lim = (min(null_q.min(), real_q.min()), max(null_q.max(), real_q.max()))
     ax.plot(lim, lim, color='tomato', linestyle='--', linewidth=0.9,
