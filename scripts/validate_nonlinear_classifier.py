@@ -93,8 +93,10 @@ SUMMARY_COLUMNS = [
 ]
 GENE_COLUMN_CANDIDATES = ["gene_name", "gene_symbol", "gene_id", "gene"]
 LEVEL_RANKING_CANDIDATES = [
+    "gene_rankings_with_significance.csv",
     "corrected_gene_rankings_with_significance.csv",
     "corrected_gene_rankings.csv",
+    "results/attribution_comparison/gene_rankings_with_significance.csv",
     "corrected/corrected_gene_rankings_with_significance.csv",
     "corrected/corrected_gene_rankings.csv",
     "results/attribution_comparison_corrected/corrected_gene_rankings_with_significance.csv",

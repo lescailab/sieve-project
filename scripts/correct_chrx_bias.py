@@ -5,9 +5,11 @@ Post-hoc attribution correction for chrX ploidy bias.
 Takes a single attribution rankings file and produces corrected rankings with
 chrX/chrY bias removed via per-chromosome z-score normalisation.
 
-To compare real and null rankings with empirical p-values and FDR, first run
-this script independently on both files, then pass the two corrected outputs
-to compare_attributions.py.
+This script corrects chrX ploidy bias for ranking and visualisation purposes.
+It should be run on the real rankings AFTER the null comparison
+(compare_attributions.py) has been computed on raw attributions.  Do not apply
+this correction to null rankings — the null comparison must operate on raw
+mean_attribution values.
 
 Usage:
     python scripts/correct_chrx_bias.py \

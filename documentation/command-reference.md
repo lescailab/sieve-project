@@ -274,8 +274,8 @@ python scripts/compare_attributions.py [OPTIONS]
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `--corrected-real` | path | required | Corrected real variant rankings CSV from `correct_chrx_bias.py` |
-| `--corrected-null` | path | required | Corrected null variant rankings CSV from `correct_chrx_bias.py` |
+| `--real` | path | required | Raw real variant rankings CSV (`sieve_variant_rankings.csv`) |
+| `--null` | path | required | Raw null variant rankings CSV (`sieve_variant_rankings.csv`) |
 | `--output-dir` | path | required | Output directory |
 | `--genome-build` | str | GRCh37 | Reference genome build |
 | `--exclude-sex-chroms` | flag | False | Exclude chrX/chrY before empirical p-value and FDR computation |
@@ -283,9 +283,9 @@ python scripts/compare_attributions.py [OPTIONS]
 **Example**:
 ```bash
 python scripts/compare_attributions.py \
-    --corrected-real results/explainability/corrected/corrected_variant_rankings.csv \
-    --corrected-null results/null_attributions/corrected/corrected_variant_rankings.csv \
-    --output-dir results/attribution_comparison_corrected \
+    --real results/explainability/sieve_variant_rankings.csv \
+    --null results/null_attributions/sieve_variant_rankings.csv \
+    --output-dir results/attribution_comparison \
     --genome-build GRCh37
 ```
 
@@ -335,7 +335,7 @@ Compares variant attribution rankings across annotation levels. Computes pairwis
 | `--out-comparison` | path | `ablation_ranking_comparison.yaml` | Output YAML summary |
 | `--out-jaccard` | path | `ablation_jaccard_matrix.tsv` | Output Jaccard matrix TSV |
 | `--out-level-specific` | path | `level_specific_variants.tsv` | Output level-specific variants TSV |
-| `--score-column` | str | `empirical_p_variant` | Column to rank variants by. The default is the null-contrast empirical p-value from `corrected_variant_rankings_with_significance.csv`; p/FDR-like columns are ranked ascending automatically |
+| `--score-column` | str | `empirical_p_variant` | Column to rank variants by. The default is the null-contrast empirical p-value from `variant_rankings_with_significance.csv`; p/FDR-like columns are ranked ascending automatically |
 
 **Example**:
 ```bash

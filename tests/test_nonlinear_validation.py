@@ -109,7 +109,7 @@ def prepare_inputs(
             reverse_tail=bool(level_index % 2),
         )
         rankings_df.to_csv(
-            level_dir / "corrected_gene_rankings_with_significance.csv",
+            level_dir / "gene_rankings_with_significance.csv",
             index=False,
         )
 
@@ -266,7 +266,7 @@ class TestNonlinearValidation:
         burden_path, label_path, rankings_root = prepare_inputs(tmp_path, levels=("L0", "L1"))
         output_tsv = tmp_path / "k_effective.tsv"
 
-        l1_path = rankings_root / "L1" / "corrected_gene_rankings_with_significance.csv"
+        l1_path = rankings_root / "L1" / "gene_rankings_with_significance.csv"
         l1_rankings = pd.read_csv(l1_path)
         l1_rankings.loc[0, "gene_name"] = "MISSING_GENE_A"
         l1_rankings.loc[1, "gene_name"] = "MISSING_GENE_B"

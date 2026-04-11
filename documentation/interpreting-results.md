@@ -100,7 +100,7 @@ If you used sex-aware preprocessing or observe chrX inflation in rankings, run `
 
 By default, the corrected rankings exclude sex chromosomes. Use `--include-sex-chroms` if you want to keep them in the output (they remain flagged).
 
-For ablation comparison, use the null-contrasted files `corrected_variant_rankings_with_significance.csv` produced by `run_null_baseline_analysis.sh` and rank variants with `--score-column empirical_p_variant`. Lower empirical p-values are treated as better ranks automatically, so the cross-level comparison operates on null-compared evidence rather than raw or merely chrX-corrected effect sizes.
+For ablation comparison, use the null-contrasted files `variant_rankings_with_significance.csv` produced by `run_null_baseline_analysis.sh` and rank variants with `--score-column empirical_p_variant`. Lower empirical p-values are treated as better ranks automatically, so the cross-level comparison operates on null-compared evidence rather than raw or merely chrX-corrected effect sizes.
 
 #### Gene Rankings
 
@@ -145,13 +145,14 @@ gene_significance:
 
 **How to Interpret**:
 
-1. **Read the variant-level file** `corrected_variant_rankings_with_significance.csv`:
-   - `empirical_p_variant` is the empirical p-value against the corrected null distribution
+1. **Read the variant-level file** `variant_rankings_with_significance.csv`:
+   - `empirical_p_variant` is the empirical p-value against the null `mean_attribution` distribution
    - `fdr_variant` is the BH-adjusted value across all tested variants
 
-2. **Read the gene-level file** `corrected_gene_rankings_with_significance.csv`:
-   - `gene_z_score` is the maximum corrected variant score per gene
+2. **Read the gene-level file** `gene_rankings_with_significance.csv`:
+   - `gene_score` is the maximum `mean_attribution` per gene
    - `empirical_p_gene` and `fdr_gene` are the gene-level significance metrics
+   - ChrX correction is applied separately (via `correct_chrx_bias.py`) for ranking purposes
 
 3. **Use FDR for decisions**:
    - `fdr_gene < 0.05`: suitable for manuscript-level per-gene claims
