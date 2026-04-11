@@ -58,8 +58,15 @@ def main() -> None:
     null_df = pd.read_csv(args.corrected_null)
     _require_z_attribution(null_df, 'corrected-null')
 
-    real_z = real_df['z_attribution'].dropna().values
-    null_z = null_df['z_attribution'].dropna().values
+    real_z = pd.to_numeric(real_df['z_attribution'], errors='coerce').dropna().values
+    null_z = pd.to_numeric(null_df['z_attribution'], errors='coerce').dropna().values
+
+    if real_z.size == 0:
+        print("ERROR: no finite z_attribution values found in corrected-real file.")
+        sys.exit(1)
+    if null_z.size == 0:
+        print("ERROR: no finite z_attribution values found in corrected-null file.")
+        sys.exit(1)
 
     suffix = f' — {args.title_suffix}' if args.title_suffix else ''
 
