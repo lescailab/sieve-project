@@ -90,7 +90,7 @@ python scripts/validate_nonlinear_classifier.py \
 
 ### Multi-Level Mode
 
-Point `--real-rankings-dir` at a directory with one subdirectory per annotation level. Each level directory should contain `corrected_gene_rankings_with_significance.csv` (preferred) or `corrected_gene_rankings.csv`.
+Point `--real-rankings-dir` at a directory with one subdirectory per annotation level. Each level directory should contain `gene_rankings_with_significance.csv` (preferred), `corrected_gene_rankings_with_significance.csv`, or `corrected_gene_rankings.csv`.
 
 ```bash
 python scripts/validate_nonlinear_classifier.py \

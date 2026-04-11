@@ -1044,7 +1044,7 @@ done
 # Compare null-contrasted significance rankings
 mkdir -p results/ablation/significance_rankings
 for LEVEL in L0 L1 L2 L3; do
-    cp results/null_baseline_${LEVEL}/results/attribution_comparison_corrected/corrected_variant_rankings_with_significance.csv \
+    cp results/null_baseline_${LEVEL}/results/attribution_comparison/variant_rankings_with_significance.csv \
        results/ablation/significance_rankings/${LEVEL}_sieve_variant_rankings.csv
 done
 
@@ -1069,10 +1069,10 @@ If your ranking files are not in a single directory with level prefixes, you can
 
 ```bash
 python scripts/compare_ablation_rankings.py \
-    --rankings L0:results/null_baseline_L0/results/attribution_comparison_corrected/corrected_variant_rankings_with_significance.csv \
-               L1:results/null_baseline_L1/results/attribution_comparison_corrected/corrected_variant_rankings_with_significance.csv \
-               L2:results/null_baseline_L2/results/attribution_comparison_corrected/corrected_variant_rankings_with_significance.csv \
-               L3:results/null_baseline_L3/results/attribution_comparison_corrected/corrected_variant_rankings_with_significance.csv \
+    --rankings L0:results/null_baseline_L0/results/attribution_comparison/variant_rankings_with_significance.csv \
+               L1:results/null_baseline_L1/results/attribution_comparison/variant_rankings_with_significance.csv \
+               L2:results/null_baseline_L2/results/attribution_comparison/variant_rankings_with_significance.csv \
+               L3:results/null_baseline_L3/results/attribution_comparison/variant_rankings_with_significance.csv \
     --score-column empirical_p_variant \
     --out-comparison results/ablation/ablation_ranking_comparison.yaml \
     --out-jaccard results/ablation/ablation_jaccard_matrix.tsv \
@@ -1105,7 +1105,7 @@ done
 # 2. Copy null-contrasted significance files into a comparison directory
 mkdir -p results/ablation/significance_rankings
 for LEVEL in L0 L1 L2 L3; do
-    cp results/null_baseline_${LEVEL}/results/attribution_comparison_corrected/corrected_variant_rankings_with_significance.csv \
+    cp results/null_baseline_${LEVEL}/results/attribution_comparison/variant_rankings_with_significance.csv \
        results/ablation/significance_rankings/${LEVEL}_sieve_variant_rankings.csv
 done
 
@@ -1407,8 +1407,8 @@ python scripts/compare_attributions.py [OPTIONS]
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `--corrected-real` | path | required | Corrected real variant rankings CSV from `correct_chrx_bias.py` |
-| `--corrected-null` | path | required | Corrected null variant rankings CSV from `correct_chrx_bias.py` |
+| `--real` | path | required | Raw real variant rankings CSV (`sieve_variant_rankings.csv`) |
+| `--null` | path | required | Raw null variant rankings CSV (`sieve_variant_rankings.csv`) |
 | `--output-dir` | path | required | Output directory |
 | `--genome-build` | str | GRCh37 | Reference genome build |
 | `--exclude-sex-chroms` | flag | False | Exclude chrX/chrY before empirical p-value and FDR computation |
@@ -1416,9 +1416,9 @@ python scripts/compare_attributions.py [OPTIONS]
 **Example**:
 ```bash
 python scripts/compare_attributions.py \
-    --corrected-real results/explainability/corrected/corrected_variant_rankings.csv \
-    --corrected-null results/null_attributions/corrected/corrected_variant_rankings.csv \
-    --output-dir results/attribution_comparison_corrected \
+    --real results/explainability/sieve_variant_rankings.csv \
+    --null results/null_attributions/sieve_variant_rankings.csv \
+    --output-dir results/attribution_comparison \
     --genome-build GRCh37
 ```
 
@@ -1468,7 +1468,7 @@ Compares variant attribution rankings across annotation levels. Computes pairwis
 | `--out-comparison` | path | `ablation_ranking_comparison.yaml` | Output YAML summary |
 | `--out-jaccard` | path | `ablation_jaccard_matrix.tsv` | Output Jaccard matrix TSV |
 | `--out-level-specific` | path | `level_specific_variants.tsv` | Output level-specific variants TSV |
-| `--score-column` | str | `empirical_p_variant` | Column to rank variants by. The default is the null-contrast empirical p-value from `corrected_variant_rankings_with_significance.csv`; p/FDR-like columns are ranked ascending automatically |
+| `--score-column` | str | `empirical_p_variant` | Column to rank variants by. The default is the null-contrast empirical p-value from `variant_rankings_with_significance.csv`; p/FDR-like columns are ranked ascending automatically |
 
 **Example**:
 ```bash
@@ -1745,7 +1745,7 @@ If you used sex-aware preprocessing or observe chrX inflation in rankings, run `
 
 By default, the corrected rankings exclude sex chromosomes. Use `--include-sex-chroms` if you want to keep them in the output (they remain flagged).
 
-For ablation comparison, use the null-contrasted files `corrected_variant_rankings_with_significance.csv` produced by `run_null_baseline_analysis.sh` and rank variants with `--score-column empirical_p_variant`. Lower empirical p-values are treated as better ranks automatically, so the cross-level comparison operates on null-compared evidence rather than raw or merely chrX-corrected effect sizes.
+For ablation comparison, use the null-contrasted files `variant_rankings_with_significance.csv` produced by `run_null_baseline_analysis.sh` and rank variants with `--score-column empirical_p_variant`. Lower empirical p-values are treated as better ranks automatically, so the cross-level comparison operates on null-compared evidence rather than raw or merely chrX-corrected effect sizes.
 
 #### Gene Rankings
 
@@ -1790,12 +1790,12 @@ gene_significance:
 
 **How to Interpret**:
 
-1. **Read the variant-level file** `corrected_variant_rankings_with_significance.csv`:
-   - `empirical_p_variant` is the empirical p-value against the corrected null distribution
+1. **Read the variant-level file** `variant_rankings_with_significance.csv`:
+   - `empirical_p_variant` is the empirical p-value against the null `mean_attribution` distribution
    - `fdr_variant` is the BH-adjusted value across all tested variants
 
-2. **Read the gene-level file** `corrected_gene_rankings_with_significance.csv`:
-   - `gene_z_score` is the maximum corrected variant score per gene
+2. **Read the gene-level file** `gene_rankings_with_significance.csv`:
+   - `gene_score` is the maximum `mean_attribution` per gene
    - `empirical_p_gene` and `fdr_gene` are the gene-level significance metrics
 
 3. **Use FDR for decisions**:
