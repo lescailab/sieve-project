@@ -335,7 +335,7 @@ Compares variant attribution rankings across annotation levels. Computes pairwis
 | `--out-comparison` | path | `ablation_ranking_comparison.yaml` | Output YAML summary |
 | `--out-jaccard` | path | `ablation_jaccard_matrix.tsv` | Output Jaccard matrix TSV |
 | `--out-level-specific` | path | `level_specific_variants.tsv` | Output level-specific variants TSV |
-| `--score-column` | str | `empirical_p_variant` | Column to rank variants by. The default is the null-contrast empirical p-value from `corrected_variant_rankings_with_significance.csv`; p/FDR-like columns are ranked ascending automatically |
+| `--score-column` | str | `empirical_p_variant` | Column to rank variants by. The default is the null-contrast empirical p-value from `variant_rankings_with_significance.csv`; p/FDR-like columns are ranked ascending automatically |
 
 **Example**:
 ```bash
