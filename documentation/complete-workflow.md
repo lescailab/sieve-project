@@ -221,10 +221,11 @@ python scripts/compare_attributions.py \
     --output-dir results/attribution_comparison \
     --genome-build GRCh37
 
-# 5. (Separate) Apply chrX correction to real rankings for ranking/visualisation
+# 5. (Separate) Apply chrX correction to the significance-annotated file
+#    Run this AFTER compare_attributions.py so significance columns are preserved
 python scripts/correct_chrx_bias.py \
-    --rankings results/explainability/sieve_variant_rankings.csv \
-    --output-dir results/explainability/corrected \
+    --rankings results/attribution_comparison/variant_rankings_with_significance.csv \
+    --output-dir results/attribution_comparison/corrected \
     --include-sex-chroms \
     --genome-build GRCh37
 ```
@@ -272,23 +273,23 @@ python scripts/ablation_compare.py \
 
 **Step 5b: Run the required null baseline at each level**:
 ```bash
+# Preferred: cohort-centric layout (PROJECT_DIR must contain data/ and real_experiments/)
 for LEVEL in L0 L1 L2 L3; do
-    export INPUT_DATA=preprocessed.pt
-    export REAL_EXPERIMENT=experiments/ablation_${LEVEL}
-    export REAL_RESULTS=results/${LEVEL}_explainability
-    export OUTPUT_BASE=results/null_baseline_${LEVEL}
+    PROJECT_DIR=/data/CohortName \
+    LEVEL=$LEVEL \
     bash scripts/run_null_baseline_analysis.sh
 done
 ```
 
 **Step 5c: Compare null-contrasted variant attribution rankings across levels**:
 ```bash
-# Collect null-contrasted significance files into one directory with level prefixes
+# Collect chrX-corrected significance files into one directory with level prefixes.
+# Use corrected_variant_rankings.csv — it contains significance + chrX-corrected z-scores.
 mkdir -p results/ablation/rankings
-cp results/null_baseline_L0/results/attribution_comparison/variant_rankings_with_significance.csv results/ablation/rankings/L0_sieve_variant_rankings.csv
-cp results/null_baseline_L1/results/attribution_comparison/variant_rankings_with_significance.csv results/ablation/rankings/L1_sieve_variant_rankings.csv
-cp results/null_baseline_L2/results/attribution_comparison/variant_rankings_with_significance.csv results/ablation/rankings/L2_sieve_variant_rankings.csv
-cp results/null_baseline_L3/results/attribution_comparison/variant_rankings_with_significance.csv results/ablation/rankings/L3_sieve_variant_rankings.csv
+for LEVEL in L0 L1 L2 L3; do
+    cp /data/CohortName/real_experiments/${LEVEL}/attributions/corrected/corrected_variant_rankings.csv \
+       results/ablation/rankings/${LEVEL}_sieve_variant_rankings.csv
+done
 
 # Run comparison
 python scripts/compare_ablation_rankings.py \

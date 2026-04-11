@@ -237,23 +237,46 @@ python scripts/create_null_baseline.py \
 bash scripts/run_null_baseline_analysis.sh
 ```
 
-This wrapper is configured through environment variables:
+This wrapper is configured through environment variables.
+
+#### Preferred interface (cohort-centric layout)
 
 | Variable | Required | Description |
 |---------|----------|-------------|
-| `INPUT_DATA` | Yes | Path to real preprocessed `.pt` file |
-| `REAL_EXPERIMENT` | Yes | Real experiment directory (single run) or fold directory (CV) |
-| `OUTPUT_BASE` | Yes | Base directory where null outputs are written |
-| `REAL_RESULTS` | No (recommended) | Directory containing real `sieve_variant_rankings.csv` |
+| `PROJECT_DIR` | Yes | Cohort project root directory (e.g. `/data/CohortName`) |
+| `LEVEL` | Yes | Annotation level to run (e.g. `L3`) |
+| `NULL_DATA` | No | Pre-existing permuted `.pt` file — skips Step 1 if set |
 | `DEVICE` | No | `cuda` or `cpu` (default: `cuda`) |
 | `PYTHON` | No | Python interpreter path override |
+| `EXCLUDE_SEX_CHROMS` | No | Set to `1` to pass `--exclude-sex-chroms` to the comparison step |
 
-Behaviour:
-- Reads model/training hyperparameters from real `config.yaml` (in `REAL_EXPERIMENT` or parent).
-- Carries over `sex_map` automatically when the real model used sex covariates.
-- Resolves script paths relative to wrapper location, so it can be run from any working directory.
+When `PROJECT_DIR` and `LEVEL` are set, all paths are derived automatically:
+- Input data: first `preprocessed*.pt` (not `*_NULL*`) found in `${PROJECT_DIR}/data/`
+- Real experiment: `${PROJECT_DIR}/real_experiments/${LEVEL}/training`
+- Real results: `${PROJECT_DIR}/real_experiments/${LEVEL}/attributions`
+- Null outputs: `${PROJECT_DIR}/null_baselines/${LEVEL}/`
+- Significance output: `${PROJECT_DIR}/real_experiments/${LEVEL}/attributions/`
 
-**Example**:
+**Preferred example**:
+```bash
+PROJECT_DIR=/data/CohortName \
+LEVEL=L3 \
+DEVICE=cuda \
+bash scripts/run_null_baseline_analysis.sh
+```
+
+#### Legacy interface (still supported)
+
+Explicit variable overrides take precedence over derived paths when set alongside `PROJECT_DIR`/`LEVEL`, or can replace them entirely.
+
+| Variable | Description |
+|---------|-------------|
+| `INPUT_DATA` | Path to real preprocessed `.pt` file |
+| `REAL_EXPERIMENT` | Real experiment training directory |
+| `REAL_RESULTS` | Directory containing real `sieve_variant_rankings.csv` |
+| `OUTPUT_BASE` | Base directory where null outputs are written |
+
+**Legacy example**:
 ```bash
 export INPUT_DATA=data/preprocessed.pt
 export REAL_EXPERIMENT=experiments/my_model
@@ -263,6 +286,11 @@ export DEVICE=cuda
 
 bash scripts/run_null_baseline_analysis.sh
 ```
+
+Behaviour:
+- Reads model/training hyperparameters from real `config.yaml` (in `REAL_EXPERIMENT` or parent).
+- Carries over `sex_map` automatically when the real model used sex covariates.
+- Resolves script paths relative to wrapper location, so it can be run from any working directory.
 
 ---
 
@@ -276,17 +304,30 @@ python scripts/compare_attributions.py [OPTIONS]
 |--------|------|---------|-------------|
 | `--real` | path | required | Raw real variant rankings CSV (`sieve_variant_rankings.csv`) |
 | `--null` | path | required | Raw null variant rankings CSV (`sieve_variant_rankings.csv`) |
-| `--output-dir` | path | required | Output directory |
+| `--output-dir` | path | required* | Output directory. Mutually exclusive with `--project-dir` |
+| `--project-dir` | path | required* | Cohort project root. Output routed to `{project-dir}/real_experiments/{LEVEL}/attributions/` (level inferred from `--real` path). Mutually exclusive with `--output-dir` |
 | `--genome-build` | str | GRCh37 | Reference genome build |
 | `--exclude-sex-chroms` | flag | False | Exclude chrX/chrY before empirical p-value and FDR computation |
 
-**Example**:
+\* Exactly one of `--output-dir` or `--project-dir` is required.
+
+**Example (explicit output)**:
 ```bash
 python scripts/compare_attributions.py \
     --real results/explainability/sieve_variant_rankings.csv \
     --null results/null_attributions/sieve_variant_rankings.csv \
     --output-dir results/attribution_comparison \
     --genome-build GRCh37
+```
+
+**Example (project-dir routing)**:
+```bash
+python scripts/compare_attributions.py \
+    --real /data/CohortName/real_experiments/L3/attributions/sieve_variant_rankings.csv \
+    --null /data/CohortName/null_baselines/L3/attributions/sieve_variant_rankings.csv \
+    --project-dir /data/CohortName \
+    --genome-build GRCh37
+# Output: /data/CohortName/real_experiments/L3/attributions/
 ```
 
 ---
@@ -297,22 +338,40 @@ python scripts/compare_attributions.py \
 python scripts/correct_chrx_bias.py [OPTIONS]
 ```
 
+Run this script on the significance-annotated file
+(`variant_rankings_with_significance.csv` from `compare_attributions.py`) to add
+chrX-corrected rankings while preserving all existing columns including
+`empirical_p_variant` and `fdr_variant`. Do not run on null rankings.
+
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `--rankings` | path | required | Variant rankings CSV |
-| `--output-dir` | path | required | Output directory |
+| `--rankings` | path | required | Variant rankings CSV (typically `variant_rankings_with_significance.csv`) |
+| `--output-dir` | path | required* | Output directory. Mutually exclusive with `--project-dir` |
+| `--project-dir` | path | required* | Cohort project root. Output routed to `{project-dir}/real_experiments/{LEVEL}/attributions/corrected/` (level inferred from `--rankings` path). Mutually exclusive with `--output-dir` |
 | `--exclude-sex-chroms` | flag | True | Exclude chrX/chrY from final rankings (default) |
 | `--include-sex-chroms` | flag | False | Include chrX/chrY (flagged) in rankings |
 | `--genome-build` | str | GRCh37 | Reference genome build |
 | `--top-k` | int | 100 | Top variants to annotate in plot |
 
-**Example**:
+\* Exactly one of `--output-dir` or `--project-dir` is required.
+
+**Example (explicit output)**:
 ```bash
 python scripts/correct_chrx_bias.py \
-    --rankings results/explainability/sieve_variant_rankings.csv \
-    --output-dir results/explainability_corrected \
+    --rankings results/attribution_comparison/variant_rankings_with_significance.csv \
+    --output-dir results/attribution_comparison/corrected \
     --include-sex-chroms \
     --genome-build GRCh37
+```
+
+**Example (project-dir routing)**:
+```bash
+python scripts/correct_chrx_bias.py \
+    --rankings /data/CohortName/real_experiments/L3/attributions/variant_rankings_with_significance.csv \
+    --project-dir /data/CohortName \
+    --include-sex-chroms \
+    --genome-build GRCh37
+# Output: /data/CohortName/real_experiments/L3/attributions/corrected/
 ```
 
 ---

@@ -190,13 +190,19 @@ This produces:
 To establish statistical significance:
 
 ```bash
-# Option 1: Use the complete pipeline wrapper
-export INPUT_DATA=data/preprocessed.pt
-export REAL_EXPERIMENT=experiments/my_model
-export OUTPUT_BASE=experiments
+# Option 1: Use the complete pipeline wrapper (preferred — cohort-centric layout)
+PROJECT_DIR=/data/CohortName \
+LEVEL=L3 \
 bash scripts/run_null_baseline_analysis.sh
 
-# Option 2: Run steps manually
+# Option 2: Legacy variable interface
+export INPUT_DATA=data/preprocessed.pt
+export REAL_EXPERIMENT=experiments/my_model
+export REAL_RESULTS=results/explainability
+export OUTPUT_BASE=results/null_baseline_run
+bash scripts/run_null_baseline_analysis.sh
+
+# Option 3: Run steps manually
 # Step 1: Create permuted dataset
 python scripts/create_null_baseline.py \
     --input data/preprocessed.pt \
@@ -217,19 +223,24 @@ python scripts/explain.py \
     --output-dir results/null_attributions \
     --is-null-baseline
 
-# Step 4: Compare real vs null
+# Step 4: Compare raw real vs raw null attributions
 python scripts/compare_attributions.py \
     --real results/explainability/sieve_variant_rankings.csv \
     --null results/null_attributions/sieve_variant_rankings.csv \
-    --output-dir results/comparison
+    --output-dir results/attribution_comparison
+
+# Step 5: (Separate) Apply chrX correction to significance-annotated file
+python scripts/correct_chrx_bias.py \
+    --rankings results/attribution_comparison/variant_rankings_with_significance.csv \
+    --output-dir results/attribution_comparison/corrected \
+    --include-sex-chroms
 ```
 
 The comparison produces:
 
-- `comparison_summary.yaml` - Statistical tests and thresholds
-- `significant_variants_p01.csv` - Variants exceeding p<0.01 threshold
-- `variant_rankings_with_significance.csv` - All variants annotated with significance flags
-- `real_vs_null_comparison.png` - Visualization comparing distributions
+- `variant_rankings_with_significance.csv` - All variants annotated with `empirical_p_variant` and `fdr_variant`
+- `gene_rankings_with_significance.csv` - Gene-level rankings with `empirical_p_gene` and `fdr_gene`
+- `significance_summary.yaml` - Counts of variants and genes passing FDR thresholds
 
 ### 6. Annotation Ablation (Compare Levels)
 
