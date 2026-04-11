@@ -459,9 +459,11 @@ python scripts/ablation_compare.py \
 ```bash
 # Collect chrX-corrected significance files into one directory with level prefixes.
 # Use corrected_variant_rankings.csv — it contains significance + chrX-corrected z-scores.
+# PROJECT_DIR should match what was used in Step 5a.
+PROJECT_DIR=/data/CohortName
 mkdir -p results/ablation/rankings
 for LEVEL in L0 L1 L2 L3; do
-    cp /data/CohortName/real_experiments/${LEVEL}/attributions/corrected/corrected_variant_rankings.csv \
+    cp "${PROJECT_DIR}/real_experiments/${LEVEL}/attributions/corrected/corrected_variant_rankings.csv" \
        results/ablation/rankings/${LEVEL}_sieve_variant_rankings.csv
 done
 
@@ -1034,8 +1036,10 @@ python scripts/ablation_compare.py \
     --out-summary-yaml results/ablation/ablation_summary.yaml
 
 # Run the required null baseline at each level (preferred: cohort-centric layout)
+# Set PROJECT_DIR once; reuse it in the loop.
+PROJECT_DIR=/data/CohortName
 for LEVEL in L0 L1 L2 L3; do
-    PROJECT_DIR=/data/CohortName \
+    PROJECT_DIR=$PROJECT_DIR \
     LEVEL=$LEVEL \
     bash scripts/run_null_baseline_analysis.sh
 done
@@ -1043,7 +1047,7 @@ done
 # Compare null-contrasted significance rankings (use chrX-corrected files)
 mkdir -p results/ablation/significance_rankings
 for LEVEL in L0 L1 L2 L3; do
-    cp /data/CohortName/real_experiments/${LEVEL}/attributions/corrected/corrected_variant_rankings.csv \
+    cp "${PROJECT_DIR}/real_experiments/${LEVEL}/attributions/corrected/corrected_variant_rankings.csv" \
        results/ablation/significance_rankings/${LEVEL}_sieve_variant_rankings.csv
 done
 
@@ -1067,11 +1071,12 @@ python scripts/plot_ablation_comparison.py \
 If your ranking files are not in a single directory with level prefixes, you can specify them individually:
 
 ```bash
+PROJECT_DIR=/data/CohortName
 python scripts/compare_ablation_rankings.py \
-    --rankings L0:/data/CohortName/real_experiments/L0/attributions/corrected/corrected_variant_rankings.csv \
-               L1:/data/CohortName/real_experiments/L1/attributions/corrected/corrected_variant_rankings.csv \
-               L2:/data/CohortName/real_experiments/L2/attributions/corrected/corrected_variant_rankings.csv \
-               L3:/data/CohortName/real_experiments/L3/attributions/corrected/corrected_variant_rankings.csv \
+    --rankings L0:"${PROJECT_DIR}/real_experiments/L0/attributions/corrected/corrected_variant_rankings.csv" \
+               L1:"${PROJECT_DIR}/real_experiments/L1/attributions/corrected/corrected_variant_rankings.csv" \
+               L2:"${PROJECT_DIR}/real_experiments/L2/attributions/corrected/corrected_variant_rankings.csv" \
+               L3:"${PROJECT_DIR}/real_experiments/L3/attributions/corrected/corrected_variant_rankings.csv" \
     --score-column empirical_p_variant \
     --out-comparison results/ablation/ablation_ranking_comparison.yaml \
     --out-jaccard results/ablation/ablation_jaccard_matrix.tsv \
@@ -1092,20 +1097,23 @@ Tighter thresholds (e.g., `--high-rank-threshold 50 --low-rank-threshold 200`) p
 When chrX ploidy bias inflates attributions on sex chromosomes, run `correct_chrx_bias.py` on the significance-annotated file from each level.  Running it on `variant_rankings_with_significance.csv` (output of `compare_attributions.py`) preserves `empirical_p_variant` and `fdr_variant` alongside the new chrX-corrected z-scores:
 
 ```bash
+# Set PROJECT_DIR once; reuse it throughout.
+PROJECT_DIR=/data/CohortName
+
 # 1. Apply chrX correction to each level's significance-annotated file
 for LEVEL in L0 L1 L2 L3; do
     python scripts/correct_chrx_bias.py \
-        --rankings /data/CohortName/real_experiments/${LEVEL}/attributions/variant_rankings_with_significance.csv \
-        --project-dir /data/CohortName \
+        --rankings "${PROJECT_DIR}/real_experiments/${LEVEL}/attributions/variant_rankings_with_significance.csv" \
+        --project-dir "$PROJECT_DIR" \
         --include-sex-chroms \
         --genome-build GRCh37
 done
-# Output: /data/CohortName/real_experiments/{LEVEL}/attributions/corrected/corrected_variant_rankings.csv
+# Output: ${PROJECT_DIR}/real_experiments/{LEVEL}/attributions/corrected/corrected_variant_rankings.csv
 
 # 2. Copy corrected files into a comparison directory
 mkdir -p results/ablation/significance_rankings
 for LEVEL in L0 L1 L2 L3; do
-    cp /data/CohortName/real_experiments/${LEVEL}/attributions/corrected/corrected_variant_rankings.csv \
+    cp "${PROJECT_DIR}/real_experiments/${LEVEL}/attributions/corrected/corrected_variant_rankings.csv" \
        results/ablation/significance_rankings/${LEVEL}_sieve_variant_rankings.csv
 done
 
