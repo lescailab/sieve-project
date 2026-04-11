@@ -66,13 +66,11 @@ export REAL_RESULTS="results/explainability"             # directory with sieve_
 export OUTPUT_BASE="results/null_baseline_run"           # where null outputs will be written
 bash scripts/run_null_baseline_analysis.sh
 
-# 7. (Optional) Correct chrX ploidy bias outside of the null baseline wrapper
-#    NOTE: run_null_baseline_analysis.sh (step 6) already applies chrX
-#    correction to both real and null rankings automatically.  Use this
-#    command only if you want a standalone corrected file for a single
-#    rankings CSV for inspection.  Ablation comparison should instead use
-#    corrected_variant_rankings_with_significance.csv from the null baseline
-#    wrapper.
+# 7. (Optional) Correct chrX ploidy bias for ranking/visualisation
+#    NOTE: run_null_baseline_analysis.sh compares raw attributions directly.
+#    Apply chrX correction separately to the real rankings for cross-chromosome
+#    comparability.  Ablation comparison should use
+#    variant_rankings_with_significance.csv from the null baseline wrapper.
 python scripts/correct_chrx_bias.py \
     --rankings results/explainability/sieve_variant_rankings.csv \
     --output-dir results/explainability_corrected \

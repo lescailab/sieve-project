@@ -356,11 +356,11 @@ for i in {0..4}; do
         --is-null-baseline
 done
 
-# Compare one corrected real run against one corrected null run
+# Compare raw real run against one raw null run
 # (multi-permutation null support is not implemented in compare_attributions.py)
 python scripts/compare_attributions.py \
-    --corrected-real results/explainability/corrected/corrected_variant_rankings.csv \
-    --corrected-null results/null_permutations/perm0/corrected/corrected_variant_rankings.csv \
+    --real results/explainability/sieve_variant_rankings.csv \
+    --null results/null_permutations/perm0/sieve_variant_rankings.csv \
     --output-dir results/comparison_robust \
     --genome-build GRCh37
 ```
@@ -416,7 +416,7 @@ python scripts/ablation_compare.py \
 # Compare attribution rankings
 mkdir -p results/ablation/rankings
 for LEVEL in L0 L1 L2 L3; do
-    cp results/null_baseline_${LEVEL}/results/attribution_comparison_corrected/corrected_variant_rankings_with_significance.csv \
+    cp results/null_baseline_${LEVEL}/results/attribution_comparison/variant_rankings_with_significance.csv \
        results/ablation/rankings/${LEVEL}_sieve_variant_rankings.csv
 done
 
@@ -441,10 +441,10 @@ If your ranking files are not in a single directory with level prefixes, you can
 
 ```bash
 python scripts/compare_ablation_rankings.py \
-    --rankings L0:results/null_baseline_L0/results/attribution_comparison_corrected/corrected_variant_rankings_with_significance.csv \
-               L1:results/null_baseline_L1/results/attribution_comparison_corrected/corrected_variant_rankings_with_significance.csv \
-               L2:results/null_baseline_L2/results/attribution_comparison_corrected/corrected_variant_rankings_with_significance.csv \
-               L3:results/null_baseline_L3/results/attribution_comparison_corrected/corrected_variant_rankings_with_significance.csv \
+    --rankings L0:results/null_baseline_L0/results/attribution_comparison/variant_rankings_with_significance.csv \
+               L1:results/null_baseline_L1/results/attribution_comparison/variant_rankings_with_significance.csv \
+               L2:results/null_baseline_L2/results/attribution_comparison/variant_rankings_with_significance.csv \
+               L3:results/null_baseline_L3/results/attribution_comparison/variant_rankings_with_significance.csv \
     --score-column empirical_p_variant \
     --out-comparison results/ablation/ablation_ranking_comparison.yaml \
     --out-jaccard results/ablation/ablation_jaccard_matrix.tsv \
@@ -468,7 +468,7 @@ The ablation comparison should operate on the null-contrasted significance files
 # 1. Copy null-contrasted significance files into a comparison directory
 mkdir -p results/ablation/significance_rankings
 for LEVEL in L0 L1 L2 L3; do
-    cp results/null_baseline_${LEVEL}/results/attribution_comparison_corrected/corrected_variant_rankings_with_significance.csv \
+    cp results/null_baseline_${LEVEL}/results/attribution_comparison/variant_rankings_with_significance.csv \
        results/ablation/significance_rankings/${LEVEL}_sieve_variant_rankings.csv
 done
 

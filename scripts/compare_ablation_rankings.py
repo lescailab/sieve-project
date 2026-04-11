@@ -6,8 +6,9 @@ After running the per-level null baseline workflow, this script compares the
 resulting significance-annotated variant rankings to quantify how much the
 discovered variants depend on the annotation information provided. By default
 it ranks variants by ``empirical_p_variant`` from
-``corrected_variant_rankings_with_significance.csv``. Lower p-values are
-treated as better ranks automatically. Key analyses:
+``variant_rankings_with_significance.csv`` (produced by
+``compare_attributions.py``). Lower p-values are treated as better ranks
+automatically. Key analyses:
 
 1. Jaccard similarity matrices at multiple top-k thresholds
 2. Level-specific variant discovery (high rank at one level, low at others)
@@ -21,9 +22,9 @@ Usage:
 
     # With explicit per-level paths
     python scripts/compare_ablation_rankings.py \\
-        --rankings L0:results/null_baseline_L0/results/attribution_comparison_corrected/corrected_variant_rankings_with_significance.csv \\
-                   L1:results/null_baseline_L1/results/attribution_comparison_corrected/corrected_variant_rankings_with_significance.csv \\
-                   L2:results/null_baseline_L2/results/attribution_comparison_corrected/corrected_variant_rankings_with_significance.csv \\
+        --rankings L0:results/null_baseline_L0/results/attribution_comparison/variant_rankings_with_significance.csv \\
+                   L1:results/null_baseline_L1/results/attribution_comparison/variant_rankings_with_significance.csv \\
+                   L2:results/null_baseline_L2/results/attribution_comparison/variant_rankings_with_significance.csv \\
         --score-column empirical_p_variant \\
         --out-comparison ablation_ranking_comparison.yaml
 

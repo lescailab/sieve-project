@@ -1,22 +1,29 @@
 #!/usr/bin/env python3
 """
-Compare corrected real variant attributions against a corrected null baseline.
+Compare raw real variant attributions against a raw null baseline.
 
-This script expects two inputs that have already been processed by
-correct_chrx_bias.py — that is, both must contain a ``z_attribution`` column.
-It computes per-variant and per-gene empirical p-values using the
-``(k + 1) / (N + 1)`` convention (Phipson & Smyth 2010, "Permutation P-values
-Should Never Be Zero") and applies Benjamini–Hochberg FDR correction.
+This script accepts two **raw** ranking files (``sieve_variant_rankings.csv``
+from the real and null explainability runs) and compares the ``mean_attribution``
+column directly.  It computes per-variant and per-gene empirical p-values using
+the ``(k + 1) / (N + 1)`` convention (Phipson & Smyth 2010, "Permutation
+P-values Should Never Be Zero") and applies Benjamini–Hochberg FDR correction.
 
-The ordering of operations is intentional and must not be changed:
-  1. correct_chrx_bias.py on real rankings  →  corrected_variant_rankings.csv
-  2. correct_chrx_bias.py on null rankings  →  corrected_variant_rankings.csv
-  3. THIS SCRIPT on the two corrected files →  significance columns
+Order of operations
+-------------------
+The null comparison must operate on **raw** ``mean_attribution`` values — not on
+chrX-corrected z-scores.  Both models (real and null) saw the same input data
+with the same chrX inflation; the only difference is the labels.  The raw
+attribution magnitude IS the signal, and the chrX inflation cancels in the
+empirical comparison because both sides are equally inflated.
+
+ChrX correction (``correct_chrx_bias.py``) is a separate ranking adjustment
+applied to the **real** model's output only, for cross-chromosome comparability
+in visualisation and ablation comparison.  It should be run AFTER this script.
 
 Usage:
     python scripts/compare_attributions.py \\
-        --corrected-real  /path/to/real/corrected/corrected_variant_rankings.csv \\
-        --corrected-null  /path/to/null/corrected/corrected_variant_rankings.csv \\
+        --real  /path/to/real/sieve_variant_rankings.csv \\
+        --null  /path/to/null/sieve_variant_rankings.csv \\
         --output-dir      /path/to/comparison_output \\
         --genome-build    GRCh37
 
@@ -51,23 +58,23 @@ def parse_args() -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
         description=(
-            'Compare corrected real and null variant attributions, '
+            'Compare raw real and null variant attributions, '
             'producing empirical p-values and BH-FDR correction.'
         ),
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
-        '--corrected-real', type=str, required=True,
+        '--real', type=str, required=True,
         help=(
-            'Path to real corrected_variant_rankings.csv '
-            '(output of correct_chrx_bias.py — must have z_attribution column)'
+            'Path to raw real sieve_variant_rankings.csv '
+            '(must have mean_attribution column)'
         ),
     )
     parser.add_argument(
-        '--corrected-null', type=str, required=True,
+        '--null', type=str, required=True,
         help=(
-            'Path to null corrected_variant_rankings.csv '
-            '(output of correct_chrx_bias.py — must have z_attribution column)'
+            'Path to raw null sieve_variant_rankings.csv '
+            '(must have mean_attribution column)'
         ),
     )
     parser.add_argument(
@@ -92,13 +99,13 @@ def parse_args() -> argparse.Namespace:
 # Validation helpers
 # ---------------------------------------------------------------------------
 
-def _require_z_attribution(df: pd.DataFrame, label: str) -> None:
-    """Raise ValueError if ``z_attribution`` is absent from *df*."""
-    if 'z_attribution' not in df.columns:
+def _require_mean_attribution(df: pd.DataFrame, label: str) -> None:
+    """Raise ValueError if ``mean_attribution`` is absent from *df*."""
+    if 'mean_attribution' not in df.columns:
         raise ValueError(
-            f"The {label} rankings file does not have a 'z_attribution' column. "
-            "Run correct_chrx_bias.py on this file before calling "
-            "compare_attributions.py."
+            f"The {label} rankings file does not have a 'mean_attribution' "
+            "column. Ensure you are passing the raw "
+            "sieve_variant_rankings.csv file."
         )
 
 
@@ -146,9 +153,9 @@ def compute_empirical_pvalues(
     Parameters
     ----------
     real_z : np.ndarray, shape (M,)
-        z_attribution values for the real variants.
+        Attribution values for the real variants.
     null_z : np.ndarray, shape (N,)
-        z_attribution values for the null variants.
+        Attribution values for the null variants.
 
     Returns
     -------
@@ -182,32 +189,32 @@ def _bh_fdr(p_values: np.ndarray) -> np.ndarray:
 
 
 # ---------------------------------------------------------------------------
-# Gene-level aggregation (mirrors create_gene_rankings in correct_chrx_bias.py)
+# Gene-level aggregation
 # ---------------------------------------------------------------------------
 
 def _aggregate_genes(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Aggregate a corrected variant rankings dataframe to gene level.
+    Aggregate a variant rankings dataframe to gene level.
 
     Groups by gene symbol (``gene_name`` if present, else ``gene_id``), takes
-    the max ``z_attribution`` as ``gene_z_score``, and counts variants.
+    the max ``mean_attribution`` as ``gene_score``, and counts variants.
 
     Parameters
     ----------
     df : pd.DataFrame
-        Corrected variant rankings with ``z_attribution`` column.
+        Variant rankings with ``mean_attribution`` column.
 
     Returns
     -------
     pd.DataFrame
-        Gene-level dataframe sorted descending by ``gene_z_score``.
+        Gene-level dataframe sorted descending by ``gene_score``.
     """
     gene_col = 'gene_name' if 'gene_name' in df.columns else 'gene_id'
     gene_agg = df.groupby(gene_col).agg(
-        gene_z_score=('z_attribution', 'max'),
-        num_variants=('z_attribution', 'count'),
+        gene_score=('mean_attribution', 'max'),
+        num_variants=('mean_attribution', 'count'),
     ).reset_index()
-    gene_agg = gene_agg.sort_values('gene_z_score', ascending=False).reset_index(drop=True)
+    gene_agg = gene_agg.sort_values('gene_score', ascending=False).reset_index(drop=True)
     return gene_agg
 
 
@@ -229,15 +236,15 @@ def main() -> None:
     # ------------------------------------------------------------------
     # Load inputs
     # ------------------------------------------------------------------
-    print(f'\nLoading corrected real rankings from {args.corrected_real}')
-    real_df = pd.read_csv(args.corrected_real)
-    _require_z_attribution(real_df, 'real')
+    print(f'\nLoading raw real rankings from {args.real}')
+    real_df = pd.read_csv(args.real)
+    _require_mean_attribution(real_df, 'real')
     real_df['chromosome'] = real_df['chromosome'].astype(str)
     print(f'  {len(real_df):,} real variants loaded')
 
-    print(f'Loading corrected null rankings from {args.corrected_null}')
-    null_df = pd.read_csv(args.corrected_null)
-    _require_z_attribution(null_df, 'null')
+    print(f'Loading raw null rankings from {args.null}')
+    null_df = pd.read_csv(args.null)
+    _require_mean_attribution(null_df, 'null')
     null_df['chromosome'] = null_df['chromosome'].astype(str)
     print(f'  {len(null_df):,} null variants loaded')
 
@@ -254,18 +261,18 @@ def main() -> None:
     # ------------------------------------------------------------------
     # Distributional sanity check (stdout only — not written to any file)
     # ------------------------------------------------------------------
-    real_z = real_df['z_attribution'].dropna().values
-    null_z = null_df['z_attribution'].dropna().values
+    real_attr = real_df['mean_attribution'].dropna().values
+    null_attr = null_df['mean_attribution'].dropna().values
 
-    ks_stat, ks_pval = stats.ks_2samp(real_z, null_z)
-    mw_stat, mw_pval = stats.mannwhitneyu(real_z, null_z, alternative='greater')
+    ks_stat, ks_pval = stats.ks_2samp(real_attr, null_attr)
+    mw_stat, mw_pval = stats.mannwhitneyu(real_attr, null_attr, alternative='greater')
     print(f'\nDistributional sanity check (not written to output):')
     print(f'  KS test:          statistic={ks_stat:.4f}, p={ks_pval:.2e}')
     print(f'  Mann-Whitney U:   statistic={mw_stat:.4f}, p={mw_pval:.2e}')
-    print(f'  Real z-scores:    mean={real_z.mean():.4f}, std={real_z.std():.4f}')
-    print(f'  Null z-scores:    mean={null_z.mean():.4f}, std={null_z.std():.4f}')
+    print(f'  Real attributions:  mean={real_attr.mean():.4f}, std={real_attr.std():.4f}')
+    print(f'  Null attributions:  mean={null_attr.mean():.4f}, std={null_attr.std():.4f}')
 
-    N = len(null_z)
+    N = len(null_attr)
     min_achievable_p = 1.0 / (N + 1)
     print(f'\n  Null size N = {N:,}')
     print(f'  Minimum achievable empirical p = 1 / (N+1) = {min_achievable_p:.2e}')
@@ -276,7 +283,7 @@ def main() -> None:
     print('\nComputing per-variant empirical p-values...')
     real_df_out = real_df.copy()
     empirical_p_variant = compute_empirical_pvalues(
-        real_df_out['z_attribution'].values, null_z,
+        real_df_out['mean_attribution'].values, null_attr,
     )
     real_df_out['empirical_p_variant'] = empirical_p_variant
     fdr_variant = _bh_fdr(empirical_p_variant)
@@ -294,11 +301,11 @@ def main() -> None:
     real_genes = _aggregate_genes(real_df_out)
     null_genes = _aggregate_genes(null_df)
 
-    null_gene_z = null_genes['gene_z_score'].dropna().values
-    real_gene_z = real_genes['gene_z_score'].values
+    null_gene_score = null_genes['gene_score'].dropna().values
+    real_gene_score = real_genes['gene_score'].values
     print(f'  {len(real_genes):,} real genes, {len(null_genes):,} null genes')
 
-    empirical_p_gene = compute_empirical_pvalues(real_gene_z, null_gene_z)
+    empirical_p_gene = compute_empirical_pvalues(real_gene_score, null_gene_score)
     real_genes['empirical_p_gene'] = empirical_p_gene
     fdr_gene = _bh_fdr(empirical_p_gene)
     real_genes['fdr_gene'] = fdr_gene
@@ -311,11 +318,11 @@ def main() -> None:
     # ------------------------------------------------------------------
     # Write outputs
     # ------------------------------------------------------------------
-    var_sig_path = output_dir / 'corrected_variant_rankings_with_significance.csv'
+    var_sig_path = output_dir / 'variant_rankings_with_significance.csv'
     real_df_out.to_csv(var_sig_path, index=False)
     print(f'\nSaved variant significance file to {var_sig_path}')
 
-    gene_sig_path = output_dir / 'corrected_gene_rankings_with_significance.csv'
+    gene_sig_path = output_dir / 'gene_rankings_with_significance.csv'
     real_genes.to_csv(gene_sig_path, index=False)
     print(f'Saved gene significance file to {gene_sig_path}')
 

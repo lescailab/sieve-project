@@ -100,10 +100,10 @@ export REAL_RESULTS="results/explainability"             # directory with sieve_
 export OUTPUT_BASE="results/null_baseline_run"           # where null outputs will be written
 bash scripts/run_null_baseline_analysis.sh
 
-# 7. (Optional) Correct chrX ploidy bias outside of the null baseline wrapper
-#    NOTE: run_null_baseline_analysis.sh already corrects both the real and
-#    null rankings before running the null contrast. Use this command only
-#    when you want a standalone corrected file for a single rankings CSV.
+# 7. (Optional) Correct chrX ploidy bias for ranking/visualisation
+#    NOTE: run_null_baseline_analysis.sh compares raw attributions directly.
+#    Apply chrX correction separately to the real rankings for cross-chromosome
+#    comparability in visualisation and ablation comparison.
 python scripts/correct_chrx_bias.py \
     --rankings results/explainability/sieve_variant_rankings.csv \
     --output-dir results/explainability_corrected \
@@ -365,7 +365,8 @@ python scripts/explain.py \
 **Why It Matters**:
 - Without null baseline: rankings have no empirical significance information
 - With null baseline: both variant and gene rankings gain empirical p-values and BH-FDR
-- chrX correction is applied before the null comparison, preventing hemizygosity artefacts from contaminating significance calls
+- The null comparison operates on raw `mean_attribution` — chrX inflation cancels because both models saw the same input data
+- ChrX correction is applied separately to real rankings for visualisation purposes
 - Manuscript-level per-gene claims should use `fdr_gene`, not raw ranking order
 
 **Quick Start**:
@@ -404,31 +405,24 @@ python scripts/explain.py \
     --output-dir results/null_attributions \
     --is-null-baseline
 
-# 4. Correct chrX bias on the real rankings
+# 4. Compare raw real vs raw null attributions
+python scripts/compare_attributions.py \
+    --real results/explainability/sieve_variant_rankings.csv \
+    --null results/null_attributions/sieve_variant_rankings.csv \
+    --output-dir results/attribution_comparison \
+    --genome-build GRCh37
+
+# 5. (Separate) Apply chrX correction to real rankings for ranking/visualisation
 python scripts/correct_chrx_bias.py \
     --rankings results/explainability/sieve_variant_rankings.csv \
     --output-dir results/explainability/corrected \
     --include-sex-chroms \
     --genome-build GRCh37
-
-# 5. Correct chrX bias on the null rankings
-python scripts/correct_chrx_bias.py \
-    --rankings results/null_attributions/sieve_variant_rankings.csv \
-    --output-dir results/null_attributions/corrected \
-    --include-sex-chroms \
-    --genome-build GRCh37
-
-# 6. Compare corrected real vs corrected null
-python scripts/compare_attributions.py \
-    --corrected-real results/explainability/corrected/corrected_variant_rankings.csv \
-    --corrected-null results/null_attributions/corrected/corrected_variant_rankings.csv \
-    --output-dir results/attribution_comparison_corrected \
-    --genome-build GRCh37
 ```
 
 **Outputs**:
-- `corrected_variant_rankings_with_significance.csv` - corrected real rankings plus `empirical_p_variant` and `fdr_variant`
-- `corrected_gene_rankings_with_significance.csv` - corrected real gene rankings plus `empirical_p_gene` and `fdr_gene`
+- `variant_rankings_with_significance.csv` - raw real rankings plus `empirical_p_variant` and `fdr_variant`
+- `gene_rankings_with_significance.csv` - gene-level rankings plus `empirical_p_gene` and `fdr_gene`
 - `significance_summary.yaml` - counts of variants and genes passing FDR thresholds 0.05, 0.01, 0.001
 
 **Expected Results**:
@@ -438,7 +432,7 @@ python scripts/compare_attributions.py \
 
 **Order of operations**:
 
-The chrX hemizygosity artefact in male-majority cohorts inflates raw attribution magnitudes on chrX for both real models and null models, because the effect comes from the input data rather than from the labels. Computing the null contrast on raw attributions would conflate this structural inflation with genuine disease signal. The pipeline therefore applies chrX correction independently to the real and null rankings first, producing chromosome-stratified z-scores on both sides, and then computes the null comparison on the corrected `z_attribution` column. This order is enforced by the sequence of scripts invoked inside `run_null_baseline_analysis.sh` and should not be changed without a corresponding change to the script logic.
+The null comparison operates on raw `mean_attribution` because both models (real and null) saw the same input data with the same chrX inflation — the only difference is the labels. The raw attribution magnitude IS the signal. Applying per-chromosome z-scoring to both sides before comparison destroys the absolute signal difference because each chromosome is independently centred at zero — reducing the comparison to a within-chromosome shape test that is too weak for polygenic traits. ChrX correction is a ranking adjustment applied to the real model's output only, for cross-chromosome comparability in visualisation and ablation comparison, and should be run AFTER the null comparison.
 
 ---
 
@@ -465,10 +459,10 @@ python scripts/ablation_compare.py \
 ```bash
 # Collect null-contrasted significance files into one directory with level prefixes
 mkdir -p results/ablation/rankings
-cp results/null_baseline_L0/results/attribution_comparison_corrected/corrected_variant_rankings_with_significance.csv results/ablation/rankings/L0_sieve_variant_rankings.csv
-cp results/null_baseline_L1/results/attribution_comparison_corrected/corrected_variant_rankings_with_significance.csv results/ablation/rankings/L1_sieve_variant_rankings.csv
-cp results/null_baseline_L2/results/attribution_comparison_corrected/corrected_variant_rankings_with_significance.csv results/ablation/rankings/L2_sieve_variant_rankings.csv
-cp results/null_baseline_L3/results/attribution_comparison_corrected/corrected_variant_rankings_with_significance.csv results/ablation/rankings/L3_sieve_variant_rankings.csv
+cp results/null_baseline_L0/results/attribution_comparison/variant_rankings_with_significance.csv results/ablation/rankings/L0_sieve_variant_rankings.csv
+cp results/null_baseline_L1/results/attribution_comparison/variant_rankings_with_significance.csv results/ablation/rankings/L1_sieve_variant_rankings.csv
+cp results/null_baseline_L2/results/attribution_comparison/variant_rankings_with_significance.csv results/ablation/rankings/L2_sieve_variant_rankings.csv
+cp results/null_baseline_L3/results/attribution_comparison/variant_rankings_with_significance.csv results/ablation/rankings/L3_sieve_variant_rankings.csv
 
 # Run comparison
 python scripts/compare_ablation_rankings.py \
@@ -979,11 +973,11 @@ for i in {0..4}; do
         --is-null-baseline
 done
 
-# Compare one corrected real run against one corrected null run
+# Compare raw real run against one raw null run
 # (multi-permutation null support is not implemented in compare_attributions.py)
 python scripts/compare_attributions.py \
-    --corrected-real results/explainability/corrected/corrected_variant_rankings.csv \
-    --corrected-null results/null_permutations/perm0/corrected/corrected_variant_rankings.csv \
+    --real results/explainability/sieve_variant_rankings.csv \
+    --null results/null_permutations/perm0/sieve_variant_rankings.csv \
     --output-dir results/comparison_robust \
     --genome-build GRCh37
 ```
@@ -1050,7 +1044,7 @@ done
 # Compare null-contrasted significance rankings
 mkdir -p results/ablation/significance_rankings
 for LEVEL in L0 L1 L2 L3; do
-    cp results/null_baseline_${LEVEL}/results/attribution_comparison_corrected/corrected_variant_rankings_with_significance.csv \
+    cp results/null_baseline_${LEVEL}/results/attribution_comparison/variant_rankings_with_significance.csv \
        results/ablation/significance_rankings/${LEVEL}_sieve_variant_rankings.csv
 done
 
@@ -1075,10 +1069,10 @@ If your ranking files are not in a single directory with level prefixes, you can
 
 ```bash
 python scripts/compare_ablation_rankings.py \
-    --rankings L0:results/null_baseline_L0/results/attribution_comparison_corrected/corrected_variant_rankings_with_significance.csv \
-               L1:results/null_baseline_L1/results/attribution_comparison_corrected/corrected_variant_rankings_with_significance.csv \
-               L2:results/null_baseline_L2/results/attribution_comparison_corrected/corrected_variant_rankings_with_significance.csv \
-               L3:results/null_baseline_L3/results/attribution_comparison_corrected/corrected_variant_rankings_with_significance.csv \
+    --rankings L0:results/null_baseline_L0/results/attribution_comparison/variant_rankings_with_significance.csv \
+               L1:results/null_baseline_L1/results/attribution_comparison/variant_rankings_with_significance.csv \
+               L2:results/null_baseline_L2/results/attribution_comparison/variant_rankings_with_significance.csv \
+               L3:results/null_baseline_L3/results/attribution_comparison/variant_rankings_with_significance.csv \
     --score-column empirical_p_variant \
     --out-comparison results/ablation/ablation_ranking_comparison.yaml \
     --out-jaccard results/ablation/ablation_jaccard_matrix.tsv \
@@ -1111,7 +1105,7 @@ done
 # 2. Copy null-contrasted significance files into a comparison directory
 mkdir -p results/ablation/significance_rankings
 for LEVEL in L0 L1 L2 L3; do
-    cp results/null_baseline_${LEVEL}/results/attribution_comparison_corrected/corrected_variant_rankings_with_significance.csv \
+    cp results/null_baseline_${LEVEL}/results/attribution_comparison/variant_rankings_with_significance.csv \
        results/ablation/significance_rankings/${LEVEL}_sieve_variant_rankings.csv
 done
 
@@ -1413,8 +1407,8 @@ python scripts/compare_attributions.py [OPTIONS]
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `--corrected-real` | path | required | Corrected real variant rankings CSV from `correct_chrx_bias.py` |
-| `--corrected-null` | path | required | Corrected null variant rankings CSV from `correct_chrx_bias.py` |
+| `--real` | path | required | Raw real variant rankings CSV (`sieve_variant_rankings.csv`) |
+| `--null` | path | required | Raw null variant rankings CSV (`sieve_variant_rankings.csv`) |
 | `--output-dir` | path | required | Output directory |
 | `--genome-build` | str | GRCh37 | Reference genome build |
 | `--exclude-sex-chroms` | flag | False | Exclude chrX/chrY before empirical p-value and FDR computation |
@@ -1422,9 +1416,9 @@ python scripts/compare_attributions.py [OPTIONS]
 **Example**:
 ```bash
 python scripts/compare_attributions.py \
-    --corrected-real results/explainability/corrected/corrected_variant_rankings.csv \
-    --corrected-null results/null_attributions/corrected/corrected_variant_rankings.csv \
-    --output-dir results/attribution_comparison_corrected \
+    --real results/explainability/sieve_variant_rankings.csv \
+    --null results/null_attributions/sieve_variant_rankings.csv \
+    --output-dir results/attribution_comparison \
     --genome-build GRCh37
 ```
 
@@ -1474,7 +1468,7 @@ Compares variant attribution rankings across annotation levels. Computes pairwis
 | `--out-comparison` | path | `ablation_ranking_comparison.yaml` | Output YAML summary |
 | `--out-jaccard` | path | `ablation_jaccard_matrix.tsv` | Output Jaccard matrix TSV |
 | `--out-level-specific` | path | `level_specific_variants.tsv` | Output level-specific variants TSV |
-| `--score-column` | str | `empirical_p_variant` | Column to rank variants by. The default is the null-contrast empirical p-value from `corrected_variant_rankings_with_significance.csv`; p/FDR-like columns are ranked ascending automatically |
+| `--score-column` | str | `empirical_p_variant` | Column to rank variants by. The default is the null-contrast empirical p-value from `variant_rankings_with_significance.csv`; p/FDR-like columns are ranked ascending automatically |
 
 **Example**:
 ```bash
@@ -1751,7 +1745,7 @@ If you used sex-aware preprocessing or observe chrX inflation in rankings, run `
 
 By default, the corrected rankings exclude sex chromosomes. Use `--include-sex-chroms` if you want to keep them in the output (they remain flagged).
 
-For ablation comparison, use the null-contrasted files `corrected_variant_rankings_with_significance.csv` produced by `run_null_baseline_analysis.sh` and rank variants with `--score-column empirical_p_variant`. Lower empirical p-values are treated as better ranks automatically, so the cross-level comparison operates on null-compared evidence rather than raw or merely chrX-corrected effect sizes.
+For ablation comparison, use the null-contrasted files `variant_rankings_with_significance.csv` produced by `run_null_baseline_analysis.sh` and rank variants with `--score-column empirical_p_variant`. Lower empirical p-values are treated as better ranks automatically, so the cross-level comparison operates on null-compared evidence rather than raw or merely chrX-corrected effect sizes.
 
 #### Gene Rankings
 
@@ -1796,12 +1790,12 @@ gene_significance:
 
 **How to Interpret**:
 
-1. **Read the variant-level file** `corrected_variant_rankings_with_significance.csv`:
-   - `empirical_p_variant` is the empirical p-value against the corrected null distribution
+1. **Read the variant-level file** `variant_rankings_with_significance.csv`:
+   - `empirical_p_variant` is the empirical p-value against the null `mean_attribution` distribution
    - `fdr_variant` is the BH-adjusted value across all tested variants
 
-2. **Read the gene-level file** `corrected_gene_rankings_with_significance.csv`:
-   - `gene_z_score` is the maximum corrected variant score per gene
+2. **Read the gene-level file** `gene_rankings_with_significance.csv`:
+   - `gene_score` is the maximum `mean_attribution` per gene
    - `empirical_p_gene` and `fdr_gene` are the gene-level significance metrics
 
 3. **Use FDR for decisions**:
