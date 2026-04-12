@@ -593,13 +593,25 @@ Aggregates variant-level SIEVE rankings to a gene-level TSV for cross-cohort bur
 | `--min-null-threshold` | str | None | Only include genes with variants exceeding this null threshold (`p05`, `p01`, `p001`) |
 | `--aggregation` | str | `max` | How to aggregate variant scores per gene: `max` or `mean` |
 | `--ablation-level` | str | None | Prefix output filename with level label (e.g. `L0`) |
+| `--fdr-threshold` | float | None | Only include genes with `fdr_gene` below this value. Gene set size is determined dynamically. |
+| `--gene-significance` | path | None | Path to gene significance CSV for FDR filtering. Auto-discovered if not specified. |
 
-**Example**:
+**Example** (fixed gene list):
 ```bash
 python scripts/generate_sieve_gene_list.py \
-    --variant-rankings results/attribution_comparison/variant_rankings_corrected.csv \
+    --variant-rankings results/attribution_comparison/corrected/corrected_variant_rankings.csv \
     --output validation/sieve_gene_lists/sieve_genes.tsv \
     --score-column z_attribution \
+    --aggregation max
+```
+
+**Example** (FDR-threshold filtered):
+```bash
+python scripts/generate_sieve_gene_list.py \
+    --variant-rankings results/attribution_comparison/corrected/corrected_variant_rankings.csv \
+    --output validation/sieve_gene_lists/sieve_genes_fdr05.tsv \
+    --score-column z_attribution \
+    --fdr-threshold 0.05 \
     --aggregation max
 ```
 
@@ -720,7 +732,8 @@ Tests whether SIEVE gene sets carry non-linear discriminative information by tra
 | `--burden-matrix` | path | required | Gene-burden matrix parquet file |
 | `--labels` | path | required | Phenotype TSV (sample_id, phenotype: 1=ctrl, 2=case) |
 | `--output-tsv` | path | required | Summary TSV path |
-| `--top-k` | str | required | Comma-separated top-k values, e.g. `100,500,1000,2000` |
+| `--top-k` | str | — | Comma-separated top-k values, e.g. `100,500,1000,2000`. Mutually exclusive with `--fdr-threshold`. |
+| `--fdr-threshold` | float | — | FDR cutoff for gene selection (e.g. `0.05`). Gene set size determined per level. Mutually exclusive with `--top-k`. |
 | `--classifiers` | str | required | Comma-separated classifier list from `rf,lr` |
 | `--levels` | str | `L0,L1,L2,L3` | Comma-separated annotation levels |
 | `--n-permutations` | int | `1000` | Number of random gene set permutations |
@@ -729,7 +742,7 @@ Tests whether SIEVE gene sets carry non-linear discriminative information by tra
 | `--n-cores` | int | `-1` | Number of outer-loop cores for permutation evaluation |
 | `--score-column` | str | `z_attribution` | Gene-ranking score to use; `z_attribution` maps to `gene_z_score` |
 
-**Example** (multi-level with both classifiers):
+**Example** (fixed top-k, multi-level with both classifiers):
 ```bash
 python scripts/validate_nonlinear_classifier.py \
     --real-rankings-dir results/ablation/rankings \
@@ -737,6 +750,19 @@ python scripts/validate_nonlinear_classifier.py \
     --labels /path/to/phenotypes.tsv \
     --output-tsv validation/cohort_b/nonlinear_validation/nonlinear_validation_summary.tsv \
     --top-k 50,100,200,500 \
+    --n-permutations 1000 \
+    --classifiers rf,lr \
+    --n-cores 4
+```
+
+**Example** (FDR-threshold gene selection):
+```bash
+python scripts/validate_nonlinear_classifier.py \
+    --real-rankings-dir results/ablation/rankings \
+    --burden-matrix validation/cohort_b/gene_burden_matrix.parquet \
+    --labels /path/to/phenotypes.tsv \
+    --output-tsv validation/cohort_b/nonlinear_validation/nonlinear_validation_fdr.tsv \
+    --fdr-threshold 0.05 \
     --n-permutations 1000 \
     --classifiers rf,lr \
     --n-cores 4
