@@ -240,6 +240,37 @@ class TestNonlinearValidation:
                 ]
             )
 
+    def test_fdr_threshold_out_of_range_exits(self, tmp_path: Path) -> None:
+        """main() must reject --fdr-threshold values outside (0, 1]."""
+        burden_path, label_path, rankings_root = prepare_inputs(tmp_path)
+
+        for bad_value in ["-0.1", "0", "1.1", "2.0"]:
+            with pytest.raises(SystemExit):
+                nonlinear.main(
+                    [
+                        "--real-rankings-dir",
+                        str(rankings_root),
+                        "--burden-matrix",
+                        str(burden_path),
+                        "--labels",
+                        str(label_path),
+                        "--output-tsv",
+                        str(tmp_path / "out.tsv"),
+                        "--fdr-threshold",
+                        bad_value,
+                        "--classifiers",
+                        "rf",
+                        "--levels",
+                        "L0",
+                        "--n-permutations",
+                        "4",
+                        "--cv-folds",
+                        "3",
+                        "--n-cores",
+                        "1",
+                    ]
+                )
+
     def test_custom_grid_row_count(self, tmp_path: Path) -> None:
         """Custom top-k and classifier grids must produce the expected row count."""
         burden_path, label_path, rankings_root = prepare_inputs(
