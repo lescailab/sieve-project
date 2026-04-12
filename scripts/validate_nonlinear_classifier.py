@@ -148,7 +148,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=(
             "FDR threshold for gene selection (e.g. 0.05). Selects all genes "
             "with fdr_gene below this cutoff. Gene set size is determined "
-            "dynamically per level. Mutually exclusive with --top-k."
+            "dynamically per level. Mutually exclusive with --top-k. "
+            "Must be in (0, 1]."
         ),
     )
     parser.add_argument(
@@ -1248,6 +1249,13 @@ def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
 
     fdr_mode = args.fdr_threshold is not None
+
+    if fdr_mode and not (0 < args.fdr_threshold <= 1):
+        print(
+            f"ERROR: --fdr-threshold must be in (0, 1], got {args.fdr_threshold}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     try:
         if not fdr_mode:

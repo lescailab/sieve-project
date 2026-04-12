@@ -115,3 +115,25 @@ class TestFDRThresholdFiltering:
         )
 
         assert list(result["gene_rank"]) == list(range(1, len(result) + 1))
+
+    def test_fdr_threshold_out_of_range_exits(self, tmp_path: Path) -> None:
+        """main() must reject --fdr-threshold outside (0, 1]."""
+        from scripts.generate_sieve_gene_list import main as gen_main
+
+        variants = _make_variant_rankings(n_genes=5)
+        rankings_path = tmp_path / "rankings.csv"
+        variants.to_csv(rankings_path, index=False)
+        output_path = tmp_path / "genes.tsv"
+
+        for bad_value in ["-0.1", "0", "1.5"]:
+            with pytest.raises(SystemExit):
+                gen_main(
+                    [
+                        "--variant-rankings",
+                        str(rankings_path),
+                        "--output",
+                        str(output_path),
+                        "--fdr-threshold",
+                        bad_value,
+                    ]
+                )

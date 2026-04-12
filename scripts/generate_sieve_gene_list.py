@@ -120,9 +120,9 @@ def generate_gene_list(
         The gene set size is determined dynamically by the threshold.
     gene_significance_df : pd.DataFrame or None
         Gene-level significance file containing ``fdr_gene``. Used for
-        FDR-threshold filtering. If *None* when *fdr_threshold* is set,
-        the function attempts to use ``fdr_variant`` from the variant
-        rankings aggregated at gene level.
+        FDR-threshold filtering. When *fdr_threshold* is set, this input
+        must provide ``fdr_gene``; no fallback to aggregated
+        ``fdr_variant`` values is performed.
 
     Returns
     -------
@@ -253,6 +253,14 @@ def generate_gene_list(
 
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
+
+    # Validate FDR threshold range
+    if args.fdr_threshold is not None and not (0 < args.fdr_threshold <= 1):
+        print(
+            f"ERROR: --fdr-threshold must be in (0, 1], got {args.fdr_threshold}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     # Load variant rankings
     df = pd.read_csv(args.variant_rankings)
