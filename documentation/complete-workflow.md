@@ -458,9 +458,9 @@ Running SIEVE on the validation cohorts would validate that the pipeline works, 
 
 | File | Source step | Description |
 |------|-----------|-------------|
-| `variant_rankings_corrected.csv` | Step 4 → `correct_chrx_bias.py` | ChrX-corrected, null-compared variant rankings |
+| `corrected/corrected_variant_rankings.csv` | Step 4 → `correct_chrx_bias.py` | ChrX-corrected, null-compared variant rankings |
 | `sieve_gene_rankings.csv` | Step 3 → `explain.py` | Gene-level attribution rankings |
-| `L{0..3}_variant_rankings_corrected.csv` | Steps 2-5 (per level) | Per-ablation-level corrected rankings (optional) |
+| `corrected/corrected_variant_rankings.csv` (per level) | Steps 2-5 (per level) | Per-ablation-level corrected rankings (optional) |
 
 **This step has three sub-steps**: generate the gene list, extract burden counts from the validation VCF, and test for enrichment against a permutation null.
 
@@ -473,7 +473,7 @@ Running SIEVE on the validation cohorts would validate that the pipeline works, 
 **Command**:
 ```bash
 python scripts/generate_sieve_gene_list.py \
-    --variant-rankings results/attribution_comparison/variant_rankings_corrected.csv \
+    --variant-rankings results/attribution_comparison/corrected/corrected_variant_rankings.csv \
     --output validation/sieve_gene_lists/sieve_genes.tsv \
     --score-column z_attribution \
     --exclude-sex-chroms \
@@ -486,7 +486,7 @@ This takes the chrX-corrected variant rankings and produces a ranked gene list w
 ```bash
 for level in L0 L1 L2 L3; do
     python scripts/generate_sieve_gene_list.py \
-        --variant-rankings results/${level}_attribution_comparison/variant_rankings_corrected.csv \
+        --variant-rankings results/${level}_attribution_comparison/corrected/corrected_variant_rankings.csv \
         --output validation/sieve_gene_lists/sieve_genes.tsv \
         --ablation-level ${level} \
         --score-column z_attribution \
@@ -499,13 +499,25 @@ This produces `L0_sieve_genes.tsv`, `L1_sieve_genes.tsv`, etc.
 **Optional: filter to null-significant genes only**:
 ```bash
 python scripts/generate_sieve_gene_list.py \
-    --variant-rankings results/attribution_comparison/variant_rankings_corrected.csv \
+    --variant-rankings results/attribution_comparison/corrected/corrected_variant_rankings.csv \
     --output validation/sieve_gene_lists/sieve_genes_sig.tsv \
     --min-null-threshold p01 \
     --aggregation max
 ```
 
 This retains only genes containing at least one variant exceeding the null model's 99th percentile.
+
+**Optional: filter by FDR threshold** (gene set size determined dynamically):
+```bash
+python scripts/generate_sieve_gene_list.py \
+    --variant-rankings results/attribution_comparison/corrected/corrected_variant_rankings.csv \
+    --output validation/sieve_gene_lists/sieve_genes_fdr05.tsv \
+    --score-column z_attribution \
+    --fdr-threshold 0.05 \
+    --aggregation max
+```
+
+This includes only genes whose `fdr_gene` is below 0.05. The gene significance is auto-discovered from `gene_rankings_with_significance.csv` in the same directory as the variant rankings, or from `corrected_gene_rankings.csv` if it contains `fdr_gene` (see `correct_chrx_bias.py`). Use `--gene-significance` to override the auto-discovery path.
 
 **Output format** (`sieve_genes.tsv`):
 ```
@@ -551,7 +563,7 @@ python scripts/extract_validation_burden.py \
 | `--consequence-stratify` | Always recommended — enables testing whether enrichment is driven by functional variants |
 | `--compute-full-gene-matrix` | Required for Step 8c — builds the matrix that makes 10,000 permutations feasible |
 | `--include-sex-chroms` | Only if your gene list includes sex chromosome genes |
-| `--from-variant-rankings` | If passing the raw `variant_rankings_corrected.csv` instead of a pre-generated gene list |
+| `--from-variant-rankings` | If passing the raw `corrected_variant_rankings.csv` instead of a pre-generated gene list |
 
 > **Tip — multi-level validation in a single VCF pass**: The full gene matrix records
 > burden for *every* gene in the VCF, regardless of which `--sieve-genes` file you
@@ -724,7 +736,7 @@ If L1-specific genes replicate in the cohort_b cohort but L0-specific ones do no
 
 **Why this step?** The scalar burden test (Step 8c) asks whether SIEVE genes have more total exonic variation in cases. But SIEVE's core claim is that the **pattern** of variation across genes matters, not just the total count. A random forest trained on per-gene burden counts preserves this multi-gene structure.
 
-**Command** (all levels at once):
+**Command — fixed top-k** (all levels at once):
 ```bash
 python scripts/validate_nonlinear_classifier.py \
     --real-rankings-dir results/ablation/rankings \
@@ -738,8 +750,24 @@ python scripts/validate_nonlinear_classifier.py \
     --seed 42
 ```
 
+**Command — FDR-threshold** (gene set size determined per level):
+```bash
+python scripts/validate_nonlinear_classifier.py \
+    --real-rankings-dir results/ablation/rankings \
+    --burden-matrix validation/cohort_b/gene_burden_matrix.parquet \
+    --labels /path/to/validation_phenotypes.tsv \
+    --output-tsv validation/cohort_b/nonlinear_validation/nonlinear_validation_fdr.tsv \
+    --fdr-threshold 0.05 \
+    --n-permutations 1000 \
+    --classifiers rf,lr \
+    --n-cores 8 \
+    --seed 42
+```
+
+`--top-k` and `--fdr-threshold` are mutually exclusive. Use `--top-k` for exploratory analysis across multiple gene-set sizes, and `--fdr-threshold` for statistically motivated gene sets where the number of genes is determined by the null-contrast significance.
+
 **How it works**:
-1. For each ablation level and top-k threshold, extracts the per-gene burden sub-matrix for the corrected SIEVE gene set
+1. For each ablation level and top-k threshold (or FDR-passing gene set), extracts the per-gene burden sub-matrix for the corrected SIEVE gene set
 2. Trains the requested classifier using fixed stratified CV folds
 3. Groups levels by effective matched gene count and generates one shared null distribution per `(top_k, classifier, k_effective)` group
 4. Reports an empirical p-value, a null-relative z-score, and a single BH-FDR column across the full result grid
@@ -792,7 +820,7 @@ Putting it all together for two validation cohorts:
 ```bash
 # --- Gene list from discovery cohort ---
 python scripts/generate_sieve_gene_list.py \
-    --variant-rankings results/attribution_comparison/variant_rankings_corrected.csv \
+    --variant-rankings results/attribution_comparison/corrected/corrected_variant_rankings.csv \
     --output validation/sieve_gene_lists/sieve_genes.tsv \
     --score-column z_attribution \
     --aggregation max

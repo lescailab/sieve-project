@@ -195,8 +195,8 @@ class TestNonlinearValidation:
 
         assert output_a.read_bytes() == output_b.read_bytes()
 
-    def test_cli_requires_top_k(self, capsys: pytest.CaptureFixture[str]) -> None:
-        """Argparse must reject invocations that omit --top-k."""
+    def test_cli_requires_top_k_or_fdr_threshold(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """Argparse must reject invocations that omit both --top-k and --fdr-threshold."""
         with pytest.raises(SystemExit):
             nonlinear.parse_args(
                 [
@@ -214,7 +214,31 @@ class TestNonlinearValidation:
             )
 
         stderr = capsys.readouterr().err
-        assert "--top-k" in stderr
+        assert "--top-k" in stderr or "--fdr-threshold" in stderr
+
+    def test_cli_rejects_top_k_and_fdr_threshold_together(
+        self, capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Argparse must reject invocations with both --top-k and --fdr-threshold."""
+        with pytest.raises(SystemExit):
+            nonlinear.parse_args(
+                [
+                    "--real-rankings-dir",
+                    "rankings",
+                    "--burden-matrix",
+                    "burden.parquet",
+                    "--labels",
+                    "labels.tsv",
+                    "--output-tsv",
+                    "out.tsv",
+                    "--classifiers",
+                    "rf",
+                    "--top-k",
+                    "100",
+                    "--fdr-threshold",
+                    "0.05",
+                ]
+            )
 
     def test_custom_grid_row_count(self, tmp_path: Path) -> None:
         """Custom top-k and classifier grids must produce the expected row count."""
@@ -326,6 +350,88 @@ class TestNonlinearValidation:
         assert set(summary_df["k_effective"]) == {3, 5}
         assert seen_set_sizes.count(3) == 1
         assert seen_set_sizes.count(5) == 1
+
+    def test_fdr_threshold_end_to_end(self, tmp_path: Path) -> None:
+        """FDR-threshold mode should produce valid output with fdr_threshold populated."""
+        burden_path, label_path, rankings_root = prepare_inputs(tmp_path)
+        output_tsv = tmp_path / "fdr_validation_summary.tsv"
+
+        nonlinear.main(
+            [
+                "--real-rankings-dir",
+                str(rankings_root),
+                "--burden-matrix",
+                str(burden_path),
+                "--labels",
+                str(label_path),
+                "--output-tsv",
+                str(output_tsv),
+                "--fdr-threshold",
+                "0.25",
+                "--classifiers",
+                "rf",
+                "--levels",
+                "L0,L1",
+                "--n-permutations",
+                "4",
+                "--cv-folds",
+                "3",
+                "--n-cores",
+                "1",
+                "--seed",
+                "42",
+            ]
+        )
+
+        summary_df = pd.read_csv(output_tsv, sep="\t")
+        assert list(summary_df.columns) == nonlinear.SUMMARY_COLUMNS
+        assert len(summary_df) > 0
+        assert (summary_df["fdr_threshold"] == 0.25).all()
+        # All levels should appear (both have genes with fdr < 0.25)
+        assert set(summary_df["level"]) == {"L0", "L1"}
+
+    def test_fdr_threshold_skips_levels_with_no_passing_genes(self, tmp_path: Path) -> None:
+        """Levels where no genes pass the FDR threshold should be skipped."""
+        burden_path, label_path, rankings_root = prepare_inputs(tmp_path, levels=("L0", "L1"))
+        output_tsv = tmp_path / "fdr_skip.tsv"
+
+        # Set all FDR values in L1 to high values so nothing passes
+        l1_path = rankings_root / "L1" / "gene_rankings_with_significance.csv"
+        l1_rankings = pd.read_csv(l1_path)
+        l1_rankings["fdr_gene"] = 0.99
+        l1_rankings.to_csv(l1_path, index=False)
+
+        nonlinear.main(
+            [
+                "--real-rankings-dir",
+                str(rankings_root),
+                "--burden-matrix",
+                str(burden_path),
+                "--labels",
+                str(label_path),
+                "--output-tsv",
+                str(output_tsv),
+                "--fdr-threshold",
+                "0.25",
+                "--classifiers",
+                "rf",
+                "--levels",
+                "L0,L1",
+                "--n-permutations",
+                "4",
+                "--cv-folds",
+                "3",
+                "--n-cores",
+                "1",
+                "--seed",
+                "42",
+            ]
+        )
+
+        summary_df = pd.read_csv(output_tsv, sep="\t")
+        assert len(summary_df) > 0
+        # L1 should be skipped since no genes pass fdr < 0.25
+        assert set(summary_df["level"]) == {"L0"}
 
     def test_thread_environment_variables_are_pinned(self) -> None:
         """BLAS/OpenMP thread counts must be pinned to one at import time."""

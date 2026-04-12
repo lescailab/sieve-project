@@ -116,6 +116,14 @@ def parse_args():
                         help='Reference genome build (default: GRCh37)')
     parser.add_argument('--top-k', type=int, default=100,
                         help='Number of top variants to annotate in output (default: 100)')
+    parser.add_argument(
+        '--gene-significance', type=str, default=None,
+        help=(
+            'Path to gene_rankings_with_significance.csv for merging '
+            'empirical_p_gene and fdr_gene into corrected gene rankings. '
+            'Auto-discovered from the --rankings parent directory if not specified.'
+        ),
+    )
 
     return parser.parse_args()
 
@@ -268,7 +276,10 @@ def create_manhattan_plot(
     print(f"Saved Manhattan plot to {output_path}")
 
 
-def create_gene_rankings(df: pd.DataFrame) -> pd.DataFrame:
+def create_gene_rankings(
+    df: pd.DataFrame,
+    gene_significance_df: pd.DataFrame | None = None,
+) -> pd.DataFrame:
     """
     Re-aggregate gene rankings from corrected variant scores.
 
@@ -276,6 +287,12 @@ def create_gene_rankings(df: pd.DataFrame) -> pd.DataFrame:
     ----------
     df : pd.DataFrame
         Corrected variant rankings with z_attribution.
+    gene_significance_df : pd.DataFrame or None
+        Gene-level significance from ``compare_attributions.py``
+        (``gene_rankings_with_significance.csv``).  If provided,
+        ``empirical_p_gene`` and ``fdr_gene`` are merged into the
+        output so that corrected gene rankings carry both z-score
+        and null-contrast significance information.
 
     Returns
     -------
@@ -291,6 +308,24 @@ def create_gene_rankings(df: pd.DataFrame) -> pd.DataFrame:
     ).reset_index()
     gene_agg = gene_agg.sort_values('gene_z_score', ascending=False).reset_index(drop=True)
     gene_agg['gene_rank'] = range(1, len(gene_agg) + 1)
+
+    # Merge gene-level significance if available
+    if gene_significance_df is not None:
+        sig_gene_col = (
+            'gene_name' if 'gene_name' in gene_significance_df.columns else 'gene_id'
+        )
+        sig_cols = [sig_gene_col]
+        for col in ('empirical_p_gene', 'fdr_gene'):
+            if col in gene_significance_df.columns:
+                sig_cols.append(col)
+
+        if len(sig_cols) > 1:
+            sig_subset = gene_significance_df[sig_cols].copy()
+            sig_subset = sig_subset.rename(columns={sig_gene_col: gene_col})
+            gene_agg = gene_agg.merge(sig_subset, on=gene_col, how='left')
+            n_matched = gene_agg['empirical_p_gene'].notna().sum() if 'empirical_p_gene' in gene_agg.columns else 0
+            print(f"  Merged gene significance: {n_matched}/{len(gene_agg)} genes matched")
+
     return gene_agg
 
 
@@ -362,8 +397,23 @@ def main():
     top_df.to_csv(top_path, index=False)
     print(f"Saved top-{args.top_k} to {top_path}")
 
+    # Auto-discover or load gene significance file
+    gene_sig_df = None
+    gene_sig_path = None
+    if args.gene_significance:
+        gene_sig_path = Path(args.gene_significance)
+    else:
+        gene_sig_path = Path(args.rankings).parent / 'gene_rankings_with_significance.csv'
+
+    if gene_sig_path is not None and gene_sig_path.exists():
+        gene_sig_df = pd.read_csv(gene_sig_path)
+        print(f"\nLoaded gene significance from {gene_sig_path}")
+    elif gene_sig_path is not None:
+        print(f"\nGene significance file not found at {gene_sig_path} — "
+              "corrected gene rankings will not include empirical_p_gene / fdr_gene")
+
     # Gene rankings
-    gene_rankings = create_gene_rankings(corrected_filtered)
+    gene_rankings = create_gene_rankings(corrected_filtered, gene_significance_df=gene_sig_df)
     gene_path = output_dir / 'corrected_gene_rankings.csv'
     gene_rankings.to_csv(gene_path, index=False)
     print(f"Saved corrected gene rankings to {gene_path}")
