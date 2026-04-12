@@ -68,6 +68,21 @@ class TestCreateGeneRankingsWithSignificance:
         assert "gene_rank" in result.columns
         assert "empirical_p_gene" not in result.columns
 
+    def test_missing_gene_column_raises_valueerror(self) -> None:
+        """Raise ValueError when significance df has no gene_name or gene_id."""
+        variants = _make_variant_rankings()
+        from src.data.genome import get_genome_build
+        build = get_genome_build("GRCh37")
+        corrected = chrx.compute_chromosome_zscores(variants, build)
+
+        bad_sig = pd.DataFrame({
+            "symbol": ["BRCA1", "TP53"],
+            "empirical_p_gene": [0.01, 0.02],
+            "fdr_gene": [0.05, 0.10],
+        })
+        with pytest.raises(ValueError, match="gene_name.*gene_id"):
+            chrx.create_gene_rankings(corrected, gene_significance_df=bad_sig)
+
     def test_partial_gene_match(self) -> None:
         """Genes missing from significance get NaN for significance columns."""
         variants = _make_variant_rankings()
