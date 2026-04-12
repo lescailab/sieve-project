@@ -82,6 +82,7 @@ SUMMARY_COLUMNS = [
     "level",
     "top_k",
     "k_effective",
+    "fdr_threshold",
     "classifier",
     "observed_auc",
     "observed_std",
@@ -136,10 +137,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         required=True,
         help="Summary TSV to write",
     )
-    parser.add_argument(
+    gene_set_group = parser.add_mutually_exclusive_group(required=True)
+    gene_set_group.add_argument(
         "--top-k",
-        required=True,
         help="Comma-separated list of top-k values, e.g. 100,500,1000,2000",
+    )
+    gene_set_group.add_argument(
+        "--fdr-threshold",
+        type=float,
+        help=(
+            "FDR threshold for gene selection (e.g. 0.05). Selects all genes "
+            "with fdr_gene below this cutoff. Gene set size is determined "
+            "dynamically per level. Mutually exclusive with --top-k."
+        ),
     )
     parser.add_argument(
         "--classifiers",
@@ -301,11 +311,26 @@ def detect_level_ranking_files(
     return level_paths
 
 
+FDR_COLUMN_CANDIDATES = ["fdr_gene", "fdr_variant", "fdr_bh", "fdr"]
+
+
 def load_gene_rankings(
     rankings_path: Path,
     requested_score_column: str,
+    preserve_fdr: bool = False,
 ) -> pd.DataFrame:
-    """Load and standardise one gene-ranking file."""
+    """Load and standardise one gene-ranking file.
+
+    Parameters
+    ----------
+    rankings_path : Path
+        Path to a gene-level ranking CSV.
+    requested_score_column : str
+        Column to use for ranking genes.
+    preserve_fdr : bool
+        If True, keep the FDR column alongside the ranking score
+        so that ``--fdr-threshold`` filtering can be applied later.
+    """
     df = pd.read_csv(rankings_path)
 
     gene_column = next(
@@ -321,8 +346,22 @@ def load_gene_rankings(
     actual_score_column = resolve_score_column(df, requested_score_column)
     ascending = score_column_is_ascending(requested_score_column)
 
+    keep_cols = [gene_column, actual_score_column]
+
+    # Preserve FDR column for threshold-based filtering
+    fdr_col_name: str | None = None
+    if preserve_fdr:
+        for candidate in FDR_COLUMN_CANDIDATES:
+            if candidate in df.columns and candidate != actual_score_column:
+                fdr_col_name = candidate
+                keep_cols.append(candidate)
+                break
+        # If score column itself is an FDR column, use it
+        if fdr_col_name is None and actual_score_column.lower().startswith("fdr"):
+            fdr_col_name = actual_score_column
+
     ranked = (
-        df[[gene_column, actual_score_column]]
+        df[list(dict.fromkeys(keep_cols))]  # deduplicate while preserving order
         .copy()
         .rename(
             columns={
@@ -331,8 +370,15 @@ def load_gene_rankings(
             }
         )
     )
+    if fdr_col_name is not None and fdr_col_name != actual_score_column:
+        ranked = ranked.rename(columns={fdr_col_name: "fdr_value"})
+    elif fdr_col_name == actual_score_column:
+        ranked["fdr_value"] = ranked["ranking_score"]
+
     ranked["gene_name"] = ranked["gene_name"].astype(str)
     ranked["ranking_score"] = pd.to_numeric(ranked["ranking_score"], errors="coerce")
+    if "fdr_value" in ranked.columns:
+        ranked["fdr_value"] = pd.to_numeric(ranked["fdr_value"], errors="coerce")
     ranked = ranked.dropna(subset=["gene_name", "ranking_score"])
     ranked = ranked.drop_duplicates(subset=["gene_name"], keep="first")
     ranked = ranked.sort_values(
@@ -563,6 +609,48 @@ def select_observed_gene_set(
     }
 
 
+def select_observed_gene_set_by_fdr(
+    ranked_genes: pd.DataFrame,
+    burden_columns: Sequence[str],
+    fdr_threshold: float,
+) -> dict[str, Any]:
+    """Select observed genes passing an FDR threshold and intersect with burden matrix."""
+    if "fdr_value" not in ranked_genes.columns:
+        raise ValueError(
+            "FDR threshold mode requires an fdr_value column in gene rankings. "
+            "Ensure the gene rankings file contains fdr_gene or equivalent."
+        )
+    passing = ranked_genes[ranked_genes["fdr_value"] < fdr_threshold]
+    selected_gene_names = passing["gene_name"].tolist()
+
+    burden_lookup = {
+        str(column).upper(): index for index, column in enumerate(burden_columns)
+    }
+
+    matched_indices: list[int] = []
+    matched_genes: list[str] = []
+    missing_genes: list[str] = []
+    seen: set[str] = set()
+
+    for gene_name in selected_gene_names:
+        gene_upper = gene_name.upper()
+        if gene_upper in burden_lookup and gene_upper not in seen:
+            matched_indices.append(burden_lookup[gene_upper])
+            matched_genes.append(str(burden_columns[burden_lookup[gene_upper]]))
+            seen.add(gene_upper)
+        elif gene_upper not in burden_lookup:
+            missing_genes.append(gene_name)
+
+    return {
+        "selected_gene_names": selected_gene_names,
+        "matched_genes": matched_genes,
+        "missing_genes": missing_genes,
+        "feature_indices": np.asarray(matched_indices, dtype=np.int64),
+        "k_effective": int(len(matched_indices)),
+        "top_k": int(len(selected_gene_names)),
+    }
+
+
 def resolve_observed_gene_sets(
     level_rankings: dict[str, pd.DataFrame],
     burden_columns: Sequence[str],
@@ -604,6 +692,71 @@ def resolve_observed_gene_sets(
             print(f"    k_effective={k_effective}: {', '.join(levels)}")
 
     return observed_gene_sets, levels_by_k_effective
+
+
+def resolve_observed_gene_sets_by_fdr(
+    level_rankings: dict[str, pd.DataFrame],
+    burden_columns: Sequence[str],
+    requested_levels: Sequence[str],
+    fdr_threshold: float,
+) -> tuple[dict[str, dict[str, Any]], dict[int, list[str]], list[str]]:
+    """Resolve gene sets by FDR threshold and group levels by effective size.
+
+    Returns
+    -------
+    observed_gene_sets : dict
+        Per-level gene set info.
+    levels_by_k_effective : dict
+        Levels grouped by effective gene-set size.
+    skipped_levels : list
+        Levels with no genes passing the FDR threshold.
+    """
+    observed_gene_sets: dict[str, dict[str, Any]] = {}
+    levels_by_k_effective: dict[int, list[str]] = {}
+    skipped_levels: list[str] = []
+
+    for level in requested_levels:
+        observed_gene_set = select_observed_gene_set_by_fdr(
+            ranked_genes=level_rankings[level],
+            burden_columns=burden_columns,
+            fdr_threshold=fdr_threshold,
+        )
+        top_k = observed_gene_set["top_k"]
+        k_effective = observed_gene_set["k_effective"]
+
+        if top_k == 0:
+            print(
+                f"  {level}: no genes pass fdr < {fdr_threshold} — skipping"
+            )
+            skipped_levels.append(level)
+            continue
+
+        if k_effective == 0:
+            print(
+                f"  {level}: {top_k} genes pass fdr < {fdr_threshold} but "
+                f"none matched the burden matrix — skipping"
+            )
+            skipped_levels.append(level)
+            continue
+
+        print(
+            f"  {level}: {top_k} genes pass fdr < {fdr_threshold}, "
+            f"matched {k_effective} in burden matrix "
+            f"({len(observed_gene_set['missing_genes'])} missing)"
+        )
+        observed_gene_sets[level] = observed_gene_set
+        levels_by_k_effective.setdefault(k_effective, []).append(level)
+
+    if len(levels_by_k_effective) > 1:
+        print(
+            "  NOTE: effective gene-set size differs across levels. "
+            "Shared null distributions will be reused only within levels "
+            "that have the same k_effective."
+        )
+        for k_effective, levels in sorted(levels_by_k_effective.items()):
+            print(f"    k_effective={k_effective}: {', '.join(levels)}")
+
+    return observed_gene_sets, levels_by_k_effective, skipped_levels
 
 
 def compute_empirical_p(observed_value: float, null_distribution: np.ndarray) -> float:
@@ -886,21 +1039,25 @@ def build_yaml_payload(
     linear_baseline: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build one YAML payload for a validation result."""
+    params: dict[str, Any] = {
+        "ablation_level": result["level"],
+        "top_k": int(result["top_k"]),
+        "k_effective": int(result["k_effective"]),
+        "missing_genes": [str(gene) for gene in result["missing_genes"]],
+        "n_samples": int(result["n_samples"]),
+        "n_cases": int(result["n_cases"]),
+        "n_controls": int(result["n_controls"]),
+        "classifier": CLASSIFIER_LABELS[result["classifier"]],
+        "cv_folds": int(cv_folds),
+        "n_permutations": int(result["n_permutations"]),
+        "seed": int(result["seed"]),
+        "score_column": str(result["score_column"]),
+    }
+    if result.get("fdr_threshold") is not None:
+        params["fdr_threshold"] = float(result["fdr_threshold"])
+
     payload: dict[str, Any] = {
-        "parameters": {
-            "ablation_level": result["level"],
-            "top_k": int(result["top_k"]),
-            "k_effective": int(result["k_effective"]),
-            "missing_genes": [str(gene) for gene in result["missing_genes"]],
-            "n_samples": int(result["n_samples"]),
-            "n_cases": int(result["n_cases"]),
-            "n_controls": int(result["n_controls"]),
-            "classifier": CLASSIFIER_LABELS[result["classifier"]],
-            "cv_folds": int(cv_folds),
-            "n_permutations": int(result["n_permutations"]),
-            "seed": int(result["seed"]),
-            "score_column": str(result["score_column"]),
-        },
+        "parameters": params,
         "observed": {
             "mean_auc": float(round(result["observed_auc"], 6)),
             "std_auc": float(round(result["observed_std"], 6)),
@@ -982,11 +1139,119 @@ def write_auxiliary_outputs(
             )
 
 
+def _run_evaluation_loop(
+    observed_gene_sets: dict[str, dict[str, Any]],
+    levels_by_k_effective: dict[int, list[str]],
+    top_k_label: int,
+    fdr_threshold_value: float | None,
+    burden_values: np.ndarray,
+    labels: np.ndarray,
+    fold_indices: Sequence[tuple[np.ndarray, np.ndarray]],
+    classifiers_to_run: Sequence[str],
+    gene_universe_size: int,
+    n_permutations: int,
+    seed: int,
+    n_cores: int,
+    parallel_verbose: int,
+    score_column: str,
+) -> list[dict[str, Any]]:
+    """Run the shared-null evaluation loop for one gene-set configuration."""
+    results: list[dict[str, Any]] = []
+    n_cases = int(np.sum(labels == 1))
+    n_controls = int(np.sum(labels == 0))
+
+    for classifier_name in classifiers_to_run:
+        for k_effective, grouped_levels in sorted(levels_by_k_effective.items()):
+            print(
+                f"\nShared null for classifier={classifier_name}, "
+                f"k_effective={k_effective}"
+            )
+            permutation_seed = (
+                derive_seed(top_k_label, classifier_name, seed)
+                + k_effective * 1_000_003
+            )
+            random_gene_sets = draw_random_gene_sets(
+                gene_universe_size=gene_universe_size,
+                set_size=k_effective,
+                n_permutations=n_permutations,
+                seed=permutation_seed,
+            )
+            null_aucs = run_shared_null_distribution(
+                burden_values=burden_values,
+                labels=labels,
+                random_gene_sets=random_gene_sets,
+                fold_indices=fold_indices,
+                classifier_name=classifier_name,
+                seed=permutation_seed,
+                n_cores=n_cores,
+                parallel_verbose=parallel_verbose,
+            )
+            null_mean_auc = float(np.mean(null_aucs))
+            null_std_auc = float(np.std(null_aucs))
+            print(
+                f"  Shared null mean AUC = {null_mean_auc:.4f}, "
+                f"std = {null_std_auc:.4f}"
+            )
+
+            for level in grouped_levels:
+                observed_gene_set = observed_gene_sets[level]
+                observed_aucs = evaluate_auc_for_feature_indices(
+                    burden_values=burden_values,
+                    labels=labels,
+                    feature_indices=observed_gene_set["feature_indices"],
+                    fold_indices=fold_indices,
+                    classifier_name=classifier_name,
+                    model_seed=derive_seed(top_k_label, classifier_name, seed) + 1_000_000,
+                )
+                observed_auc = float(np.mean(observed_aucs))
+                observed_std = float(np.std(observed_aucs))
+                empirical_p = compute_empirical_p(observed_auc, null_aucs)
+                if null_std_auc > 0:
+                    z_score = float((observed_auc - null_mean_auc) / null_std_auc)
+                else:
+                    z_score = float("nan")
+
+                results.append(
+                    {
+                        "level": level,
+                        "top_k": int(observed_gene_set.get("top_k", top_k_label)),
+                        "k_effective": int(k_effective),
+                        "fdr_threshold": fdr_threshold_value,
+                        "classifier": classifier_name,
+                        "observed_auc": observed_auc,
+                        "observed_std": observed_std,
+                        "null_mean_auc": null_mean_auc,
+                        "null_std_auc": null_std_auc,
+                        "empirical_p": empirical_p,
+                        "z_score": z_score,
+                        "observed_aucs": observed_aucs,
+                        "null_aucs": null_aucs,
+                        "missing_genes": observed_gene_set["missing_genes"],
+                        "matched_genes": observed_gene_set["matched_genes"],
+                        "n_samples": int(len(labels)),
+                        "n_cases": int(n_cases),
+                        "n_controls": int(n_controls),
+                        "n_permutations": int(n_permutations),
+                        "seed": int(seed),
+                        "score_column": score_column,
+                    }
+                )
+                print(
+                    f"    {level}: observed_auc={observed_auc:.4f} "
+                    f"empirical_p={empirical_p:.4f}"
+                )
+
+    return results
+
+
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
 
+    fdr_mode = args.fdr_threshold is not None
+
     try:
-        top_k_values = parse_int_csv(args.top_k, "--top-k")
+        if not fdr_mode:
+            top_k_values = parse_int_csv(args.top_k, "--top-k")
         classifiers_to_run = parse_choice_csv(
             args.classifiers,
             "--classifiers",
@@ -1004,6 +1269,10 @@ def main(argv: list[str] | None = None) -> None:
     log_thread_configuration()
     parallel_verbose = get_parallel_verbose()
     print(f"joblib.Parallel verbosity: {parallel_verbose}")
+    if fdr_mode:
+        print(f"Gene selection mode: FDR threshold < {args.fdr_threshold}")
+    else:
+        print(f"Gene selection mode: fixed top-k = {top_k_values}")
     print("")
 
     print(f"Loading burden matrix from {args.burden_matrix}...")
@@ -1055,7 +1324,9 @@ def main(argv: list[str] | None = None) -> None:
         requested_levels=requested_levels,
     )
     level_rankings = {
-        level: load_gene_rankings(path, args.score_column)
+        level: load_gene_rankings(
+            path, args.score_column, preserve_fdr=fdr_mode,
+        )
         for level, path in level_ranking_files.items()
     }
 
@@ -1072,103 +1343,87 @@ def main(argv: list[str] | None = None) -> None:
     results: list[dict[str, Any]] = []
     gene_universe_size = burden_values.shape[1]
 
-    for top_k in top_k_values:
+    if fdr_mode:
+        # FDR-threshold mode: single gene set per level
         print(f"\n{'=' * 72}")
-        print(f"top_k = {top_k}")
+        print(f"FDR threshold = {args.fdr_threshold}")
         print(f"{'=' * 72}")
 
-        if top_k > gene_universe_size:
-            raise ValueError(
-                f"Requested top_k={top_k} exceeds burden matrix width "
-                f"({gene_universe_size} genes)"
+        observed_gene_sets, levels_by_k_effective, skipped = (
+            resolve_observed_gene_sets_by_fdr(
+                level_rankings=level_rankings,
+                burden_columns=burden_matrix.columns,
+                requested_levels=requested_levels,
+                fdr_threshold=args.fdr_threshold,
             )
-
-        observed_gene_sets, levels_by_k_effective = resolve_observed_gene_sets(
-            level_rankings=level_rankings,
-            burden_columns=burden_matrix.columns,
-            requested_levels=requested_levels,
-            top_k=top_k,
         )
 
-        for classifier_name in classifiers_to_run:
-            for k_effective, grouped_levels in sorted(levels_by_k_effective.items()):
-                print(
-                    f"\nShared null for classifier={classifier_name}, "
-                    f"k_effective={k_effective}"
+        if not observed_gene_sets:
+            print(
+                "ERROR: No levels have genes passing the FDR threshold.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        # Use the maximum top_k across levels as label for seed derivation
+        max_top_k = max(gs["top_k"] for gs in observed_gene_sets.values())
+
+        results.extend(
+            _run_evaluation_loop(
+                observed_gene_sets=observed_gene_sets,
+                levels_by_k_effective=levels_by_k_effective,
+                top_k_label=max_top_k,
+                fdr_threshold_value=args.fdr_threshold,
+                burden_values=burden_values,
+                labels=labels,
+                fold_indices=fold_indices,
+                classifiers_to_run=classifiers_to_run,
+                gene_universe_size=gene_universe_size,
+                n_permutations=args.n_permutations,
+                seed=args.seed,
+                n_cores=args.n_cores,
+                parallel_verbose=parallel_verbose,
+                score_column=args.score_column,
+            )
+        )
+    else:
+        # Fixed top-k mode
+        for top_k in top_k_values:
+            print(f"\n{'=' * 72}")
+            print(f"top_k = {top_k}")
+            print(f"{'=' * 72}")
+
+            if top_k > gene_universe_size:
+                raise ValueError(
+                    f"Requested top_k={top_k} exceeds burden matrix width "
+                    f"({gene_universe_size} genes)"
                 )
-                permutation_seed = (
-                    derive_seed(top_k, classifier_name, args.seed)
-                    + k_effective * 1_000_003
-                )
-                random_gene_sets = draw_random_gene_sets(
-                    gene_universe_size=gene_universe_size,
-                    set_size=k_effective,
-                    n_permutations=args.n_permutations,
-                    seed=permutation_seed,
-                )
-                null_aucs = run_shared_null_distribution(
+
+            observed_gene_sets, levels_by_k_effective = resolve_observed_gene_sets(
+                level_rankings=level_rankings,
+                burden_columns=burden_matrix.columns,
+                requested_levels=requested_levels,
+                top_k=top_k,
+            )
+
+            results.extend(
+                _run_evaluation_loop(
+                    observed_gene_sets=observed_gene_sets,
+                    levels_by_k_effective=levels_by_k_effective,
+                    top_k_label=top_k,
+                    fdr_threshold_value=None,
                     burden_values=burden_values,
                     labels=labels,
-                    random_gene_sets=random_gene_sets,
                     fold_indices=fold_indices,
-                    classifier_name=classifier_name,
-                    seed=permutation_seed,
+                    classifiers_to_run=classifiers_to_run,
+                    gene_universe_size=gene_universe_size,
+                    n_permutations=args.n_permutations,
+                    seed=args.seed,
                     n_cores=args.n_cores,
                     parallel_verbose=parallel_verbose,
+                    score_column=args.score_column,
                 )
-                null_mean_auc = float(np.mean(null_aucs))
-                null_std_auc = float(np.std(null_aucs))
-                print(
-                    f"  Shared null mean AUC = {null_mean_auc:.4f}, "
-                    f"std = {null_std_auc:.4f}"
-                )
-
-                for level in grouped_levels:
-                    observed_gene_set = observed_gene_sets[level]
-                    observed_aucs = evaluate_auc_for_feature_indices(
-                        burden_values=burden_values,
-                        labels=labels,
-                        feature_indices=observed_gene_set["feature_indices"],
-                        fold_indices=fold_indices,
-                        classifier_name=classifier_name,
-                        model_seed=derive_seed(top_k, classifier_name, args.seed) + 1_000_000,
-                    )
-                    observed_auc = float(np.mean(observed_aucs))
-                    observed_std = float(np.std(observed_aucs))
-                    empirical_p = compute_empirical_p(observed_auc, null_aucs)
-                    if null_std_auc > 0:
-                        z_score = float((observed_auc - null_mean_auc) / null_std_auc)
-                    else:
-                        z_score = float("nan")
-
-                    results.append(
-                        {
-                            "level": level,
-                            "top_k": int(top_k),
-                            "k_effective": int(k_effective),
-                            "classifier": classifier_name,
-                            "observed_auc": observed_auc,
-                            "observed_std": observed_std,
-                            "null_mean_auc": null_mean_auc,
-                            "null_std_auc": null_std_auc,
-                            "empirical_p": empirical_p,
-                            "z_score": z_score,
-                            "observed_aucs": observed_aucs,
-                            "null_aucs": null_aucs,
-                            "missing_genes": observed_gene_set["missing_genes"],
-                            "matched_genes": observed_gene_set["matched_genes"],
-                            "n_samples": int(len(labels)),
-                            "n_cases": int(n_cases),
-                            "n_controls": int(n_controls),
-                            "n_permutations": int(args.n_permutations),
-                            "seed": int(args.seed),
-                            "score_column": args.score_column,
-                        }
-                    )
-                    print(
-                        f"    {level}: observed_auc={observed_auc:.4f} "
-                        f"empirical_p={empirical_p:.4f}"
-                    )
+            )
 
     if not results:
         print("ERROR: No results were produced.", file=sys.stderr)

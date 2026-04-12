@@ -133,6 +133,40 @@ Use `--score-column z_attribution` for the default corrected-score workflow. The
 
 Use `--score-column fdr_gene` when you want to rank genes by their gene-level null-contrast significance instead of corrected effect size. Lower values are treated as better for FDR-based ranking.
 
+### FDR-Threshold Gene Selection
+
+Instead of choosing a fixed number of top genes, you can let the gene set size be determined by an FDR cutoff:
+
+```bash
+python scripts/validate_nonlinear_classifier.py \
+    --real-rankings-dir results/ablation/rankings \
+    --burden-matrix validation/cohort_b/gene_burden_matrix.parquet \
+    --labels /path/to/phenotypes.tsv \
+    --output-tsv validation/cohort_b/nonlinear_validation/nonlinear_validation_fdr.tsv \
+    --fdr-threshold 0.05 \
+    --classifiers rf,lr \
+    --levels L0,L1,L2,L3 \
+    --n-permutations 1000 \
+    --n-cores 8 \
+    --seed 42
+```
+
+`--fdr-threshold` and `--top-k` are **mutually exclusive**. When `--fdr-threshold` is used:
+
+- Each annotation level independently determines its gene set as the set of genes with `fdr_gene < threshold`.
+- Different levels may produce different gene set sizes — this is scientifically meaningful, as it reflects how many genes are statistically significant at each annotation level.
+- The summary TSV includes a `fdr_threshold` column to distinguish these results from fixed top-k runs.
+- If no genes pass the threshold at a given level, that level is skipped with a warning.
+
+**When to use which mode:**
+
+| Mode | Best for |
+|------|----------|
+| `--top-k 50,100,200,500` | Exploratory analysis, comparing levels at matched gene-set sizes, sensitivity analysis across multiple thresholds |
+| `--fdr-threshold 0.05` | Statistically motivated gene sets, validating only genes with null-contrast significance, manuscript-quality results |
+
+The gene rankings files must contain `fdr_gene` for FDR-threshold mode to work. This column is available in `gene_rankings_with_significance.csv` (from `compare_attributions.py`) and in `corrected_gene_rankings.csv` (from `correct_chrx_bias.py`, which merges significance from the companion file).
+
 ---
 
 ## Interpreting Non-Linear Classifier Results
@@ -284,7 +318,7 @@ Putting scalar burden and non-linear classifier validation together for one coho
 # --- Step 1: Generate gene lists per ablation level ---
 for level in L0 L1 L2 L3; do
     python scripts/generate_sieve_gene_list.py \
-        --variant-rankings results/${level}_attribution_comparison/variant_rankings_corrected.csv \
+        --variant-rankings results/${level}_attribution_comparison/corrected/corrected_variant_rankings.csv \
         --output validation/sieve_gene_lists/sieve_genes.tsv \
         --ablation-level ${level} \
         --score-column z_attribution \
@@ -313,13 +347,26 @@ for level in L0 L1 L2 L3; do
         --seed 42
 done
 
-# --- Step 4: Non-linear classifier validation (all levels at once) ---
+# --- Step 4a: Non-linear classifier validation with fixed top-k ---
 python scripts/validate_nonlinear_classifier.py \
     --real-rankings-dir results/ablation/rankings \
     --burden-matrix validation/cohort_b/gene_burden_matrix.parquet \
     --labels /path/to/validation_phenotypes.tsv \
     --output-tsv validation/cohort_b/nonlinear_validation/nonlinear_validation_summary.tsv \
     --top-k 50,100,200,500 \
+    --n-permutations 1000 \
+    --classifiers rf,lr \
+    --n-cores 8 \
+    --seed 42
+
+# --- Step 4b: Alternative — FDR-threshold gene selection ---
+# Uses only genes with fdr_gene < 0.05 (gene set size determined per level)
+python scripts/validate_nonlinear_classifier.py \
+    --real-rankings-dir results/ablation/rankings \
+    --burden-matrix validation/cohort_b/gene_burden_matrix.parquet \
+    --labels /path/to/validation_phenotypes.tsv \
+    --output-tsv validation/cohort_b/nonlinear_validation/nonlinear_validation_fdr.tsv \
+    --fdr-threshold 0.05 \
     --n-permutations 1000 \
     --classifiers rf,lr \
     --n-cores 8 \
