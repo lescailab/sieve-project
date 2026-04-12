@@ -102,7 +102,6 @@ class TestMainAutoDiscovery:
         )
 
         output_dir = tmp_path / "output"
-        chrx.main.__wrapped__ if hasattr(chrx.main, '__wrapped__') else None
         # Call via CLI arguments
         import sys
         old_argv = sys.argv

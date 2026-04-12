@@ -311,9 +311,15 @@ def create_gene_rankings(
 
     # Merge gene-level significance if available
     if gene_significance_df is not None:
-        sig_gene_col = (
-            'gene_name' if 'gene_name' in gene_significance_df.columns else 'gene_id'
-        )
+        if 'gene_name' in gene_significance_df.columns:
+            sig_gene_col = 'gene_name'
+        elif 'gene_id' in gene_significance_df.columns:
+            sig_gene_col = 'gene_id'
+        else:
+            raise ValueError(
+                "gene_significance_df must contain either 'gene_name' or "
+                f"'gene_id' for merging, but columns were: {list(gene_significance_df.columns)!r}"
+            )
         sig_cols = [sig_gene_col]
         for col in ('empirical_p_gene', 'fdr_gene'):
             if col in gene_significance_df.columns:
