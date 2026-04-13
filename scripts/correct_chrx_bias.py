@@ -392,6 +392,9 @@ def main():
     else:
         corrected_filtered = corrected.copy()
 
+    # Sort best-first so .head(top_k) always returns the strongest variants.
+    corrected = corrected.sort_values('z_attribution', ascending=False).reset_index(drop=True)
+
     # Save corrected rankings
     corrected_path = output_dir / 'corrected_variant_rankings.csv'
     corrected.to_csv(corrected_path, index=False)
