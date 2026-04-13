@@ -28,11 +28,11 @@ Usage:
         --score-column z_attribution \\
         --out-comparison ablation_ranking_comparison.yaml
 
-    # With explicit per-level paths
+    # With explicit per-level paths (using chrX-corrected files which contain z_attribution)
     python scripts/compare_ablation_rankings.py \\
-        --rankings L0:results/null_baseline_L0/results/attribution_comparison/variant_rankings_with_significance.csv \\
-                   L1:results/null_baseline_L1/results/attribution_comparison/variant_rankings_with_significance.csv \\
-                   L2:results/null_baseline_L2/results/attribution_comparison/variant_rankings_with_significance.csv \\
+        --rankings L0:results/null_baseline_L0/results/attribution_comparison/corrected/corrected_variant_rankings.csv \\
+                   L1:results/null_baseline_L1/results/attribution_comparison/corrected/corrected_variant_rankings.csv \\
+                   L2:results/null_baseline_L2/results/attribution_comparison/corrected/corrected_variant_rankings.csv \\
         --score-column z_attribution \\
         --out-comparison ablation_ranking_comparison.yaml
 
