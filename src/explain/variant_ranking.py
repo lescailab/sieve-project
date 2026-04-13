@@ -165,12 +165,19 @@ class VariantRanker:
         elif self.aggregation == 'max':
             df['score'] = df['max_attribution']
         elif self.aggregation == 'rank_average':
+            # Sub-ranks: rank 1 = best (negated so highest attribution → rank 1).
             df['rank_mean'] = rankdata(-df['mean_attribution'])
             df['rank_max'] = rankdata(-df['max_attribution'])
             df['rank_samples'] = rankdata(-df['num_samples'])
             df['score'] = (df['rank_mean'] + df['rank_max'] + df['rank_samples']) / 3
 
-        df['rank'] = rankdata(df['score']).astype(int)
+        # rank 1 = best regardless of aggregation method.
+        # For mean/max: higher score is better → negate before rankdata.
+        # For rank_average: lower composite score is better → use as-is.
+        if self.aggregation == 'rank_average':
+            df['rank'] = rankdata(df['score']).astype(int)
+        else:
+            df['rank'] = rankdata(-df['score']).astype(int)
         df = df.sort_values('rank')
 
         # Reset accumulator
@@ -303,13 +310,19 @@ class VariantRanker:
         elif self.aggregation == 'max':
             df['score'] = df['max_attribution']
         elif self.aggregation == 'rank_average':
-            # Rank-based aggregation (more robust)
+            # Sub-ranks: rank 1 = best (negated so highest attribution → rank 1).
             df['rank_mean'] = rankdata(-df['mean_attribution'])
             df['rank_max'] = rankdata(-df['max_attribution'])
             df['rank_samples'] = rankdata(-df['num_samples'])
             df['score'] = (df['rank_mean'] + df['rank_max'] + df['rank_samples']) / 3
 
-        df['rank'] = rankdata(df['score']).astype(int)
+        # rank 1 = best regardless of aggregation method.
+        # For mean/max: higher score is better → negate before rankdata.
+        # For rank_average: lower composite score is better → use as-is.
+        if self.aggregation == 'rank_average':
+            df['rank'] = rankdata(df['score']).astype(int)
+        else:
+            df['rank'] = rankdata(-df['score']).astype(int)
         df = df.sort_values('rank')
 
         return df

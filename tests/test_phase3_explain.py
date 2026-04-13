@@ -251,6 +251,65 @@ class TestVariantRanking:
         with pytest.raises(ValueError, match="chromosomes"):
             ranker.rank_variants(all_scores, all_meta)
 
+    # ------------------------------------------------------------------
+    # Rank convention: rank 1 = best variant, for all aggregation methods
+    # ------------------------------------------------------------------
+
+    def _make_ranked(self, aggregation: str):
+        """Return rankings for a 3-variant, 2-sample dataset."""
+        # Variant A (chr1:100, gene 0): high attribution in both samples → best
+        # Variant B (chr1:200, gene 1): medium attribution
+        # Variant C (chr1:300, gene 2): low attribution
+        all_scores = [
+            np.array([0.9, 0.5, 0.1]),
+            np.array([0.8, 0.4, 0.2]),
+        ]
+        all_meta = [
+            {
+                'positions': np.array([100, 200, 300]),
+                'gene_ids': np.array([0, 1, 2]),
+                'chromosomes': np.array(['1', '1', '1']),
+            },
+            {
+                'positions': np.array([100, 200, 300]),
+                'gene_ids': np.array([0, 1, 2]),
+                'chromosomes': np.array(['1', '1', '1']),
+            },
+        ]
+        ranker = VariantRanker(aggregation=aggregation)
+        return ranker.rank_variants(all_scores, all_meta)
+
+    def test_rank_convention_mean_best_variant_is_rank1(self):
+        """aggregation='mean': variant with highest mean_attribution must get rank 1."""
+        rankings = self._make_ranked('mean')
+        best = rankings.loc[rankings['mean_attribution'].idxmax()]
+        assert best['rank'] == 1, (
+            f"Expected rank 1 for best mean variant, got {best['rank']}"
+        )
+
+    def test_rank_convention_max_best_variant_is_rank1(self):
+        """aggregation='max': variant with highest max_attribution must get rank 1."""
+        rankings = self._make_ranked('max')
+        best = rankings.loc[rankings['max_attribution'].idxmax()]
+        assert best['rank'] == 1, (
+            f"Expected rank 1 for best max variant, got {best['rank']}"
+        )
+
+    def test_rank_convention_rank_average_best_variant_is_rank1(self):
+        """aggregation='rank_average': variant with lowest composite score must get rank 1."""
+        rankings = self._make_ranked('rank_average')
+        # Lowest composite (rank_mean + rank_max + rank_samples) / 3 = best
+        best = rankings.loc[rankings['score'].idxmin()]
+        assert best['rank'] == 1, (
+            f"Expected rank 1 for best composite variant, got {best['rank']}"
+        )
+        # Sanity-check: the overall best-attribution variant should also top the composite
+        best_mean_pos = rankings.loc[rankings['mean_attribution'].idxmax(), 'position']
+        rank1_pos = rankings.loc[rankings['rank'] == 1, 'position'].iloc[0]
+        assert best_mean_pos == rank1_pos, (
+            "Variant with highest mean_attribution should also top rank_average ranking"
+        )
+
     def test_aggregation_mean_score_equals_mean_attribution(self):
         """With aggregation='mean', score must equal mean_attribution for every row."""
         import pandas as pd
