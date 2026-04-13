@@ -174,10 +174,12 @@ class VariantRanker:
         # rank 1 = best regardless of aggregation method.
         # For mean/max: higher score is better → negate before rankdata.
         # For rank_average: lower composite score is better → use as-is.
+        # method='min' ensures ties share the lowest rank in their group
+        # (standard competition ranking) so .astype(int) is always exact.
         if self.aggregation == 'rank_average':
-            df['rank'] = rankdata(df['score']).astype(int)
+            df['rank'] = rankdata(df['score'], method='min').astype(int)
         else:
-            df['rank'] = rankdata(-df['score']).astype(int)
+            df['rank'] = rankdata(-df['score'], method='min').astype(int)
         df = df.sort_values('rank')
 
         # Reset accumulator
@@ -319,10 +321,12 @@ class VariantRanker:
         # rank 1 = best regardless of aggregation method.
         # For mean/max: higher score is better → negate before rankdata.
         # For rank_average: lower composite score is better → use as-is.
+        # method='min' ensures ties share the lowest rank in their group
+        # (standard competition ranking) so .astype(int) is always exact.
         if self.aggregation == 'rank_average':
-            df['rank'] = rankdata(df['score']).astype(int)
+            df['rank'] = rankdata(df['score'], method='min').astype(int)
         else:
-            df['rank'] = rankdata(-df['score']).astype(int)
+            df['rank'] = rankdata(-df['score'], method='min').astype(int)
         df = df.sort_values('rank')
 
         return df

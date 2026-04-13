@@ -393,7 +393,12 @@ def main():
         corrected_filtered = corrected.copy()
 
     # Sort best-first so .head(top_k) always returns the strongest variants.
+    # Apply to both dataframes: corrected_filtered drives top-k and gene ranking;
+    # corrected drives the full output file.
     corrected = corrected.sort_values('z_attribution', ascending=False).reset_index(drop=True)
+    corrected_filtered = corrected_filtered.sort_values(
+        'z_attribution', ascending=False
+    ).reset_index(drop=True)
 
     # Save corrected rankings
     corrected_path = output_dir / 'corrected_variant_rankings.csv'
