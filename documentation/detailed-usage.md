@@ -422,7 +422,7 @@ done
 
 python scripts/compare_ablation_rankings.py \
     --ranking-dir results/ablation/rankings \
-    --score-column empirical_p_variant \
+    --score-column z_attribution \
     --out-comparison results/ablation/ablation_ranking_comparison.yaml \
     --out-jaccard results/ablation/ablation_jaccard_matrix.tsv \
     --out-level-specific results/ablation/level_specific_variants.tsv
@@ -445,7 +445,7 @@ python scripts/compare_ablation_rankings.py \
                L1:results/null_baseline_L1/results/attribution_comparison/variant_rankings_with_significance.csv \
                L2:results/null_baseline_L2/results/attribution_comparison/variant_rankings_with_significance.csv \
                L3:results/null_baseline_L3/results/attribution_comparison/variant_rankings_with_significance.csv \
-    --score-column empirical_p_variant \
+    --score-column z_attribution \
     --out-comparison results/ablation/ablation_ranking_comparison.yaml \
     --out-jaccard results/ablation/ablation_jaccard_matrix.tsv \
     --out-level-specific results/ablation/level_specific_variants.tsv
@@ -475,7 +475,7 @@ done
 # 2. Compare using the null-contrast empirical p-value ranking
 python scripts/compare_ablation_rankings.py \
     --ranking-dir results/ablation/significance_rankings \
-    --score-column empirical_p_variant \
+    --score-column z_attribution \
     --top-k 100,500,1000,2000 \
     --out-comparison results/ablation/significance_ablation_ranking_comparison.yaml \
     --out-jaccard results/ablation/significance_ablation_jaccard_matrix.tsv \

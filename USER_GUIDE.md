@@ -470,7 +470,7 @@ done
 # Run comparison
 python scripts/compare_ablation_rankings.py \
     --ranking-dir results/ablation/rankings \
-    --score-column empirical_p_variant \
+    --score-column z_attribution \
     --top-k 50,100,200,500 \
     --high-rank-threshold 100 \
     --low-rank-threshold 500 \
@@ -1053,7 +1053,7 @@ done
 
 python scripts/compare_ablation_rankings.py \
     --ranking-dir results/ablation/significance_rankings \
-    --score-column empirical_p_variant \
+    --score-column z_attribution \
     --out-comparison results/ablation/ablation_ranking_comparison.yaml \
     --out-jaccard results/ablation/ablation_jaccard_matrix.tsv \
     --out-level-specific results/ablation/level_specific_variants.tsv
@@ -1077,7 +1077,7 @@ python scripts/compare_ablation_rankings.py \
                L1:"${PROJECT_DIR}/real_experiments/L1/attributions/corrected/corrected_variant_rankings.csv" \
                L2:"${PROJECT_DIR}/real_experiments/L2/attributions/corrected/corrected_variant_rankings.csv" \
                L3:"${PROJECT_DIR}/real_experiments/L3/attributions/corrected/corrected_variant_rankings.csv" \
-    --score-column empirical_p_variant \
+    --score-column z_attribution \
     --out-comparison results/ablation/ablation_ranking_comparison.yaml \
     --out-jaccard results/ablation/ablation_jaccard_matrix.tsv \
     --out-level-specific results/ablation/level_specific_variants.tsv
@@ -1117,10 +1117,10 @@ for LEVEL in L0 L1 L2 L3; do
        results/ablation/significance_rankings/${LEVEL}_sieve_variant_rankings.csv
 done
 
-# 3. Compare using the null-contrast empirical p-value ranking
+# 3. Compare using per-chromosome z-attribution ranking (recommended; see KNOWN_LIMITATIONS.md)
 python scripts/compare_ablation_rankings.py \
     --ranking-dir results/ablation/significance_rankings \
-    --score-column empirical_p_variant \
+    --score-column z_attribution \
     --top-k 100,500,1000,2000 \
     --out-comparison results/ablation/significance_ablation_ranking_comparison.yaml \
     --out-jaccard results/ablation/significance_ablation_jaccard_matrix.tsv \
@@ -1503,13 +1503,13 @@ Compares variant attribution rankings across annotation levels. Computes pairwis
 | `--out-comparison` | path | `ablation_ranking_comparison.yaml` | Output YAML summary |
 | `--out-jaccard` | path | `ablation_jaccard_matrix.tsv` | Output Jaccard matrix TSV |
 | `--out-level-specific` | path | `level_specific_variants.tsv` | Output level-specific variants TSV |
-| `--score-column` | str | `empirical_p_variant` | Column to rank variants by. The default is the null-contrast empirical p-value from `variant_rankings_with_significance.csv`; p/FDR-like columns are ranked ascending automatically |
+| `--score-column` | str | `z_attribution` | Column to rank variants by. The default is the per-chromosome z-normalised attribution from `correct_chrx_bias.py`; p/FDR-like columns are ranked ascending automatically. See KNOWN_LIMITATIONS.md for why `empirical_p_variant` is not the default. |
 
 **Example**:
 ```bash
 python scripts/compare_ablation_rankings.py \
     --ranking-dir results/ablation/rankings \
-    --score-column empirical_p_variant \
+    --score-column z_attribution \
     --top-k 50,100,200,500 \
     --out-comparison results/ablation/ablation_ranking_comparison.yaml \
     --out-jaccard results/ablation/ablation_jaccard_matrix.tsv \
@@ -1780,7 +1780,7 @@ If you used sex-aware preprocessing or observe chrX inflation in rankings, run `
 
 All existing columns — including `empirical_p_variant` and `fdr_variant` — are preserved unchanged. By default, the corrected rankings exclude sex chromosomes. Use `--include-sex-chroms` if you want to keep them in the output (they remain flagged).
 
-For ablation comparison, use the chrX-corrected files `corrected_variant_rankings.csv` from the `corrected/` subdirectory and rank variants with `--score-column empirical_p_variant`. Lower empirical p-values are treated as better ranks automatically, so the cross-level comparison operates on null-compared evidence while benefiting from cross-chromosome normalised z-scores.
+For ablation comparison, use the chrX-corrected files `corrected_variant_rankings.csv` from the `corrected/` subdirectory and rank variants with `--score-column z_attribution` (the default). This column is recommended because it is comparable across chromosomes and is not subject to the empirical p-value resolution floor (see KNOWN_LIMITATIONS.md).
 
 #### Gene Rankings
 
@@ -2219,7 +2219,7 @@ If using `--experiment-dir`, check that `best_model.pt` or `fold_*/best_model.pt
    ```bash
    python scripts/compare_ablation_rankings.py \
        --ranking-dir results/ablation/significance_rankings \
-       --score-column empirical_p_variant \
+       --score-column z_attribution \
        --out-comparison significance_ablation_ranking_comparison.yaml
    ```
 
