@@ -529,3 +529,148 @@ class TestCorrectChrxBiasProjectDir:
             f"Expected exit code 2 from argparse, got {result.returncode}. "
             f"stderr: {result.stderr}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Output sort order: best variant must be first row
+# ---------------------------------------------------------------------------
+
+class TestCompareAttributionsSortOrder:
+
+    def _run_main(self, tmp_path, real_df, null_df):
+        """Run compare_attributions.main() and return (variant_df, gene_df)."""
+        real_path = tmp_path / 'real.csv'
+        null_path = tmp_path / 'null.csv'
+        out_dir = tmp_path / 'out'
+        real_df.to_csv(real_path, index=False)
+        null_df.to_csv(null_path, index=False)
+
+        import sys as _sys
+        old_argv = _sys.argv[:]
+        _sys.argv = [
+            'compare_attributions.py',
+            '--real', str(real_path),
+            '--null', str(null_path),
+            '--output-dir', str(out_dir),
+        ]
+        try:
+            compare_mod.main()
+        finally:
+            _sys.argv = old_argv
+
+        var_df = pd.read_csv(out_dir / 'variant_rankings_with_significance.csv')
+        gene_df = pd.read_csv(out_dir / 'gene_rankings_with_significance.csv')
+        return var_df, gene_df
+
+    def test_variant_output_sorted_descending_by_mean_attribution(
+        self, tmp_path
+    ):
+        """First row must have the largest mean_attribution; last row the smallest."""
+        rng = np.random.default_rng(200)
+        real_df = _make_raw_df(rng.normal(0.5, 1, size=100))
+        null_df = _make_raw_df(rng.normal(0, 1, size=150))
+
+        var_df, _ = self._run_main(tmp_path, real_df, null_df)
+
+        assert var_df.iloc[0]['mean_attribution'] == var_df['mean_attribution'].max(), (
+            "First row should have the largest mean_attribution"
+        )
+        assert var_df.iloc[-1]['mean_attribution'] == var_df['mean_attribution'].min(), (
+            "Last row should have the smallest mean_attribution"
+        )
+
+    def test_gene_output_sorted_descending_by_gene_score(
+        self, tmp_path
+    ):
+        """First row must have the largest gene_score; last row the smallest."""
+        rng = np.random.default_rng(201)
+        real_df = _make_raw_df(rng.normal(0.5, 1, size=100))
+        null_df = _make_raw_df(rng.normal(0, 1, size=150))
+
+        _, gene_df = self._run_main(tmp_path, real_df, null_df)
+
+        assert gene_df.iloc[0]['gene_score'] == gene_df['gene_score'].max(), (
+            "First row should have the largest gene_score"
+        )
+        assert gene_df.iloc[-1]['gene_score'] == gene_df['gene_score'].min(), (
+            "Last row should have the smallest gene_score"
+        )
+
+
+class TestCorrectChrxBiasSortOrder:
+
+    def test_corrected_variant_output_sorted_descending_by_z_attribution(
+        self, tmp_path
+    ):
+        """corrected_variant_rankings.csv first row must have the largest z_attribution."""
+        rng = np.random.default_rng(202)
+        n = 80
+        df = pd.DataFrame({
+            'chromosome': (['1'] * 40) + (['2'] * 40),
+            'position': rng.integers(1_000_000, 200_000_000, size=n),
+            'mean_attribution': rng.normal(0.5, 1, size=n),
+            'gene_name': [f'GENE_{i}' for i in range(n)],
+        })
+        rankings_path = tmp_path / 'rankings.csv'
+        df.to_csv(rankings_path, index=False)
+        out_dir = tmp_path / 'corrected'
+
+        import sys as _sys
+        old_argv = _sys.argv[:]
+        _sys.argv = [
+            'correct_chrx_bias.py',
+            '--rankings', str(rankings_path),
+            '--output-dir', str(out_dir),
+            '--include-sex-chroms',
+            '--genome-build', 'GRCh37',
+        ]
+        try:
+            chrx_mod.main()
+        finally:
+            _sys.argv = old_argv
+
+        corrected = pd.read_csv(out_dir / 'corrected_variant_rankings.csv')
+        assert corrected.iloc[0]['z_attribution'] == corrected['z_attribution'].max(), (
+            "First row should have the largest z_attribution"
+        )
+        assert corrected.iloc[-1]['z_attribution'] == corrected['z_attribution'].min(), (
+            "Last row should have the smallest z_attribution"
+        )
+
+    def test_corrected_gene_output_sorted_descending_by_gene_z_score(
+        self, tmp_path
+    ):
+        """corrected_gene_rankings.csv first row must have the largest gene_z_score."""
+        rng = np.random.default_rng(203)
+        n = 80
+        df = pd.DataFrame({
+            'chromosome': (['1'] * 40) + (['2'] * 40),
+            'position': rng.integers(1_000_000, 200_000_000, size=n),
+            'mean_attribution': rng.normal(0.5, 1, size=n),
+            'gene_name': [f'GENE_{i}' for i in range(n)],
+        })
+        rankings_path = tmp_path / 'rankings.csv'
+        df.to_csv(rankings_path, index=False)
+        out_dir = tmp_path / 'corrected'
+
+        import sys as _sys
+        old_argv = _sys.argv[:]
+        _sys.argv = [
+            'correct_chrx_bias.py',
+            '--rankings', str(rankings_path),
+            '--output-dir', str(out_dir),
+            '--include-sex-chroms',
+            '--genome-build', 'GRCh37',
+        ]
+        try:
+            chrx_mod.main()
+        finally:
+            _sys.argv = old_argv
+
+        gene_df = pd.read_csv(out_dir / 'corrected_gene_rankings.csv')
+        assert gene_df.iloc[0]['gene_z_score'] == gene_df['gene_z_score'].max(), (
+            "First row should have the largest gene_z_score"
+        )
+        assert gene_df.iloc[-1]['gene_z_score'] == gene_df['gene_z_score'].min(), (
+            "Last row should have the smallest gene_z_score"
+        )
