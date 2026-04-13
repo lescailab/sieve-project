@@ -99,6 +99,15 @@ def parse_args():
                         help='How to threshold pairwise attention scores')
     parser.add_argument('--attention-percentile', type=float, default=99.9,
                         help='Percentile cutoff for attention interactions when using percentile mode')
+    parser.add_argument('--aggregation-method', type=str, default='mean',
+                        choices=['mean', 'max', 'rank_average'],
+                        help=(
+                            'How to aggregate per-sample variant scores into a '
+                            'population-level ranking score. '
+                            "'mean': score == mean_attribution (default, most transparent). "
+                            "'max': score == max_attribution. "
+                            "'rank_average': composite rank across mean, max, and sample count."
+                        ))
     parser.add_argument('--is-null-baseline', action='store_true',
                         help='Flag indicating this is a null baseline analysis (for metadata)')
 
@@ -316,7 +325,7 @@ def main():
 
         # === PREPARE INCREMENTAL PROCESSING ===
         # Create ranker upfront for incremental sample accumulation
-        ranker = VariantRanker(aggregation='rank_average', variant_info_map=variant_info_map)
+        ranker = VariantRanker(aggregation=args.aggregation_method, variant_info_map=variant_info_map)
 
         # Determine case/control sets upfront
         case_indices = set(i for i in range(len(all_samples)) if all_samples[i].label == 1)
@@ -644,6 +653,7 @@ def main():
         'annotation_level': config['level'],
         'n_integration_steps': args.n_steps,
         'max_variants_per_sample': args.max_variants,
+        'aggregation_method': args.aggregation_method,
         'skip_attention': args.skip_attention,
         'skip_ig': args.skip_ig,
         'attention_threshold_mode': args.attention_threshold_mode,
