@@ -251,6 +251,34 @@ class TestVariantRanking:
         with pytest.raises(ValueError, match="chromosomes"):
             ranker.rank_variants(all_scores, all_meta)
 
+    def test_aggregation_mean_score_equals_mean_attribution(self):
+        """With aggregation='mean', score must equal mean_attribution for every row."""
+        import pandas as pd
+        ranker = VariantRanker(aggregation='mean')
+
+        all_scores = [
+            np.array([0.9, 0.2, 0.5]),
+            np.array([0.7, 0.4, 0.5]),
+        ]
+        all_meta = [
+            {
+                'positions': np.array([100, 200, 300]),
+                'gene_ids': np.array([0, 1, 2]),
+                'chromosomes': np.array(['1', '1', '1']),
+            },
+            {
+                'positions': np.array([100, 200, 300]),
+                'gene_ids': np.array([0, 1, 2]),
+                'chromosomes': np.array(['1', '1', '1']),
+            },
+        ]
+        rankings = ranker.rank_variants(all_scores, all_meta)
+        pd.testing.assert_series_equal(
+            rankings['score'].reset_index(drop=True),
+            rankings['mean_attribution'].reset_index(drop=True),
+            check_names=False,
+        )
+
     def test_rank_genes(self):
         """Test gene ranking."""
         ranker = VariantRanker()
