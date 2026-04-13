@@ -367,9 +367,15 @@ def main() -> None:
     # ------------------------------------------------------------------
     # Write outputs
     # ------------------------------------------------------------------
+    # Sort best-first so .head(top_k) always returns the strongest variants.
+    real_df_out = real_df_out.sort_values('mean_attribution', ascending=False).reset_index(drop=True)
+
     var_sig_path = output_dir / 'variant_rankings_with_significance.csv'
     real_df_out.to_csv(var_sig_path, index=False)
     print(f'\nSaved variant significance file to {var_sig_path}')
+
+    # Re-sort after p-value columns are appended to guarantee best-first order.
+    real_genes = real_genes.sort_values('gene_score', ascending=False).reset_index(drop=True)
 
     gene_sig_path = output_dir / 'gene_rankings_with_significance.csv'
     real_genes.to_csv(gene_sig_path, index=False)

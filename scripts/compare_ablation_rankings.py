@@ -5,27 +5,35 @@ Compare null-contrasted variant rankings across annotation levels L0-L3.
 After running the per-level null baseline workflow, this script compares the
 resulting significance-annotated variant rankings to quantify how much the
 discovered variants depend on the annotation information provided. By default
-it ranks variants by ``empirical_p_variant`` from
-``variant_rankings_with_significance.csv`` (produced by
-``compare_attributions.py``). Lower p-values are treated as better ranks
-automatically. Key analyses:
+it ranks variants by ``z_attribution`` from
+``corrected_variant_rankings.csv`` (produced by ``correct_chrx_bias.py``).
+Higher z-scores are treated as better ranks automatically. Key analyses:
 
 1. Jaccard similarity matrices at multiple top-k thresholds
 2. Level-specific variant discovery (high rank at one level, low at others)
+
+Note on score column choice
+---------------------------
+``z_attribution`` is the recommended column for cross-level comparison
+because it is comparable across chromosomes (per-chromosome z-normalised)
+and is not subject to the resolution-floor problem of empirical p-values
+(see KNOWN_LIMITATIONS.md).  ``empirical_p_variant`` is bounded below by
+1/(N_null + 1), which pins most real variants at the floor when the model
+is informative, making top-K selection a random draw from a tied set.
 
 Usage:
     # From a directory with L{0..3}_sieve_variant_rankings.csv files
     python scripts/compare_ablation_rankings.py \\
         --ranking-dir results/ablation \\
-        --score-column empirical_p_variant \\
+        --score-column z_attribution \\
         --out-comparison ablation_ranking_comparison.yaml
 
-    # With explicit per-level paths
+    # With explicit per-level paths (using chrX-corrected files which contain z_attribution)
     python scripts/compare_ablation_rankings.py \\
-        --rankings L0:results/null_baseline_L0/results/attribution_comparison/variant_rankings_with_significance.csv \\
-                   L1:results/null_baseline_L1/results/attribution_comparison/variant_rankings_with_significance.csv \\
-                   L2:results/null_baseline_L2/results/attribution_comparison/variant_rankings_with_significance.csv \\
-        --score-column empirical_p_variant \\
+        --rankings L0:results/null_baseline_L0/results/attribution_comparison/corrected/corrected_variant_rankings.csv \\
+                   L1:results/null_baseline_L1/results/attribution_comparison/corrected/corrected_variant_rankings.csv \\
+                   L2:results/null_baseline_L2/results/attribution_comparison/corrected/corrected_variant_rankings.csv \\
+        --score-column z_attribution \\
         --out-comparison ablation_ranking_comparison.yaml
 
 Author: Francesco Lescai
@@ -527,10 +535,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--score-column",
         type=str,
-        default="empirical_p_variant",
+        default="z_attribution",
         help=(
             "Column name to use for ranking variants. "
-            "Defaults to empirical_p_variant from the null-contrast workflow. "
+            "Defaults to z_attribution (per-chromosome z-normalised attribution "
+            "from correct_chrx_bias.py), which is recommended for cross-level "
+            "comparison because it is not subject to the empirical p-value "
+            "resolution floor (see KNOWN_LIMITATIONS.md). "
             "Columns such as empirical_p_variant, fdr_variant, and corrected_rank "
             "are ranked ascending automatically; attribution-like scores are "
             "ranked descending."
@@ -565,6 +576,17 @@ def _parse_rankings_arg(rankings: List[str]) -> Dict[str, pathlib.Path]:
 def main() -> int:
     """Entry point for the ablation ranking comparison."""
     args = parse_args()
+
+    if args.score_column == "empirical_p_variant":
+        print(
+            "Warning: empirical_p_variant may be at the resolution floor for "
+            "high-information annotation levels (median p pinned to 1/(N+1)), "
+            "making top-K selection a draw from a tied set. "
+            "Consider z_attribution for cross-level comparison "
+            "(see KNOWN_LIMITATIONS.md).",
+            file=sys.stderr,
+        )
+
     top_k_values = [int(k.strip()) for k in args.top_k.split(",")]
 
     # Discover ranking files
