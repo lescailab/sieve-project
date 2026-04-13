@@ -78,8 +78,8 @@ def test_load_rankings_sorts_empirical_p_ascending(tmp_path: Path) -> None:
     assert [row["rank"] for row in rows] == [1, 2, 3]
 
 
-def test_main_defaults_to_empirical_p_variant(tmp_path: Path, monkeypatch) -> None:
-    """The CLI should default to null-contrast empirical p-value ranking."""
+def test_main_defaults_to_z_attribution(tmp_path: Path, monkeypatch) -> None:
+    """The CLI should default to z_attribution for cross-level ranking."""
     ranking_dir = tmp_path / "rankings"
     ranking_dir.mkdir()
 
@@ -156,8 +156,8 @@ def test_main_defaults_to_empirical_p_variant(tmp_path: Path, monkeypatch) -> No
 
     assert exit_code == 0
     summary = yaml.safe_load(out_comparison.read_text(encoding="utf-8"))
-    assert summary["score_column"] == "empirical_p_variant"
-    assert summary["score_sort_order"] == "ascending"
+    assert summary["score_column"] == "z_attribution"
+    assert summary["score_sort_order"] == "descending"
 
 
 def test_load_rankings_pushes_invalid_empirical_p_to_the_bottom(tmp_path: Path) -> None:
@@ -185,20 +185,22 @@ def test_load_rankings_pushes_invalid_empirical_p_to_the_bottom(tmp_path: Path) 
     ]
 
 
-def test_main_fails_when_significance_column_is_missing(
+def test_main_fails_when_z_attribution_column_is_missing(
     tmp_path: Path,
     monkeypatch,
     capsys,
 ) -> None:
-    """The default ablation comparison should reject raw-only ranking files."""
+    """The default ablation comparison should fail when z_attribution is absent."""
     ranking_dir = tmp_path / "rankings"
     ranking_dir.mkdir()
 
+    # CSVs that have empirical_p_variant but NOT z_attribution should fail
+    # with the new default.
     raw_csv = "\n".join(
         [
-            "variant_id,gene_name,chromosome,position,z_attribution",
-            "1:100_A,GENE1,1,100,5.0",
-            "1:200_B,GENE2,1,200,4.0",
+            "variant_id,gene_name,chromosome,position,empirical_p_variant",
+            "1:100_A,GENE1,1,100,0.05",
+            "1:200_B,GENE2,1,200,0.10",
         ]
     )
     (ranking_dir / "L0_sieve_variant_rankings.csv").write_text(raw_csv + "\n", encoding="utf-8")
@@ -224,4 +226,4 @@ def test_main_fails_when_significance_column_is_missing(
     captured = capsys.readouterr()
 
     assert exit_code == 1
-    assert "empirical_p_variant" in captured.err
+    assert "z_attribution" in captured.err
