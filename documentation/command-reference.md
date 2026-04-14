@@ -730,7 +730,7 @@ Tests whether SIEVE gene sets carry non-linear discriminative information by tra
 |--------|------|---------|-------------|
 | `--real-rankings-dir` | path | required | Directory with one subdirectory per level containing corrected gene rankings |
 | `--burden-matrix` | path | required | Gene-burden matrix parquet file |
-| `--labels` | path | required | Phenotype TSV (sample_id, phenotype: 1=ctrl, 2=case) |
+| `--phenotypes` | path | required | Phenotype TSV (sample_id, phenotype: 1=ctrl, 2=case) |
 | `--output-tsv` | path | required | Summary TSV path |
 | `--top-k` | str | — | Comma-separated top-k values, e.g. `100,500,1000,2000`. Mutually exclusive with `--fdr-threshold`. |
 | `--fdr-threshold` | float | — | FDR cutoff for gene selection (e.g. `0.05`). Gene set size determined per level. Mutually exclusive with `--top-k`. |
@@ -741,13 +741,14 @@ Tests whether SIEVE gene sets carry non-linear discriminative information by tra
 | `--seed` | int | `42` | Random seed |
 | `--n-cores` | int | `-1` | Number of outer-loop cores for permutation evaluation |
 | `--score-column` | str | `z_attribution` | Gene-ranking score to use; `z_attribution` maps to `gene_z_score` |
+| `--also-export-csv` | flag | off | Export classifier input matrices as CSV under `csv/` in the output directory |
 
 **Example** (fixed top-k, multi-level with both classifiers):
 ```bash
 python scripts/validate_nonlinear_classifier.py \
-    --real-rankings-dir results/ablation/rankings \
+    --real-rankings-dir ablation/significance_rankings \
     --burden-matrix validation/cohort_b/gene_burden_matrix.parquet \
-    --labels /path/to/phenotypes.tsv \
+    --phenotypes /path/to/phenotypes.tsv \
     --output-tsv validation/cohort_b/nonlinear_validation/nonlinear_validation_summary.tsv \
     --top-k 50,100,200,500 \
     --n-permutations 1000 \
@@ -758,14 +759,36 @@ python scripts/validate_nonlinear_classifier.py \
 **Example** (FDR-threshold gene selection):
 ```bash
 python scripts/validate_nonlinear_classifier.py \
-    --real-rankings-dir results/ablation/rankings \
+    --real-rankings-dir ablation/significance_rankings \
     --burden-matrix validation/cohort_b/gene_burden_matrix.parquet \
-    --labels /path/to/phenotypes.tsv \
+    --phenotypes /path/to/phenotypes.tsv \
     --output-tsv validation/cohort_b/nonlinear_validation/nonlinear_validation_fdr.tsv \
     --fdr-threshold 0.05 \
     --n-permutations 1000 \
     --classifiers rf,lr \
     --n-cores 4
+```
+
+---
+
+### summarize_classifier_comparison.py
+
+```bash
+python scripts/summarize_classifier_comparison.py [OPTIONS]
+```
+
+Scans YAML outputs from `validate_nonlinear_classifier.py`, pairs RF and LR results per `(level, top_k)` combination, and produces per-combination comparison figures and a collated A4-landscape PDF. Only meaningful when `validate_nonlinear_classifier.py` was run with `--classifiers rf,lr`.
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--results-dir` | path | required | Directory containing the YAML outputs from `validate_nonlinear_classifier.py` |
+| `--output-dir` | path | `<results-dir>/classifier_comparison/` | Directory for output figures and collated PDF |
+
+**Example**:
+```bash
+python scripts/summarize_classifier_comparison.py \
+    --results-dir validation/cohort_b/nonlinear_validation/ \
+    --output-dir validation/cohort_b/nonlinear_validation/summary_plots/
 ```
 
 ---

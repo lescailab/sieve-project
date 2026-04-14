@@ -129,7 +129,7 @@ class TestNonlinearValidation:
                 str(rankings_root),
                 "--burden-matrix",
                 str(burden_path),
-                "--labels",
+                "--phenotypes",
                 str(label_path),
                 "--output-tsv",
                 str(output_tsv),
@@ -172,7 +172,7 @@ class TestNonlinearValidation:
             str(rankings_root),
             "--burden-matrix",
             str(burden_path),
-            "--labels",
+            "--phenotypes",
             str(label_path),
             "--top-k",
             "5",
@@ -204,7 +204,7 @@ class TestNonlinearValidation:
                     "rankings",
                     "--burden-matrix",
                     "burden.parquet",
-                    "--labels",
+                    "--phenotypes",
                     "labels.tsv",
                     "--output-tsv",
                     "out.tsv",
@@ -227,7 +227,7 @@ class TestNonlinearValidation:
                     "rankings",
                     "--burden-matrix",
                     "burden.parquet",
-                    "--labels",
+                    "--phenotypes",
                     "labels.tsv",
                     "--output-tsv",
                     "out.tsv",
@@ -252,7 +252,7 @@ class TestNonlinearValidation:
                         str(rankings_root),
                         "--burden-matrix",
                         str(burden_path),
-                        "--labels",
+                        "--phenotypes",
                         str(label_path),
                         "--output-tsv",
                         str(tmp_path / "out.tsv"),
@@ -285,7 +285,7 @@ class TestNonlinearValidation:
                 str(rankings_root),
                 "--burden-matrix",
                 str(burden_path),
-                "--labels",
+                "--phenotypes",
                 str(label_path),
                 "--output-tsv",
                 str(output_tsv),
@@ -356,7 +356,7 @@ class TestNonlinearValidation:
                 str(rankings_root),
                 "--burden-matrix",
                 str(burden_path),
-                "--labels",
+                "--phenotypes",
                 str(label_path),
                 "--output-tsv",
                 str(output_tsv),
@@ -393,7 +393,7 @@ class TestNonlinearValidation:
                 str(rankings_root),
                 "--burden-matrix",
                 str(burden_path),
-                "--labels",
+                "--phenotypes",
                 str(label_path),
                 "--output-tsv",
                 str(output_tsv),
@@ -438,7 +438,7 @@ class TestNonlinearValidation:
                 str(rankings_root),
                 "--burden-matrix",
                 str(burden_path),
-                "--labels",
+                "--phenotypes",
                 str(label_path),
                 "--output-tsv",
                 str(output_tsv),
@@ -539,3 +539,51 @@ class TestNonlinearValidation:
             f"Expected at least 2x speedup with 8 cores, but got "
             f"{single_elapsed / parallel_elapsed:.2f}x"
         )
+
+    def test_also_export_csv_writes_feature_matrices(self, tmp_path: Path) -> None:
+        """--also-export-csv must write one CSV per (level, top_k) combination."""
+        burden_path, label_path, rankings_root = prepare_inputs(tmp_path, levels=("L0", "L1"))
+        output_tsv = tmp_path / "nonlinear_validation_summary.tsv"
+
+        nonlinear.main(
+            [
+                "--real-rankings-dir",
+                str(rankings_root),
+                "--burden-matrix",
+                str(burden_path),
+                "--phenotypes",
+                str(label_path),
+                "--output-tsv",
+                str(output_tsv),
+                "--top-k",
+                "5,10",
+                "--classifiers",
+                "rf",
+                "--levels",
+                "L0,L1",
+                "--n-permutations",
+                "4",
+                "--cv-folds",
+                "3",
+                "--n-cores",
+                "1",
+                "--seed",
+                "42",
+                "--also-export-csv",
+            ]
+        )
+
+        csv_dir = tmp_path / "csv"
+        assert csv_dir.exists(), "csv/ subdirectory should be created when --also-export-csv is set"
+        csv_files = sorted(csv_dir.glob("feature_matrix_*.csv"))
+        # 2 levels × 2 top_k values = 4 files (rf only, so no suffix variant)
+        assert len(csv_files) == 4, f"Expected 4 CSV files, found {[f.name for f in csv_files]}"
+
+        for csv_file in csv_files:
+            df = pd.read_csv(csv_file)
+            assert "sample_id" in df.columns
+            assert "phenotype" in df.columns
+            # gene columns are the remaining ones
+            gene_cols = [c for c in df.columns if c not in ("sample_id", "phenotype")]
+            assert len(gene_cols) > 0
+            assert df["phenotype"].isin([0, 1]).all()

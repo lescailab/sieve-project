@@ -736,12 +736,26 @@ If L1-specific genes replicate in the cohort_b cohort but L0-specific ones do no
 
 **Why this step?** The scalar burden test (Step 8c) asks whether SIEVE genes have more total exonic variation in cases. But SIEVE's core claim is that the **pattern** of variation across genes matters, not just the total count. A random forest trained on per-gene burden counts preserves this multi-gene structure.
 
+> **Pipeline branching note**: The gene list produced by Step 8a (`generate_sieve_gene_list.py`) feeds into the burden extraction path (Steps 8b–8c) only. This step reads the gene ranking CSV files directly from each level's results directory and performs its own gene selection internally — the TSV gene lists from Step 8a are not an input here.
+
+**Setting up the rankings directory**: `--real-rankings-dir` expects one subdirectory per annotation level, each containing a gene rankings CSV. If your results follow the standard layout (`real_experiments/${LEVEL}/attributions/`), use symlinks:
+
+```bash
+mkdir -p ablation/significance_rankings
+for LEVEL in L0 L1 L2 L3; do
+    ln -sf "$(pwd)/real_experiments/${LEVEL}/attributions" \
+           "ablation/significance_rankings/${LEVEL}"
+done
+```
+
+The script auto-detects `gene_rankings_with_significance.csv` in each level subdirectory.
+
 **Command — fixed top-k** (all levels at once):
 ```bash
 python scripts/validate_nonlinear_classifier.py \
-    --real-rankings-dir results/ablation/rankings \
+    --real-rankings-dir ablation/significance_rankings \
     --burden-matrix validation/cohort_b/gene_burden_matrix.parquet \
-    --labels /path/to/validation_phenotypes.tsv \
+    --phenotypes /path/to/validation_phenotypes.tsv \
     --output-tsv validation/cohort_b/nonlinear_validation/nonlinear_validation_summary.tsv \
     --top-k 50,100,200,500 \
     --n-permutations 1000 \
@@ -753,9 +767,9 @@ python scripts/validate_nonlinear_classifier.py \
 **Command — FDR-threshold** (gene set size determined per level):
 ```bash
 python scripts/validate_nonlinear_classifier.py \
-    --real-rankings-dir results/ablation/rankings \
+    --real-rankings-dir ablation/significance_rankings \
     --burden-matrix validation/cohort_b/gene_burden_matrix.parquet \
-    --labels /path/to/validation_phenotypes.tsv \
+    --phenotypes /path/to/validation_phenotypes.tsv \
     --output-tsv validation/cohort_b/nonlinear_validation/nonlinear_validation_fdr.tsv \
     --fdr-threshold 0.05 \
     --n-permutations 1000 \
@@ -765,6 +779,8 @@ python scripts/validate_nonlinear_classifier.py \
 ```
 
 `--top-k` and `--fdr-threshold` are mutually exclusive. Use `--top-k` for exploratory analysis across multiple gene-set sizes, and `--fdr-threshold` for statistically motivated gene sets where the number of genes is determined by the null-contrast significance.
+
+Add `--also-export-csv` to write the actual feature matrix used by each classifier (samples × matched genes, plus a `phenotype` column) as a CSV file under `csv/` in the output directory. Useful for debugging and external analysis.
 
 **How it works**:
 1. For each ablation level and top-k threshold (or FDR-passing gene set), extracts the per-gene burden sub-matrix for the corrected SIEVE gene set
@@ -777,10 +793,12 @@ python scripts/validate_nonlinear_classifier.py \
 validation/cohort_b/nonlinear_validation/
 ├── nonlinear_validation_L{0..3}_topK{k}.yaml   # Full results per combination
 ├── null_aucs_L{0..3}_topK{k}.npz               # Null distributions
-├── validation_plot_L{0..3}_topK{k}.png          # Diagnostic plots
+├── validation_plot_L{0..3}_topK{k}.png          # Diagnostic plots (null histogram + per-fold AUC)
 ├── nonlinear_validation_summary.tsv             # Summary table with fdr_bh
 ├── nonlinear_validation_heatmap.png             # AUC heatmap across levels x top-k
-└── nonlinear_validation_report.md               # Human-readable report
+├── nonlinear_validation_report.md               # Human-readable report of significant results
+└── csv/                                         # Only present when --also-export-csv is set
+    └── feature_matrix_L{0..3}_topK{k}.csv      # Feature matrix per (level, top_k); one file per combination, phenotype column uses 0=control 1=case
 ```
 
 **Interpreting the results**: see the [Validation](validation.md) chapter for detailed guidance.
@@ -790,7 +808,24 @@ validation/cohort_b/nonlinear_validation/
 
 ---
 
-##### Step 8e: Visualise Scalar Burden Results
+##### Step 8e: Summarise Classifier Comparison
+
+**Purpose**: Produce per-combination comparison figures and a collated PDF comparing RF and LR results from Step 8d.
+
+**Command**:
+```bash
+python scripts/summarize_classifier_comparison.py \
+    --results-dir validation/cohort_b/nonlinear_validation/ \
+    --output-dir validation/cohort_b/nonlinear_validation/summary_plots/
+```
+
+This script scans the YAML outputs from Step 8d, pairs RF and LR results per `(level, top_k)` combination, and produces overlapping null-distribution density curves with observed AUC markers alongside per-fold AUC comparisons. All figures are also collected into a single A4-landscape PDF.
+
+> **Note**: This step is only meaningful when `--classifiers rf,lr` was used in Step 8d.
+
+---
+
+##### Step 8f: Visualise Scalar Burden Results
 
 **Purpose**: Collect scalar burden enrichment results across annotation levels into summary plots.
 
@@ -865,25 +900,33 @@ python scripts/test_burden_enrichment.py \
 
 # --- Non-linear classifier validation (Cohort B) ---
 python scripts/validate_nonlinear_classifier.py \
-    --real-rankings-dir results/ablation/rankings \
+    --real-rankings-dir ablation/significance_rankings \
     --burden-matrix validation/cohort_b/gene_burden_matrix.parquet \
-    --labels /path/to/cohort_b_phenotypes.tsv \
+    --phenotypes /path/to/cohort_b_phenotypes.tsv \
     --output-tsv validation/cohort_b/nonlinear_validation/nonlinear_validation_summary.tsv \
     --top-k 50,100,200 \
     --n-permutations 1000 \
     --classifiers rf,lr \
     --n-cores 8
 
+python scripts/summarize_classifier_comparison.py \
+    --results-dir validation/cohort_b/nonlinear_validation/ \
+    --output-dir validation/cohort_b/nonlinear_validation/summary_plots/
+
 # --- Non-linear classifier validation (Cohort C) ---
 python scripts/validate_nonlinear_classifier.py \
-    --real-rankings-dir results/ablation/rankings \
+    --real-rankings-dir ablation/significance_rankings \
     --burden-matrix validation/cohort_c/gene_burden_matrix.parquet \
-    --labels /path/to/cohort_c_phenotypes.tsv \
+    --phenotypes /path/to/cohort_c_phenotypes.tsv \
     --output-tsv validation/cohort_c/nonlinear_validation/nonlinear_validation_summary.tsv \
     --top-k 50,100,200 \
     --n-permutations 1000 \
     --classifiers rf,lr \
     --n-cores 8
+
+python scripts/summarize_classifier_comparison.py \
+    --results-dir validation/cohort_c/nonlinear_validation/ \
+    --output-dir validation/cohort_c/nonlinear_validation/summary_plots/
 
 # --- Collect and plot scalar burden results ---
 python scripts/plot_validation_burden.py \
