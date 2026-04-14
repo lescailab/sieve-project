@@ -798,7 +798,7 @@ validation/cohort_b/nonlinear_validation/
 ├── nonlinear_validation_heatmap.png             # AUC heatmap across levels x top-k
 ├── nonlinear_validation_report.md               # Human-readable report of significant results
 └── csv/                                         # Only present when --also-export-csv is set
-    └── feature_matrix_L{0..3}_topK{k}.csv      # Classifier input matrix per combination
+    └── feature_matrix_L{0..3}_topK{k}.csv      # Feature matrix per (level, top_k); one file per combination, phenotype column uses 0=control 1=case
 ```
 
 **Interpreting the results**: see the [Validation](validation.md) chapter for detailed guidance.

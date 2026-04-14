@@ -77,7 +77,7 @@ The fixed CV folds ensure the only variable is the gene set, not the data split.
 python scripts/validate_nonlinear_classifier.py \
     --real-rankings-dir results/ablation/rankings \
     --burden-matrix validation/cohort_b/gene_burden_matrix.parquet \
-    --labels /path/to/phenotypes.tsv \
+    --phenotypes /path/to/phenotypes.tsv \
     --output-tsv validation/cohort_b/nonlinear_validation/nonlinear_validation_summary.tsv \
     --top-k 100,500,1000,2000 \
     --classifiers rf,lr \
@@ -96,7 +96,7 @@ Point `--real-rankings-dir` at a directory with one subdirectory per annotation 
 python scripts/validate_nonlinear_classifier.py \
     --real-rankings-dir results/ablation/rankings \
     --burden-matrix validation/cohort_b/gene_burden_matrix.parquet \
-    --labels /path/to/phenotypes.tsv \
+    --phenotypes /path/to/phenotypes.tsv \
     --output-tsv validation/cohort_b/nonlinear_validation/nonlinear_validation_summary.tsv \
     --top-k 50,100,200,500 \
     --classifiers rf,lr \
@@ -117,7 +117,7 @@ Use `--classifiers rf,lr` to run both a random forest and a logistic regression 
 python scripts/validate_nonlinear_classifier.py \
     --real-rankings-dir results/ablation/rankings \
     --burden-matrix validation/cohort_b/gene_burden_matrix.parquet \
-    --labels /path/to/phenotypes.tsv \
+    --phenotypes /path/to/phenotypes.tsv \
     --output-tsv validation/cohort_b/nonlinear_validation/nonlinear_validation_summary.tsv \
     --top-k 100,200 \
     --n-permutations 1000 \
@@ -141,7 +141,7 @@ Instead of choosing a fixed number of top genes, you can let the gene set size b
 python scripts/validate_nonlinear_classifier.py \
     --real-rankings-dir results/ablation/rankings \
     --burden-matrix validation/cohort_b/gene_burden_matrix.parquet \
-    --labels /path/to/phenotypes.tsv \
+    --phenotypes /path/to/phenotypes.tsv \
     --output-tsv validation/cohort_b/nonlinear_validation/nonlinear_validation_fdr.tsv \
     --fdr-threshold 0.05 \
     --classifiers rf,lr \
@@ -351,7 +351,7 @@ done
 python scripts/validate_nonlinear_classifier.py \
     --real-rankings-dir results/ablation/rankings \
     --burden-matrix validation/cohort_b/gene_burden_matrix.parquet \
-    --labels /path/to/validation_phenotypes.tsv \
+    --phenotypes /path/to/validation_phenotypes.tsv \
     --output-tsv validation/cohort_b/nonlinear_validation/nonlinear_validation_summary.tsv \
     --top-k 50,100,200,500 \
     --n-permutations 1000 \
@@ -364,7 +364,7 @@ python scripts/validate_nonlinear_classifier.py \
 python scripts/validate_nonlinear_classifier.py \
     --real-rankings-dir results/ablation/rankings \
     --burden-matrix validation/cohort_b/gene_burden_matrix.parquet \
-    --labels /path/to/validation_phenotypes.tsv \
+    --phenotypes /path/to/validation_phenotypes.tsv \
     --output-tsv validation/cohort_b/nonlinear_validation/nonlinear_validation_fdr.tsv \
     --fdr-threshold 0.05 \
     --n-permutations 1000 \

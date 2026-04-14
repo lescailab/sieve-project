@@ -782,7 +782,7 @@ Scans YAML outputs from `validate_nonlinear_classifier.py`, pairs RF and LR resu
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `--results-dir` | path | required | Directory containing the YAML outputs from `validate_nonlinear_classifier.py` |
-| `--output-dir` | path | required | Directory for output figures and PDF |
+| `--output-dir` | path | `<results-dir>/classifier_comparison/` | Directory for output figures and collated PDF |
 
 **Example**:
 ```bash
