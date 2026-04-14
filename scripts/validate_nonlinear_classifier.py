@@ -20,7 +20,7 @@ Usage:
     python scripts/validate_nonlinear_classifier.py \
         --real-rankings-dir /path/to/corrected_rankings \
         --burden-matrix /path/to/gene_burden_matrix.parquet \
-        --labels /path/to/phenotypes.tsv \
+        --phenotypes /path/to/phenotypes.tsv \
         --output-tsv /path/to/nonlinear_validation_summary.tsv \
         --top-k 100,500,1000,2000 \
         --classifiers rf,lr
@@ -126,10 +126,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Validation-cohort gene burden matrix parquet file",
     )
     parser.add_argument(
-        "--labels",
+        "--phenotypes",
         type=Path,
         required=True,
-        help="Validation-cohort phenotype/label TSV",
+        help="Validation-cohort phenotype TSV",
+    )
+    parser.add_argument(
+        "--also-export-csv",
+        action="store_true",
+        default=False,
+        help="Export SIEVE feature matrices as CSV for external analysis",
     )
     parser.add_argument(
         "--output-tsv",
@@ -1097,6 +1103,10 @@ def write_auxiliary_outputs(
     output_dir: Path,
     cv_folds: int,
     classifiers_to_run: Sequence[str],
+    burden_values: np.ndarray | None = None,
+    sample_ids: Sequence[str] | None = None,
+    labels: np.ndarray | None = None,
+    also_export_csv: bool = False,
 ) -> None:
     """Write YAML, NPZ, plots, heatmap, and report outputs."""
     primary_classifier = choose_primary_classifier(classifiers_to_run)
@@ -1138,6 +1148,20 @@ def write_auxiliary_outputs(
                 classifier_name=result["classifier"],
                 output_path=plot_path,
             )
+
+            if also_export_csv and burden_values is not None and sample_ids is not None and labels is not None:
+                csv_dir = output_dir / "csv"
+                csv_dir.mkdir(parents=True, exist_ok=True)
+                csv_path = csv_dir / f"feature_matrix_{tag}{suffix}.csv"
+                X = burden_values[:, result["feature_indices"]]
+                export_df = pd.DataFrame(
+                    X,
+                    columns=result["matched_genes"],
+                    index=sample_ids,
+                )
+                export_df.insert(0, "sample_id", list(sample_ids))
+                export_df["phenotype"] = labels
+                export_df.to_csv(csv_path, index=False)
 
 
 def _run_evaluation_loop(
@@ -1229,6 +1253,7 @@ def _run_evaluation_loop(
                         "null_aucs": null_aucs,
                         "missing_genes": observed_gene_set["missing_genes"],
                         "matched_genes": observed_gene_set["matched_genes"],
+                        "feature_indices": observed_gene_set["feature_indices"],
                         "n_samples": int(len(labels)),
                         "n_cases": int(n_cases),
                         "n_controls": int(n_controls),
@@ -1287,8 +1312,8 @@ def main(argv: list[str] | None = None) -> None:
     burden_matrix = load_burden_matrix(args.burden_matrix).fillna(0.0)
     print(f"  Shape: {burden_matrix.shape}")
 
-    print(f"Loading labels from {args.labels}...")
-    label_map = load_labels(args.labels)
+    print(f"Loading phenotypes from {args.phenotypes}...")
+    label_map = load_labels(args.phenotypes)
     print(f"  Loaded {len(label_map)} labelled samples")
 
     common_samples = [
@@ -1492,6 +1517,10 @@ def main(argv: list[str] | None = None) -> None:
         output_dir=output_dir,
         cv_folds=args.cv_folds,
         classifiers_to_run=classifiers_to_run,
+        burden_values=burden_values,
+        sample_ids=common_samples,
+        labels=labels,
+        also_export_csv=args.also_export_csv,
     )
 
     heatmap_path = output_dir / "nonlinear_validation_heatmap.png"
