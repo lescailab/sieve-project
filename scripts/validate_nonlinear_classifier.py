@@ -135,7 +135,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--also-export-csv",
         action="store_true",
         default=False,
-        help="Export SIEVE feature matrices as CSV for external analysis",
+        help=(
+            "Export SIEVE feature matrices as CSV for external analysis. "
+            "One file is written per (level, top_k) combination under csv/ in the "
+            "output directory. The 'phenotype' column uses 0=control, 1=case encoding "
+            "(the internal ML convention), which differs from the input TSV (1=control, 2=case)."
+        ),
     )
     parser.add_argument(
         "--output-tsv",
@@ -1149,10 +1154,16 @@ def write_auxiliary_outputs(
                 output_path=plot_path,
             )
 
-            if also_export_csv and burden_values is not None and sample_ids is not None and labels is not None:
+            if (
+                also_export_csv
+                and classifier_name == primary_classifier
+                and burden_values is not None
+                and sample_ids is not None
+                and labels is not None
+            ):
                 csv_dir = output_dir / "csv"
                 csv_dir.mkdir(parents=True, exist_ok=True)
-                csv_path = csv_dir / f"feature_matrix_{tag}{suffix}.csv"
+                csv_path = csv_dir / f"feature_matrix_{tag}.csv"
                 X = burden_values[:, result["feature_indices"]]
                 export_df = pd.DataFrame(
                     X,
