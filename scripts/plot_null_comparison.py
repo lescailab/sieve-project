@@ -6,7 +6,7 @@ Consumes two raw rankings files (sieve_variant_rankings.csv from real and null
 explainability runs) and writes a two-panel PNG:
 
   Panel 1 — overlaid histograms of mean_attribution (real = blue, null = grey)
-  Panel 2 — Q-Q plot of real quantiles vs null quantiles
+  Panel 2 — standardised shape comparison with KDE overlay and shape statistics
 
 Usage:
     python scripts/plot_null_comparison.py \
@@ -26,6 +26,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from scipy.stats import gaussian_kde, norm, skew, kurtosis, anderson_ksamp
 
 
 def parse_args() -> argparse.Namespace:
@@ -70,7 +71,7 @@ def main() -> None:
 
     suffix = f' — {args.title_suffix}' if args.title_suffix else ''
 
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5.5))
 
     # --- Panel 1: overlaid histograms ---
     ax = axes[0]
@@ -88,20 +89,59 @@ def main() -> None:
     ax.set_title(f'Real vs Null attribution distributions{suffix}')
     ax.legend(fontsize=8)
 
-    # --- Panel 2: Q-Q plot ---
+    # --- Panel 2: standardised shape comparison ---
     ax = axes[1]
-    n_points = 500
-    quantiles = np.linspace(0, 100, n_points)
-    real_q = np.percentile(real_attr, quantiles)
-    null_q = np.percentile(null_attr, quantiles)
-    ax.scatter(null_q, real_q, s=6, alpha=0.6, color='steelblue')
-    lim = (min(null_q.min(), real_q.min()), max(null_q.max(), real_q.max()))
-    ax.plot(lim, lim, color='tomato', linestyle='--', linewidth=0.9,
-            label='y = x (no difference)')
-    ax.set_xlabel('Null quantiles')
-    ax.set_ylabel('Real quantiles')
-    ax.set_title(f'Q-Q plot: real vs null{suffix}')
-    ax.legend(fontsize=8)
+    real_z = (real_attr - real_attr.mean()) / real_attr.std()
+    null_z = (null_attr - null_attr.mean()) / null_attr.std()
+
+    grid_lo = min(real_z.min(), null_z.min()) - 0.5
+    grid_hi = max(real_z.max(), null_z.max()) + 0.5
+    grid = np.linspace(grid_lo, grid_hi, 500)
+
+    real_kde = gaussian_kde(real_z)(grid)
+    null_kde = gaussian_kde(null_z)(grid)
+
+    ax.fill_between(grid, null_kde, alpha=0.3, color='#888888')
+    ax.plot(grid, null_kde, color='#888888', linewidth=1.2,
+            label='Null (standardised)')
+    ax.fill_between(grid, real_kde, alpha=0.3, color='steelblue')
+    ax.plot(grid, real_kde, color='steelblue', linewidth=1.2,
+            label='Real (standardised)')
+    ax.plot(grid, norm.pdf(grid), color='black', linestyle='--',
+            linewidth=0.9, label='N(0,1) reference')
+
+    ax.set_xlabel('Standardised attribution (z-score)')
+    ax.set_ylabel('Density')
+    ax.set_title(f'Shape comparison (standardised){suffix}')
+    ax.legend(fontsize=8, loc='upper left')
+
+    skew_real = skew(real_z)
+    skew_null = skew(null_z)
+    kurt_real = kurtosis(real_z)
+    kurt_null = kurtosis(null_z)
+    frac_real = float(np.mean(np.abs(real_z) > 3))
+    frac_null = float(np.mean(np.abs(null_z) > 3))
+    ad_result = anderson_ksamp([real_z, null_z])
+    ad_stat = ad_result.statistic
+    ad_p = getattr(ad_result, 'pvalue', getattr(ad_result, 'significance_level', float('nan')))
+
+    stats_text = (
+        "Shape diagnostics\n"
+        "─────────────────────────────────\n"
+        f"Skewness:   real {skew_real:.2f}  null {skew_null:.2f}\n"
+        f"Ex. kurtosis: real {kurt_real:.2f}  null {kurt_null:.2f}\n"
+        f"|z| > 3:    real {frac_real:.1%}  null {frac_null:.1%}\n"
+        f"Anderson-Darling: stat {ad_stat:.2f}, p {ad_p:.4f}\n"
+        "\n"
+        "Interpretation:\n"
+        "Higher kurtosis + right skew in the real\n"
+        "model indicates signal concentrated on a\n"
+        "subset of variants, not spread uniformly."
+    )
+    ax.text(0.98, 0.97, stats_text, transform=ax.transAxes,
+            fontsize=7, family='monospace',
+            verticalalignment='top', horizontalalignment='right',
+            bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.7))
 
     fig.tight_layout()
     out_path = Path(args.output_png)
