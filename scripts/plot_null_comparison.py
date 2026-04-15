@@ -68,6 +68,14 @@ def main() -> None:
     if null_attr.size == 0:
         print("ERROR: no finite mean_attribution values found in null file.")
         sys.exit(1)
+    if real_attr.size < 2 or not np.isfinite(real_attr.std()) or real_attr.std() == 0:
+        print("ERROR: real mean_attribution has zero variance or fewer than 2 values; "
+              "cannot standardise or compute shape statistics.")
+        sys.exit(1)
+    if null_attr.size < 2 or not np.isfinite(null_attr.std()) or null_attr.std() == 0:
+        print("ERROR: null mean_attribution has zero variance or fewer than 2 values; "
+              "cannot standardise or compute shape statistics.")
+        sys.exit(1)
 
     suffix = f' — {args.title_suffix}' if args.title_suffix else ''
 
@@ -123,7 +131,36 @@ def main() -> None:
     frac_null = float(np.mean(np.abs(null_z) > 3))
     ad_result = anderson_ksamp([real_z, null_z])
     ad_stat = ad_result.statistic
-    ad_p = getattr(ad_result, 'pvalue', getattr(ad_result, 'significance_level', float('nan')))
+    # Prefer `pvalue` (scipy >= 1.11). Fall back to `significance_level`, which
+    # scipy returns as an approximate probability in [0.001, 0.25] (floored /
+    # capped). Either way the value is a probability, not a percent.
+    ad_p = getattr(ad_result, 'pvalue', None)
+    ad_p_is_capped = False
+    if ad_p is None:
+        ad_p = getattr(ad_result, 'significance_level', float('nan'))
+        ad_p_is_capped = True
+    ad_p_str = (f"p≤{ad_p:.4f}" if ad_p_is_capped and np.isfinite(ad_p)
+                else f"p={ad_p:.4f}")
+
+    # Conditional interpretation based on the observed shape statistics.
+    kurt_diff = kurt_real - kurt_null
+    skew_diff = abs(skew_real) - abs(skew_null)
+    if kurt_diff > 0.5 and skew_diff > 0.2:
+        interp = ("Higher kurtosis and stronger skew in the real\n"
+                  "model suggest signal concentrated on a subset\n"
+                  "of variants, not spread uniformly.")
+    elif kurt_diff > 0.5:
+        interp = ("Heavier tails in the real model (higher\n"
+                  "kurtosis) suggest a subset of variants carry\n"
+                  "disproportionate attribution.")
+    elif abs(kurt_diff) <= 0.5 and abs(skew_diff) <= 0.2:
+        interp = ("Real and null show similar shape: no strong\n"
+                  "evidence of concentrated signal beyond a\n"
+                  "location/scale shift.")
+    else:
+        interp = ("Shape differs between real and null; inspect\n"
+                  "skewness, kurtosis, and tail fractions above\n"
+                  "to characterise the difference.")
 
     stats_text = (
         "Shape diagnostics\n"
@@ -131,12 +168,10 @@ def main() -> None:
         f"Skewness:   real {skew_real:.2f}  null {skew_null:.2f}\n"
         f"Ex. kurtosis: real {kurt_real:.2f}  null {kurt_null:.2f}\n"
         f"|z| > 3:    real {frac_real:.1%}  null {frac_null:.1%}\n"
-        f"Anderson-Darling: stat {ad_stat:.2f}, p {ad_p:.4f}\n"
+        f"Anderson-Darling: stat {ad_stat:.2f}, {ad_p_str}\n"
         "\n"
         "Interpretation:\n"
-        "Higher kurtosis + right skew in the real\n"
-        "model indicates signal concentrated on a\n"
-        "subset of variants, not spread uniformly."
+        f"{interp}"
     )
     ax.text(0.98, 0.97, stats_text, transform=ax.transAxes,
             fontsize=7, family='monospace',
