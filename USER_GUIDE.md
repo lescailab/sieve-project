@@ -241,7 +241,7 @@ If you install SIEVE as a conda package (instead of editable source install), us
 - VEP-annotated (CSQ field with SIFT, PolyPhen, Consequence, SYMBOL)
 - Reference genome build specified as GRCh37 or GRCh38 (`--genome-build`)
 - Contig labels with or without `chr` prefix are accepted (normalised internally)
-- Phenotype file (TSV: sample_id, phenotype)
+- Phenotype file (tab-delimited, no header: `sample_id<TAB>phenotype`, with 1=control and 2=case)
 
 **Command**:
 ```bash
@@ -732,19 +732,19 @@ bcftools query -f '%CHROM\t%POS\t%ALT\t%INFO/CSQ\n' variants_vep.vcf.gz | head -
 
 #### Phenotype File Format
 
-Tab-separated file with header:
+Tab-delimited, **no header**, two columns:
 ```
-sample_id	phenotype
 SAMPLE001	1
-SAMPLE002	0
+SAMPLE002	2
 SAMPLE003	1
-SAMPLE004	0
+SAMPLE004	2
 ```
 
-- Column 1: `sample_id` (must match VCF exactly)
-- Column 2: `phenotype` (0 = control, 1 = case)
+- Column 1: `sample_id` — must match VCF sample names exactly
+- Column 2: phenotype code — **1 = control, 2 = case** (standard PLINK convention)
+- Lines beginning with `#` are treated as comments and ignored
 
-**Note**: Sample order doesn't matter, but names must match VCF.
+**Note**: Sample order doesn't matter, but names must match VCF. Do not include a header row.
 
 ---
 
@@ -2519,7 +2519,7 @@ During training, we compute a simplified attribution score (gradient × input) a
 
 #### Hyperparameter: λ_attr
 
-The attribution regularisation weight λ_attr controls the trade-off:
+The embedding sparsity regularisation weight λ_attr controls the trade-off:
 - λ_attr = 0: Standard training, no sparsity constraint
 - λ_attr small (0.01-0.1): Mild encouragement toward sparsity
 - λ_attr large (>0.5): Strong sparsity, may hurt classification performance
@@ -2596,9 +2596,9 @@ This appendix describes the rigorous experimental protocol for evaluating SIEVE.
 
 **Experiment**: Compare SIEVE (with position-aware attention) against a DeepRVAT-style deep set baseline.
 
-#### Question 3: Does attribution-regularised training improve discovery?
+#### Question 3: Does embedding-sparsity-regularised training improve discovery?
 
-**Hypothesis**: Models trained with attribution sparsity loss will produce more stable and biologically meaningful variant rankings than models trained with classification loss alone.
+**Hypothesis**: Models trained with embedding sparsity regularisation will produce more stable and biologically meaningful variant rankings than models trained with classification loss alone.
 
 **Experiment**: Compare variant rankings between models with λ_attr = 0 vs λ_attr > 0.
 
@@ -2734,11 +2734,11 @@ Test whether spatial relationships between variants carry disease-relevant infor
 - Attention weights show non-uniform distance distribution
 - High-attention pairs are enriched for same-exon or functional domain
 
-### Experiment 3: Attribution Regularisation Study
+### Experiment 3: Embedding Sparsity Regularisation Study
 
 #### Purpose
 
-Determine whether training with attribution sparsity loss improves the stability and biological meaningfulness of discovered variants.
+Determine whether training with embedding sparsity regularisation improves the stability and biological meaningfulness of discovered variants.
 
 #### Protocol
 

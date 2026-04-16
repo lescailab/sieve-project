@@ -12,10 +12,13 @@ Author: Francesco Lescai
 
 from typing import Dict, List, Optional, Set
 from collections import defaultdict
+import logging
 from pathlib import Path
 
 import pandas as pd
 from scipy.stats import hypergeom, fisher_exact
+
+logger = logging.getLogger(__name__)
 
 
 class BiologicalValidator:
@@ -64,6 +67,21 @@ class BiologicalValidator:
         if Path(clinvar_file).exists():
             try:
                 clinvar_df = pd.read_csv(clinvar_file, sep='\t')
+                chrom_candidates = ('chromosome', 'chrom', 'CHROM')
+                pos_candidates = ('position', 'pos', 'POS')
+
+                chrom_col = next((c for c in chrom_candidates if c in clinvar_df.columns), None)
+                pos_col = next((c for c in pos_candidates if c in clinvar_df.columns), None)
+                if chrom_col is None or pos_col is None:
+                    raise ValueError(
+                        "ClinVar file must contain chromosome and position columns. "
+                        f"Expected one of {chrom_candidates} and one of {pos_candidates}; "
+                        f"got {list(clinvar_df.columns)}"
+                    )
+
+                clinvar_df = clinvar_df.rename(
+                    columns={chrom_col: 'chrom', pos_col: 'pos'}
+                ).copy()
                 self.clinvar_cache = clinvar_df
                 print(f"Loaded {len(clinvar_df)} ClinVar variants")
                 return clinvar_df
@@ -101,7 +119,7 @@ class BiologicalValidator:
             print(f"Warning: GWAS file not found: {gwas_file}")
             return pd.DataFrame()
 
-    def validate_variants_against_clinvar(
+    def match_variants_to_clinvar(
         self,
         variant_rankings: pd.DataFrame,
         clinvar_df: pd.DataFrame,
@@ -110,12 +128,17 @@ class BiologicalValidator:
         """
         Check if top variants are in ClinVar.
 
+        Matching requires both chromosome and position.  Chromosome prefixes
+        ('chr1' vs '1') are normalised automatically before comparison.
+        Position-only matching is not supported because the same genomic
+        position exists on multiple chromosomes.
+
         Parameters
         ----------
         variant_rankings : pd.DataFrame
-            Ranked variants from SIEVE
+            Ranked variants from SIEVE (must contain 'chromosome' and 'position')
         clinvar_df : pd.DataFrame
-            ClinVar database
+            ClinVar database (must contain 'chrom' and 'pos')
         top_k : int
             Number of top variants to check
 
@@ -123,62 +146,92 @@ class BiologicalValidator:
         -------
         validation : pd.DataFrame
             Top variants with ClinVar annotations
+
+        Raises
+        ------
+        ValueError
+            If variant_rankings is missing 'chromosome' or 'position', or
+            if clinvar_df is missing 'chrom' or 'pos'.
         """
         if clinvar_df.empty:
             print("ClinVar data not available - skipping validation")
             return variant_rankings.head(top_k).copy()
 
-        # Get top variants
         top_variants = variant_rankings.head(top_k).copy()
 
-        # Match against ClinVar using chromosome + position
-        top_variants['in_clinvar'] = False
-        top_variants['clinvar_significance'] = None
+        if 'chromosome' not in top_variants.columns or 'position' not in top_variants.columns:
+            raise ValueError(
+                "match_variants_to_clinvar requires 'chromosome' and 'position' "
+                f"columns in variant_rankings; got {list(top_variants.columns)}"
+            )
+        if 'chrom' not in clinvar_df.columns or 'pos' not in clinvar_df.columns:
+            raise ValueError(
+                "match_variants_to_clinvar requires 'chrom' and 'pos' columns "
+                f"in clinvar_df; got {list(clinvar_df.columns)}"
+            )
 
-        # Check if required columns exist
-        has_chrom_in_variants = 'chromosome' in top_variants.columns
-        has_pos_in_variants = 'position' in top_variants.columns
-        has_chrom_in_clinvar = 'chrom' in clinvar_df.columns
-        has_pos_in_clinvar = 'pos' in clinvar_df.columns
+        def _strip_chr(series: pd.Series) -> pd.Series:
+            return series.astype(str).str.lower().str.removeprefix('chr')
 
-        if has_chrom_in_variants and has_pos_in_variants and has_chrom_in_clinvar and has_pos_in_clinvar:
-            # Create chr:pos keys for matching
-            clinvar_df['chr_pos_key'] = clinvar_df['chrom'].astype(str) + ':' + clinvar_df['pos'].astype(str)
-            clinvar_keys = set(clinvar_df['chr_pos_key'])
+        clinvar_working = clinvar_df.copy()
+        top_working = top_variants.copy()
+        clinvar_working['_chrom_norm'] = _strip_chr(clinvar_working['chrom'])
+        top_working['_chrom_norm'] = _strip_chr(top_working['chromosome'])
 
-            top_variants['chr_pos_key'] = top_variants['chromosome'].astype(str) + ':' + top_variants['position'].astype(str)
-            top_variants['in_clinvar'] = top_variants['chr_pos_key'].isin(clinvar_keys)
+        # Deduplicate ClinVar on (chrom, pos) before merging to prevent row
+        # duplication when multiple ClinVar entries share the same coordinate.
+        # Keep the first entry; aggregate significance into a semicolon-delimited
+        # string so no information is silently discarded.
+        if clinvar_working.duplicated(subset=['_chrom_norm', 'pos']).any():
+            if 'clinical_significance' in clinvar_working.columns:
+                clinvar_working = (
+                    clinvar_working
+                    .groupby(['_chrom_norm', 'pos'], as_index=False)
+                    .agg({'clinical_significance': lambda x: '; '.join(x.dropna().unique()),
+                          **{c: 'first' for c in clinvar_working.columns
+                             if c not in ('_chrom_norm', 'pos', 'clinical_significance')}})
+                )
+            else:
+                clinvar_working = clinvar_working.drop_duplicates(
+                    subset=['_chrom_norm', 'pos'], keep='first'
+                )
 
-            # Add significance
-            for idx, row in top_variants[top_variants['in_clinvar']].iterrows():
-                matches = clinvar_df[clinvar_df['chr_pos_key'] == row['chr_pos_key']]
-                if len(matches) > 0:
-                    top_variants.at[idx, 'clinvar_significance'] = matches.iloc[0].get(
-                        'clinical_significance', 'Unknown'
-                    )
+        logger.info(
+            "ClinVar matching: input_variants=%d clinvar_rows=%d",
+            len(top_working), len(clinvar_working),
+        )
 
-            # Clean up temporary columns
-            top_variants.drop(columns=['chr_pos_key'], inplace=True)
-            clinvar_df.drop(columns=['chr_pos_key'], inplace=True)
-        elif has_pos_in_variants and has_pos_in_clinvar:
-            # Fallback to position-only matching (less accurate)
-            print("WARNING: Chromosome information missing - matching by position only")
-            clinvar_positions = set(clinvar_df['pos'])
-            top_variants['in_clinvar'] = top_variants['position'].isin(clinvar_positions)
+        merged = top_working.merge(
+            clinvar_working,
+            left_on=['_chrom_norm', 'position'],
+            right_on=['_chrom_norm', 'pos'],
+            how='left',
+            suffixes=('', '_clinvar'),
+        )
+        merged['in_clinvar'] = merged['pos'].notna()
+        merged['clinvar_significance'] = merged.get('clinical_significance', 'Unknown')
+        merged.loc[~merged['in_clinvar'], 'clinvar_significance'] = None
 
-            for idx, row in top_variants[top_variants['in_clinvar']].iterrows():
-                matches = clinvar_df[clinvar_df['pos'] == row['position']]
-                if len(matches) > 0:
-                    top_variants.at[idx, 'clinvar_significance'] = matches.iloc[0].get(
-                        'clinical_significance', 'Unknown'
-                    )
-        else:
-            print("ERROR: Required columns missing for ClinVar matching")
+        n_matched = int(merged['in_clinvar'].sum())
+        logger.info(
+            "ClinVar matching: matched_variants=%d/%d", n_matched, len(merged)
+        )
 
-        n_in_clinvar = top_variants['in_clinvar'].sum()
-        print(f"Found {n_in_clinvar}/{top_k} top variants in ClinVar")
+        keep_columns = list(top_variants.columns) + ['in_clinvar', 'clinvar_significance']
+        return merged[keep_columns]
 
-        return top_variants
+    def validate_variants_against_clinvar(
+        self,
+        variant_rankings: pd.DataFrame,
+        clinvar_df: pd.DataFrame,
+        top_k: int = 100
+    ) -> pd.DataFrame:
+        """Backward-compatible wrapper around chromosome+position ClinVar matching."""
+        return self.match_variants_to_clinvar(
+            variant_rankings=variant_rankings,
+            clinvar_df=clinvar_df,
+            top_k=top_k,
+        )
 
     def validate_genes_against_gwas(
         self,

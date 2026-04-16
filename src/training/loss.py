@@ -3,11 +3,11 @@ Loss functions for SIEVE training.
 
 This module implements the loss functions for training SIEVE models:
 1. Binary cross-entropy for case-control classification
-2. Attribution sparsity regularization for interpretability
+2. Embedding sparsity regularisation for interpretability
 
 The combined loss encourages the model to:
 - Accurately predict phenotype (classification loss)
-- Rely on a sparse set of variants (attribution sparsity)
+- Rely on a sparse set of variants (embedding sparsity regularisation)
 
 Author: Francesco Lescai
 """
@@ -23,18 +23,19 @@ class SIEVELoss(nn.Module):
     """
     Combined loss for SIEVE training.
 
-    Loss = classification_loss + λ_attr * attribution_sparsity_loss
+    Loss = classification_loss + λ_attr * embedding_sparsity_loss
 
     The classification loss is binary cross-entropy with logits.
-    The attribution sparsity loss encourages the model to focus on
-    a small number of informative variants.
+    The embedding sparsity regularisation encourages the model to focus on
+    a small number of informative variants by penalising the L2 norms of
+    variant or gene embeddings.
 
     Args:
-        lambda_attr: Weight for attribution sparsity term (default: 0.0)
+        lambda_attr: Weight for embedding sparsity regularisation term (default: 0.0)
         pos_weight: Positive class weight for imbalanced datasets (default: None)
 
     Attributes:
-        lambda_attr: Attribution regularization weight
+        lambda_attr: Embedding sparsity regularisation weight
         bce_loss: Binary cross-entropy loss function
     """
 
@@ -72,7 +73,7 @@ class SIEVELoss(nn.Module):
             Dictionary containing:
                 - 'total': Total loss (scalar)
                 - 'classification': Classification loss (scalar)
-                - 'attribution_sparsity': Attribution sparsity loss (scalar, 0 if lambda_attr=0)
+                - 'attribution_sparsity': Embedding sparsity regularisation loss (scalar, 0 if lambda_attr=0)
 
         Raises:
             ValueError: If lambda_attr > 0 but neither embeddings provided
@@ -128,25 +129,23 @@ def attribution_sparsity_loss(
     mask: Tensor,
 ) -> Tensor:
     """
-    Compute attribution sparsity loss.
+    Compute embedding sparsity regularisation loss (variant level).
 
     This loss encourages the model to rely on a sparse set of variants
-    by penalizing the sum of L2-norm magnitudes of variant embeddings.
+    by penalising the sum of L2-norm magnitudes of variant embeddings.
 
-    NOTE: This is a simplified version for Phase 1. Full gradient-based
-    attribution regularization will be implemented in Phase 2.
+    NOTE: This is a Phase 1 implementation: it penalises embedding L2 norms,
+    not gradients or attribution objects. The function name and the config key
+    ``attribution_sparsity`` are preserved for backward compatibility with
+    existing checkpoints and YAML result files.
 
     Args:
         variant_embeddings: Variant embeddings [batch_size, num_variants, latent_dim]
-        logits: Model predictions [batch_size] (unused in simplified version)
+        logits: Model predictions [batch_size] (unused in current implementation)
         mask: Valid variant mask [batch_size, num_variants]
 
     Returns:
         Mean L1 norm of embedding magnitudes across batch (scalar)
-
-    Note:
-        Phase 1 uses simple L1 regularization on embeddings.
-        Phase 2 will implement true gradient-based attribution sparsity.
     """
     # Compute L2 norm of embeddings for each variant
     # embedding_magnitudes shape: [batch_size, num_variants]
@@ -169,11 +168,14 @@ def gene_level_sparsity_loss(
     logits: Tensor,
 ) -> Tensor:
     """
-    Compute sparsity loss at gene level (for chunked processing).
+    Compute embedding sparsity regularisation loss (gene level, for chunked processing).
 
     Encourages the model to rely on a sparse set of genes rather than
-    all genes. This is used when variant-level attribution is not available
-    (e.g., in chunked processing).
+    all genes by penalising the L2 norms of gene embeddings. Used when
+    variant-level sparsity is not available (e.g., in chunked processing).
+
+    The function name is preserved for backward compatibility with existing
+    checkpoints and YAML result files.
 
     Args:
         gene_embeddings: Gene embeddings [batch_size, num_genes, latent_dim]
@@ -181,10 +183,6 @@ def gene_level_sparsity_loss(
 
     Returns:
         Mean L1 norm of gene embedding magnitudes across batch (scalar)
-
-    Note:
-        This is an approximation for chunked mode where variant-level
-        attribution is not feasible. Encourages sparse gene usage.
     """
     # Compute L2 norm of embeddings for each gene
     # gene_magnitudes shape: [batch_size, num_genes]

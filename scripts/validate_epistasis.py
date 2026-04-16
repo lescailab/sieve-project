@@ -28,7 +28,7 @@ from src.encoding.sparse_tensor import build_variant_tensor
 from src.models.sieve import create_sieve_model
 from src.models import ChunkedSIEVEModel
 from src.data import SampleVariants
-from src.explain.shap_epistasis import SHAPEpistasisDetector
+from src.explain.counterfactual_epistasis import CounterfactualEpistasisDetector
 
 
 def parse_args():
@@ -186,7 +186,7 @@ def main():
     model.eval()
 
     # Initialize detector
-    detector = SHAPEpistasisDetector(model=model, device=args.device)
+    detector = CounterfactualEpistasisDetector(model=model, device=args.device)
 
     # Validate interactions
     print("\n" + "="*60)

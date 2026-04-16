@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 import sys
 import time
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import numpy as np
 import torch
@@ -29,6 +29,11 @@ import yaml
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.data import build_sample_variants
+from src.data.covariates import (
+    attach_pc_covariates_to_samples,
+    compute_file_sha256,
+    load_pc_map,
+)
 from src.encoding import (
     AnnotationLevel,
     ChunkedVariantDataset,
@@ -42,6 +47,7 @@ from src.training import (
     create_stratified_folds,
     print_fold_stats,
 )
+from src.training.loss import compute_class_weights
 
 
 def parse_args():
@@ -70,7 +76,7 @@ def parse_args():
     parser.add_argument('--lr', type=float, default=0.001,
                         help='Initial learning rate')
     parser.add_argument('--lambda-attr', type=float, default=0.0,
-                        help='Attribution regularization weight')
+                        help='Embedding sparsity regularisation weight (penalises L2 norms of variant/gene embeddings)')
     parser.add_argument('--early-stopping', type=int, default=10,
                         help='Early stopping patience (epochs)')
     parser.add_argument('--gradient-clip', type=float, default=None,
@@ -82,7 +88,7 @@ def parse_args():
     parser.add_argument('--chunk-overlap', type=int, default=0,
                         help='Overlap between adjacent chunks (default: 0)')
     parser.add_argument('--aggregation-method', type=str, default='mean',
-                        choices=['mean', 'max', 'attention', 'logit_mean'],
+                        choices=['mean', 'max'],
                         help='How to aggregate chunk outputs into sample predictions')
 
     # Model arguments
@@ -96,7 +102,7 @@ def parse_args():
                         help='Hidden dimension in encoder')
 
     # Cross-validation arguments
-    parser.add_argument('--cv', type=int, default=None,
+    parser.add_argument('--cv', '--cv-folds', dest='cv', type=int, default=None,
                         help='Number of CV folds (if None, use single train/val split)')
     parser.add_argument('--val-split', type=float, default=0.2,
                         help='Validation split ratio (if not using CV)')
@@ -133,6 +139,32 @@ def parse_args():
             'covariate; ensure your preprocessed data were generated with '
             'sex-aware ploidy encoding if required.'
         )
+    )
+    parser.add_argument(
+        '--pc-map',
+        type=str,
+        default=None,
+        help=(
+            "Optional TSV with columns: sample_id, PC1, PC2, ... "
+            "PCs are concatenated to the covariate vector after sex."
+        ),
+    )
+    parser.add_argument(
+        '--num-pcs',
+        type=int,
+        default=0,
+        help='Number of PCs to use from --pc-map (default: 0 = do not use).',
+    )
+
+    parser.add_argument(
+        '--class-weighting',
+        choices=['auto', 'on', 'off'],
+        default='auto',
+        help=(
+            "Whether to apply inverse-frequency class weighting in the BCE loss. "
+            "'auto' (default): enabled only if the training fold has case fraction "
+            "outside [0.4, 0.6]. 'on': always enabled. 'off': never enabled."
+        ),
     )
 
     return parser.parse_args()
@@ -205,6 +237,7 @@ def save_fold_config(
         Command-line arguments containing all config values.
     """
     num_covariates = getattr(args, 'num_covariates', 1 if args.sex_map else 0)
+    pos_weight_val = getattr(args, '_fold_pos_weight', None)
     fold_config = {
         'fold_index': fold_idx,
         'experiment_name': args.experiment_name,
@@ -230,6 +263,12 @@ def save_fold_config(
         # Covariate parameters
         'sex_map': str(args.sex_map) if args.sex_map else None,
         'num_covariates': num_covariates,
+        'pc_map': str(args.pc_map) if getattr(args, 'pc_map', None) else None,
+        'num_pcs': int(getattr(args, 'num_pcs', 0)),
+        'pc_map_sha256': getattr(args, 'pc_map_sha256', None),
+        # Class weighting
+        'class_weighting_applied': pos_weight_val is not None,
+        'class_weighting_pos_weight': float(pos_weight_val.item()) if pos_weight_val is not None else None,
         # Data reference
         'preprocessed_data': str(args.preprocessed_data) if args.preprocessed_data else None,
         'vcf': str(args.vcf) if args.vcf else None,
@@ -240,6 +279,15 @@ def save_fold_config(
 
     with open(fold_dir / 'config.yaml', 'w') as f:
         yaml.dump(fold_config, f, default_flow_style=False, sort_keys=False)
+
+
+def _update_saved_config(config_path: Path, **updates) -> None:
+    """Merge key/value updates into the run config.yaml."""
+    with open(config_path) as f:
+        config = yaml.safe_load(f) or {}
+    config.update(updates)
+    with open(config_path, 'w') as f:
+        yaml.dump(config, f, default_flow_style=False, sort_keys=False)
 
 
 def save_fold_info(
@@ -315,12 +363,47 @@ def save_fold_info(
         yaml.dump(fold_info, f, default_flow_style=False, sort_keys=False)
 
 
+def _resolve_pos_weight(
+    train_labels: np.ndarray,
+    class_weighting: str,
+) -> Optional[torch.Tensor]:
+    """
+    Return the BCE pos_weight tensor (or None) based on the policy.
+
+    Parameters
+    ----------
+    train_labels : np.ndarray
+        Binary labels (0/1) for the training fold.
+    class_weighting : str
+        'auto' | 'on' | 'off'
+
+    Returns
+    -------
+    Optional[torch.Tensor]
+        Positive class weight, or None when class weighting is disabled.
+    """
+    case_fraction = float(train_labels.mean())
+    apply = (
+        class_weighting == 'on'
+        or (class_weighting == 'auto' and not (0.4 <= case_fraction <= 0.6))
+    )
+    if apply:
+        pos_weight = compute_class_weights(torch.as_tensor(train_labels, dtype=torch.float32))
+        print(
+            f"Applying class weighting: case_fraction={case_fraction:.3f}, "
+            f"pos_weight={pos_weight.item():.3f}"
+        )
+        return pos_weight
+    return None
+
+
 def train_single_fold(
     train_loader,
     val_loader,
     model: SIEVE,
     args,
     checkpoint_dir: Path,
+    pos_weight: Optional[torch.Tensor] = None,
 ) -> Dict[str, float]:
     """Train model on a single fold."""
     # Create optimizer
@@ -334,8 +417,10 @@ def train_single_fold(
         patience=5,
     )
 
-    # Create loss function
-    loss_fn = SIEVELoss(lambda_attr=args.lambda_attr)
+    # Create loss function (move pos_weight to training device to avoid device mismatch)
+    if pos_weight is not None:
+        pos_weight = pos_weight.to(args.device)
+    loss_fn = SIEVELoss(lambda_attr=args.lambda_attr, pos_weight=pos_weight)
 
     # Create trainer
     trainer = Trainer(
@@ -384,6 +469,10 @@ def main():
     # Validate arguments
     if args.preprocessed_data is None and (args.vcf is None or args.phenotypes is None):
         raise ValueError("Must provide either --preprocessed-data OR both --vcf and --phenotypes")
+    if args.pc_map is not None and args.num_pcs == 0:
+        raise ValueError("--pc-map requires --num-pcs > 0")
+    if args.num_pcs > 0 and args.pc_map is None:
+        raise ValueError("--num-pcs requires --pc-map")
 
     # Create experiment name
     if args.experiment_name is None:
@@ -393,8 +482,9 @@ def main():
     output_dir = Path(args.output_dir) / args.experiment_name
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Load sex map if provided
+    # Load sex map / PC map if provided
     sex_map = None
+    pc_map = None
     num_covariates = 0
     if args.sex_map is not None:
         import pandas as pd
@@ -406,6 +496,15 @@ def main():
         print(f"  {len(sex_map)} samples with definitive sex (M or F)")
         num_covariates = 1  # sex is 1 covariate
         print(f"  Sex will be used as a covariate in the classifier head")
+    if args.pc_map is not None:
+        print(f"\nLoading PC map from {args.pc_map}...")
+        pc_map = load_pc_map(args.pc_map, args.num_pcs)
+        args.pc_map_sha256 = compute_file_sha256(args.pc_map)
+        print(f"  Loaded {len(pc_map)} samples with {args.num_pcs} PC(s)")
+        print(f"  PC map SHA256: {args.pc_map_sha256}")
+        num_covariates += args.num_pcs
+    else:
+        args.pc_map_sha256 = None
     args.num_covariates = num_covariates
 
     # Save config
@@ -451,6 +550,14 @@ def main():
         load_time = time.time() - start_time
         print(f"Loaded {len(all_samples)} samples in {load_time:.1f} seconds")
 
+    if pc_map is not None:
+        attach_pc_covariates_to_samples(
+            all_samples,
+            pc_map=pc_map,
+            include_sex=sex_map is not None,
+        )
+        print(f"  Attached ancestry PCs to {len(all_samples)} samples")
+
     # Create chunked dataset (ensures whole-genome coverage)
     annotation_level = AnnotationLevel[args.level]
     print(f"\nCreating CHUNKED dataset with annotation level {args.level}...")
@@ -463,6 +570,11 @@ def main():
         chunk_size=args.chunk_size,
         overlap=args.chunk_overlap
     )
+    if dataset.num_covariates not in (0, num_covariates):
+        raise ValueError(
+            "Covariate tensor width in the dataset does not match the model configuration "
+            f"({dataset.num_covariates} vs {num_covariates})."
+        )
 
     # Get dimensions
     input_dim = get_feature_dimension(annotation_level)
@@ -488,9 +600,16 @@ def main():
         male_cases = sum(1 for s in all_samples if s.sex == 'M' and s.label == 1)
         female_cases = sum(1 for s in all_samples if s.sex == 'F' and s.label == 1)
         print(f"  Male cases: {male_cases}, Female cases: {female_cases}")
+    if args.num_pcs > 0:
+        print(f"Ancestry PCs enabled: {args.num_pcs}")
 
     if args.cv is not None:
         # Cross-validation
+        _update_saved_config(
+            config_path,
+            class_weighting_applied=None,
+            class_weighting_pos_weight=None,
+        )
         print(f"\n{'='*60}")
         print(f"Running {args.cv}-fold cross-validation")
         print(f"{'='*60}")
@@ -561,6 +680,11 @@ def main():
             # Create fold checkpoint directory
             fold_dir = output_dir / f'fold_{fold_idx}'
 
+            # Resolve class weighting for this fold
+            fold_pos_weight = _resolve_pos_weight(train_labels, args.class_weighting)
+            # Store on args so save_fold_config can access it without signature change
+            args._fold_pos_weight = fold_pos_weight
+
             # Train
             training_started = datetime.now(timezone.utc)
             fold_metrics = train_single_fold(
@@ -569,6 +693,7 @@ def main():
                 model=model,
                 args=args,
                 checkpoint_dir=fold_dir,
+                pos_weight=fold_pos_weight,
             )
             training_completed = datetime.now(timezone.utc)
 
@@ -686,6 +811,15 @@ def main():
             num_covariates=num_covariates,
         )
 
+        # Resolve class weighting for this split
+        pos_weight = _resolve_pos_weight(train_labels, args.class_weighting)
+        args._fold_pos_weight = pos_weight
+        _update_saved_config(
+            config_path,
+            class_weighting_applied=pos_weight is not None,
+            class_weighting_pos_weight=float(pos_weight.item()) if pos_weight is not None else None,
+        )
+
         # Train
         metrics = train_single_fold(
             train_loader=train_loader,
@@ -693,6 +827,7 @@ def main():
             model=model,
             args=args,
             checkpoint_dir=output_dir,
+            pos_weight=pos_weight,
         )
 
         print(f"\nFinal Results:")
@@ -703,6 +838,8 @@ def main():
         results_path = output_dir / 'results.yaml'
         results_with_timing = {k: float(v) for k, v in metrics.items()}
         results_with_timing['data_loading_time_seconds'] = float(load_time)
+        results_with_timing['class_weighting_applied'] = pos_weight is not None
+        results_with_timing['class_weighting_pos_weight'] = float(pos_weight.item()) if pos_weight is not None else None
         with open(results_path, 'w') as f:
             yaml.dump(results_with_timing, f)
         print(f"\nResults saved to {results_path}")

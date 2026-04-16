@@ -76,6 +76,7 @@ class IntegratedGradientsExplainer:
         mask: Tensor,
         target: Optional[int] = None,
         baseline: Optional[Tensor] = None,
+        covariates: Optional[Tensor] = None,
     ) -> Tensor:
         """
         Compute integrated gradients attributions for variants.
@@ -94,6 +95,11 @@ class IntegratedGradientsExplainer:
             Target class (0 or 1). If None, uses predicted class
         baseline : Optional[Tensor]
             Baseline input for integration. If None, uses zeros
+        covariates : Optional[Tensor]
+            Sample-level covariates, shape (batch, num_covariates).
+            Must be provided when the model was trained with covariates
+            (``num_covariates > 0``).  Omitting covariates for a model that
+            expects them will explain a different function than was trained.
 
         Returns
         -------
@@ -105,17 +111,23 @@ class IntegratedGradientsExplainer:
         positions = positions.to(self.device)
         gene_ids = gene_ids.to(self.device)
         mask = mask.to(self.device)
+        if covariates is not None:
+            covariates = covariates.to(self.device)
 
         # Create baseline (zero features)
         if baseline is None:
             baseline = torch.zeros_like(variant_features)
+
+        # Build additional_forward_args — covariates always included so the
+        # wrapper signature stays stable; None is passed when unused.
+        additional = (positions, gene_ids, mask, covariates)
 
         # Compute attributions
         attributions = self.ig.attribute(
             inputs=variant_features,
             baselines=baseline,
             target=target,
-            additional_forward_args=(positions, gene_ids, mask),
+            additional_forward_args=additional,
             n_steps=self.n_steps
         )
 
@@ -124,7 +136,8 @@ class IntegratedGradientsExplainer:
     def attribute_batch(
         self,
         dataloader,
-        aggregate: str = 'l2'
+        aggregate: str = 'l2',
+        num_covariates: int = 0,
     ) -> Tuple[List[np.ndarray], List[np.ndarray], List[Dict]]:
         """
         Compute attributions for a full dataset.
@@ -144,6 +157,9 @@ class IntegratedGradientsExplainer:
             - 'l1': L1 norm across features
             - 'sum': Sum across features
             - 'mean': Mean across features
+        num_covariates : int
+            Number of covariates expected by the model (default 0).
+            When > 0, a 'sex' tensor must be present in each batch.
 
         Returns
         -------
@@ -173,6 +189,39 @@ class IntegratedGradientsExplainer:
             mask = batch['mask']
             batch_size = features.shape[0]
 
+            # --- Covariate handling ---
+            # Build the per-sample covariate vector using the same logic as
+            # ChunkedSIEVEModel.train_step (via build_sample_covariates).
+            batch_sex = batch.get('sex')
+            batch_covariates = batch.get('covariates')
+            if num_covariates > 0:
+                if batch_sex is None and batch_covariates is None:
+                    raise ValueError(
+                        f"Model has num_covariates={num_covariates} but the batch "
+                        "contains no covariate tensor. Cannot build covariate vector."
+                    )
+                # Move covariate tensors to the model device before building
+                target_device = torch.device(self.device)
+                if batch_sex is not None:
+                    batch_sex = batch_sex.to(target_device)
+                if batch_covariates is not None:
+                    batch_covariates = batch_covariates.to(target_device)
+                # Import here to avoid circular dependency at module level
+                from src.models.chunked_sieve import build_sample_covariates
+                batch_covariates_full = build_sample_covariates(
+                    batch_sex, num_covariates, batch_size,
+                    target_device,
+                    batch_covariates=batch_covariates,
+                )
+            elif (batch_sex is not None or batch_covariates is not None) and num_covariates == 0:
+                raise ValueError(
+                    "A covariate tensor is present in the batch but num_covariates=0. "
+                    "Either set num_covariates to the correct value or remove the "
+                    "covariates from the batch."
+                )
+            else:
+                batch_covariates_full = None
+
             # CRITICAL: Process each sample individually to avoid OOM
             # Integrated gradients requires storing all intermediate activations,
             # which for attention mechanisms with many variants becomes huge
@@ -187,6 +236,11 @@ class IntegratedGradientsExplainer:
                 sample_positions = positions[i:i+1]
                 sample_gene_ids = gene_ids[i:i+1]
                 sample_mask = mask[i:i+1]
+
+                # Per-sample covariate slice
+                sample_covariates = (
+                    batch_covariates_full[i:i+1] if batch_covariates_full is not None else None
+                )
 
                 # CRITICAL: Limit variants to avoid OOM
                 # Count valid variants for this sample
@@ -219,7 +273,8 @@ class IntegratedGradientsExplainer:
                 # Compute attributions for this single sample (possibly truncated)
                 sample_attributions = self.attribute(
                     sample_features_truncated, sample_positions_truncated,
-                    sample_gene_ids_truncated, sample_mask_truncated
+                    sample_gene_ids_truncated, sample_mask_truncated,
+                    covariates=sample_covariates,
                 )
 
                 # Convert to numpy
@@ -324,8 +379,12 @@ class SIEVEWrapper(nn.Module):
     Wrapper for SIEVE model to work with Captum.
 
     Captum expects a model that takes a single input tensor.
-    This wrapper takes variant_features as input and passes
-    other arguments through.
+    This wrapper takes variant_features as the differentiable input and
+    passes all other arguments (positions, gene_ids, mask, and optionally
+    covariates) through ``additional_forward_args``.
+
+    Covariates are passed as the optional last positional argument so that
+    the function signature is identical whether or not the model uses them.
     """
 
     def __init__(self, model: nn.Module):
@@ -337,7 +396,8 @@ class SIEVEWrapper(nn.Module):
         variant_features: Tensor,
         positions: Tensor,
         gene_ids: Tensor,
-        mask: Tensor
+        mask: Tensor,
+        covariates: Optional[Tensor] = None,
     ) -> Tensor:
         """Forward pass returning only logits."""
         logits, _ = self.model(
@@ -345,6 +405,7 @@ class SIEVEWrapper(nn.Module):
             positions,
             gene_ids,
             mask,
+            covariates=covariates,
             return_attention=False,
             return_intermediate=False
         )

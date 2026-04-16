@@ -197,6 +197,7 @@ print(f'CFG_AGGREGATION={shlex.quote(str(c.get(\"aggregation_method\", \"mean\")
 print(f'CFG_LR={c.get(\"lr\", 0.00001)}')
 print(f'CFG_LAMBDA_ATTR={c.get(\"lambda_attr\", 0.1)}')
 print(f'CFG_BATCH_SIZE={c.get(\"batch_size\", 16)}')
+print(f'CFG_CLASS_WEIGHTING={shlex.quote(str(c.get(\"class_weighting\", \"auto\")))}')
 print(f'CFG_GRAD_ACCUM={c.get(\"gradient_accumulation_steps\", 4)}')
 grad_clip = c.get('gradient_clip')
 print(f'CFG_GRAD_CLIP={grad_clip if grad_clip is not None else \"\"}')
@@ -211,6 +212,26 @@ if sex_map and str(sex_map) not in ('None', 'null', ''):
     print(f'CFG_SEX_MAP={shlex.quote(str(sex_map))}')
 else:
     print('CFG_SEX_MAP=')
+
+pc_map = c.get('pc_map')
+if pc_map and str(pc_map) not in ('None', 'null', ''):
+    print(f'CFG_PC_MAP={shlex.quote(str(pc_map))}')
+else:
+    print('CFG_PC_MAP=')
+print(f'CFG_NUM_PCS={int(c.get(\"num_pcs\", 0) or 0)}')
+
+# Training protocol: CV folds vs single val-split
+cv_folds = c.get('cv_folds', c.get('cv'))
+val_split = c.get('val_split')
+if cv_folds and str(cv_folds) not in ('None', 'null', '0', ''):
+    print(f'CFG_CV_FOLDS={int(cv_folds)}')
+    print('CFG_VAL_SPLIT=')
+elif val_split and str(val_split) not in ('None', 'null', ''):
+    print('CFG_CV_FOLDS=')
+    print(f'CFG_VAL_SPLIT={val_split}')
+else:
+    print('CFG_CV_FOLDS=')
+    print('CFG_VAL_SPLIT=0.2')
 ")
 
 if [ $? -ne 0 ]; then
@@ -232,11 +253,21 @@ echo "  aggregation_method:   $CFG_AGGREGATION"
 echo "  lr:                   $CFG_LR"
 echo "  lambda_attr:          $CFG_LAMBDA_ATTR"
 echo "  batch_size:           $CFG_BATCH_SIZE"
+echo "  class_weighting:      $CFG_CLASS_WEIGHTING"
 echo "  gradient_clip:        ${CFG_GRAD_CLIP:-<none>}"
 echo "  early_stopping:       $CFG_EARLY_STOPPING"
 echo "  epochs:               $CFG_EPOCHS"
 echo "  genome_build:         $CFG_GENOME_BUILD"
 echo "  sex_map:              ${CFG_SEX_MAP:-<not set>}"
+echo "  pc_map:               ${CFG_PC_MAP:-<not set>}"
+echo "  num_pcs:              ${CFG_NUM_PCS}"
+if [ -n "$CFG_CV_FOLDS" ]; then
+    echo "  training_protocol:    CV (${CFG_CV_FOLDS} folds)"
+elif [ -n "$CFG_VAL_SPLIT" ]; then
+    echo "  training_protocol:    single split (val_split=${CFG_VAL_SPLIT})"
+else
+    echo "  training_protocol:    single split (val_split=0.2, fallback)"
+fi
 echo ""
 
 # Validate that LEVEL (directory routing) matches CFG_LEVEL (model config).
@@ -256,6 +287,14 @@ fi
 if [ -n "$CFG_SEX_MAP" ] && [ ! -f "$CFG_SEX_MAP" ]; then
     echo "ERROR: Sex map file from real experiment config not found at: $CFG_SEX_MAP"
     echo "The real model used sex as a covariate, so the null model must too."
+    exit 1
+fi
+if [ "$CFG_NUM_PCS" -gt 0 ] && [ -z "$CFG_PC_MAP" ]; then
+    echo "ERROR: num_pcs=${CFG_NUM_PCS} but no pc_map path was found in the real config."
+    exit 1
+fi
+if [ -n "$CFG_PC_MAP" ] && [ ! -f "$CFG_PC_MAP" ]; then
+    echo "ERROR: PC map file from real experiment config not found at: $CFG_PC_MAP"
     exit 1
 fi
 
@@ -289,17 +328,26 @@ echo ""
 # Step 2: Train null model
 # -------------------------------------------------------------------
 # All hyperparameters are read from the real experiment's config.yaml.
-# The only differences are:
+# The training protocol (CV folds vs single split) is matched to the
+# real model: if the real run used CV with N folds, the null run uses
+# CV with N folds.  If it used a single split, the null uses the same
+# fraction.  The only differences from the real run are:
 #   - --preprocessed-data points to the null (permuted) .pt file
-#   - --experiment-name is training (nested under null_baselines/{LEVEL})
-#   - --val-split 0.2 (single split instead of full CV — sufficient for null)
+#   - --experiment-name is "training" (nested under null_baselines/{LEVEL})
 echo "[Step 2/4] Training null model..."
 if [ -n "$PROJECT_DIR" ] && [ -n "$LEVEL" ]; then
     NULL_EXPERIMENT="${OUTPUT_BASE}/null_baselines/${LEVEL}/training"
 else
     NULL_EXPERIMENT="${OUTPUT_BASE}/experiments/NULL_BASELINE"
 fi
-NULL_MODEL_CHECKPOINT="${NULL_EXPERIMENT}/best_model.pt"
+
+# Determine null model checkpoint path (depends on protocol)
+if [ -n "$CFG_CV_FOLDS" ]; then
+    # CV mode — checkpoint is selected by select_best_cv_fold.py after training
+    NULL_MODEL_CHECKPOINT=""   # determined after training
+else
+    NULL_MODEL_CHECKPOINT="${NULL_EXPERIMENT}/best_model.pt"
+fi
 
 if [ -n "$PROJECT_DIR" ] && [ -n "$LEVEL" ]; then
     TRAIN_OUTPUT_DIR="${OUTPUT_BASE}/null_baselines/${LEVEL}"
@@ -313,12 +361,12 @@ TRAIN_CMD=(
     "$PYTHON" "$REPO_ROOT/scripts/train.py"
     --preprocessed-data "$NULL_DATA"
     --level "$CFG_LEVEL"
-    --val-split 0.2
     --lr "$CFG_LR"
     --lambda-attr "$CFG_LAMBDA_ATTR"
     --early-stopping "$CFG_EARLY_STOPPING"
     --epochs "$CFG_EPOCHS"
     --batch-size "$CFG_BATCH_SIZE"
+    --class-weighting "$CFG_CLASS_WEIGHTING"
     --chunk-size "$CFG_CHUNK_SIZE"
     --chunk-overlap "$CFG_CHUNK_OVERLAP"
     --aggregation-method "$CFG_AGGREGATION"
@@ -334,6 +382,15 @@ TRAIN_CMD=(
     --device "$DEVICE"
 )
 
+# Match the real-model training protocol (CV vs single split)
+if [ -n "$CFG_CV_FOLDS" ]; then
+    TRAIN_CMD+=(--cv-folds "$CFG_CV_FOLDS")
+elif [ -n "$CFG_VAL_SPLIT" ]; then
+    TRAIN_CMD+=(--val-split "$CFG_VAL_SPLIT")
+else
+    TRAIN_CMD+=(--val-split 0.2)   # fallback: identical to previous default
+fi
+
 # Add --gradient-clip if it was set in the real config
 if [ -n "$CFG_GRAD_CLIP" ]; then
     TRAIN_CMD+=(--gradient-clip "$CFG_GRAD_CLIP")
@@ -343,12 +400,47 @@ fi
 if [ -n "$CFG_SEX_MAP" ]; then
     TRAIN_CMD+=(--sex-map "$CFG_SEX_MAP")
 fi
+if [ "$CFG_NUM_PCS" -gt 0 ]; then
+    TRAIN_CMD+=(--pc-map "$CFG_PC_MAP" --num-pcs "$CFG_NUM_PCS")
+fi
 
-if [ -f "$NULL_MODEL_CHECKPOINT" ]; then
-    echo "  Found existing null model checkpoint at: $NULL_MODEL_CHECKPOINT"
-    echo "  Skipping null model training."
+# Check whether null training is already complete
+if [ -n "$CFG_CV_FOLDS" ]; then
+    # CV mode: training complete when cv_results.yaml exists in null experiment dir
+    NULL_CV_RESULTS="${NULL_EXPERIMENT}/cv_results.yaml"
+    if [ -f "$NULL_CV_RESULTS" ]; then
+        echo "  Found existing null CV results at: $NULL_CV_RESULTS"
+        echo "  Skipping null model training."
+    else
+        "${TRAIN_CMD[@]}"
+    fi
+
+    # Select best null fold by AUC from cv_results.yaml
+    echo "  Selecting best null fold..."
+    if [ ! -f "${NULL_EXPERIMENT}/cv_results.yaml" ]; then
+        echo "ERROR: Expected null CV results file not found: ${NULL_EXPERIMENT}/cv_results.yaml"
+        exit 1
+    fi
+    NULL_BEST_FOLD=$("$PYTHON" -c "
+import yaml
+with open('${NULL_EXPERIMENT}/cv_results.yaml') as f:
+    r = yaml.safe_load(f)
+best = max(range(len(r['fold_results'])), key=lambda i: r['fold_results'][i]['auc'])
+print(best)
+")
+
+    NULL_MODEL_CHECKPOINT="${NULL_EXPERIMENT}/fold_${NULL_BEST_FOLD}/best_model.pt"
+    NULL_EXPLAIN_INPUT_DIR="${NULL_EXPERIMENT}/fold_${NULL_BEST_FOLD}"
+    echo "  Null best fold: ${NULL_BEST_FOLD} (checkpoint: ${NULL_MODEL_CHECKPOINT})"
 else
-    "${TRAIN_CMD[@]}"
+    # Single-split mode
+    if [ -f "$NULL_MODEL_CHECKPOINT" ]; then
+        echo "  Found existing null model checkpoint at: $NULL_MODEL_CHECKPOINT"
+        echo "  Skipping null model training."
+    else
+        "${TRAIN_CMD[@]}"
+    fi
+    NULL_EXPLAIN_INPUT_DIR="$NULL_EXPERIMENT"
 fi
 
 echo ""
@@ -368,13 +460,19 @@ if [ -f "$NULL_RAW_RANKINGS" ]; then
     echo "  Found existing null explainability output at: $NULL_RAW_RANKINGS"
     echo "  Skipping null explainability."
 else
-    "$PYTHON" "$REPO_ROOT/scripts/explain.py" \
-        --experiment-dir "$NULL_EXPERIMENT" \
-        --preprocessed-data "$NULL_DATA" \
-        --output-dir "$NULL_EXPLAIN_DIR" \
-        --genome-build "$CFG_GENOME_BUILD" \
-        --device "$DEVICE" \
+    EXPLAIN_CMD=(
+        "$PYTHON" "$REPO_ROOT/scripts/explain.py"
+        --experiment-dir "$NULL_EXPLAIN_INPUT_DIR"
+        --preprocessed-data "$NULL_DATA"
+        --output-dir "$NULL_EXPLAIN_DIR"
+        --genome-build "$CFG_GENOME_BUILD"
+        --device "$DEVICE"
         --is-null-baseline
+    )
+    if [ "$CFG_NUM_PCS" -gt 0 ]; then
+        EXPLAIN_CMD+=(--pc-map "$CFG_PC_MAP" --num-pcs "$CFG_NUM_PCS")
+    fi
+    "${EXPLAIN_CMD[@]}"
 fi
 
 echo ""

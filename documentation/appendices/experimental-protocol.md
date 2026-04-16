@@ -18,9 +18,9 @@ This appendix describes the rigorous experimental protocol for evaluating SIEVE.
 
 **Experiment**: Compare SIEVE (with position-aware attention) against a DeepRVAT-style deep set baseline.
 
-#### Question 3: Does attribution-regularised training improve discovery?
+#### Question 3: Does embedding-sparsity-regularised training improve discovery?
 
-**Hypothesis**: Models trained with attribution sparsity loss will produce more stable and biologically meaningful variant rankings than models trained with classification loss alone.
+**Hypothesis**: Models trained with embedding sparsity regularisation will produce more stable and biologically meaningful variant rankings than models trained with classification loss alone.
 
 **Experiment**: Compare variant rankings between models with λ_attr = 0 vs λ_attr > 0.
 
@@ -156,11 +156,11 @@ Test whether spatial relationships between variants carry disease-relevant infor
 - Attention weights show non-uniform distance distribution
 - High-attention pairs are enriched for same-exon or functional domain
 
-### Experiment 3: Attribution Regularisation Study
+### Experiment 3: Embedding Sparsity Regularisation Study
 
 #### Purpose
 
-Determine whether training with attribution sparsity loss improves the stability and biological meaningfulness of discovered variants.
+Determine whether training with embedding sparsity regularisation improves the stability and biological meaningfulness of discovered variants.
 
 #### Protocol
 

@@ -48,6 +48,7 @@ import torch
 from torch.utils.data import DataLoader
 import numpy as np
 
+from src.data.covariates import attach_pc_covariates_to_samples, load_pc_map
 from src.encoding import (
     ChunkedVariantDataset,
     collate_chunks,
@@ -80,6 +81,21 @@ def parse_args():
     # Data input
     parser.add_argument('--preprocessed-data', type=str, required=True,
                         help='Path to preprocessed data (.pt file)')
+    parser.add_argument(
+        '--pc-map',
+        type=str,
+        default=None,
+        help=(
+            "Optional TSV with columns: sample_id, PC1, PC2, ... "
+            "Used to rebuild the covariate vector for models trained with PCs."
+        ),
+    )
+    parser.add_argument(
+        '--num-pcs',
+        type=int,
+        default=0,
+        help='Number of PCs to use from --pc-map (default: 0).',
+    )
 
     # Output
     parser.add_argument('--output-dir', type=str, required=True,
@@ -207,6 +223,39 @@ def main():
         print(f"  Cases: {metadata.get('num_cases', 'unknown')}")
         print(f"  Controls: {metadata.get('num_controls', 'unknown')}")
 
+    # If the model was trained with sex covariates, apply the same sex map here
+    # so that covariates propagated through IG match the training configuration.
+    sex_map_path = config.get('sex_map')
+    if sex_map_path and Path(sex_map_path).exists():
+        import pandas as _pd
+        sex_df = _pd.read_csv(sex_map_path, sep='\t')
+        sex_map = dict(zip(sex_df['sample_id'], sex_df['inferred_sex']))
+        sex_map = {k: v for k, v in sex_map.items() if v in ('M', 'F')}
+        n_updated = 0
+        for sample in all_samples:
+            if sample.sample_id in sex_map:
+                sample.sex = sex_map[sample.sample_id]
+                n_updated += 1
+        print(f"  Applied sex map from config: {n_updated}/{len(all_samples)} samples updated")
+    elif sex_map_path:
+        print(f"  WARNING: Sex map path from config not found ({sex_map_path}); "
+              "sex covariates will use values embedded in preprocessed data (if any)")
+
+    pc_map_path = args.pc_map or config.get('pc_map')
+    num_pcs = args.num_pcs or config.get('num_pcs', 0)
+    if pc_map_path is not None and num_pcs == 0:
+        raise ValueError("--pc-map requires --num-pcs > 0 (or num_pcs in config)")
+    if num_pcs > 0 and pc_map_path is None:
+        raise ValueError("num_pcs > 0 but no PC map was provided")
+    if pc_map_path is not None:
+        pc_map = load_pc_map(pc_map_path, num_pcs)
+        attach_pc_covariates_to_samples(
+            all_samples,
+            pc_map=pc_map,
+            include_sex=sex_map_path is not None,
+        )
+        print(f"  Attached {num_pcs} PC covariate(s) from {pc_map_path}")
+
     # Get annotation level
     annotation_level = AnnotationLevel[config['level']]
 
@@ -261,6 +310,16 @@ def main():
     else:
         ig_model = model
         print("  Using model directly for Integrated Gradients")
+
+    # Detect covariate requirements from loaded model
+    ig_num_covariates = getattr(ig_model, 'num_covariates', 0)
+    if ig_num_covariates > 0:
+        print(f"  Model uses {ig_num_covariates} covariate(s) — covariates will be propagated through IG")
+    if dataset.num_covariates not in (0, ig_num_covariates):
+        raise ValueError(
+            "Covariate tensor width in the dataset does not match the loaded model "
+            f"({dataset.num_covariates} vs {ig_num_covariates})."
+        )
 
     # === INTEGRATED GRADIENTS (CHUNKED) ===
     if args.skip_ig:
@@ -379,8 +438,37 @@ def main():
                 gene_ids = chunk['gene_ids'].unsqueeze(0).to(args.device)
                 mask = chunk['mask'].unsqueeze(0).to(args.device)
 
+                # Build covariate tensor for this sample if the model needs it
+                chunk_covariates = None
+                if ig_num_covariates > 0:
+                    from src.models.chunked_sieve import build_sample_covariates
+                    sex_val = chunk.get('sex')
+                    sex_tensor = None
+                    if sex_val is not None:
+                        sex_tensor = torch.tensor(
+                            [float(sex_val)],
+                            dtype=torch.float32,
+                            device=torch.device(args.device),
+                        )
+                    chunk_covariates_tensor = None
+                    if 'covariates' in chunk:
+                        chunk_covariates_tensor = chunk['covariates'].unsqueeze(0).to(args.device)
+                    if sex_tensor is None and chunk_covariates_tensor is None:
+                        raise ValueError(
+                            f"Model has num_covariates={ig_num_covariates} but the "
+                            "chunk contains no covariate information."
+                        )
+                    chunk_covariates = build_sample_covariates(
+                        sex_tensor, ig_num_covariates, 1,
+                        torch.device(args.device),
+                        batch_covariates=chunk_covariates_tensor,
+                    )
+
                 # Compute attributions for this chunk
-                attr = explainer.attribute(features, positions, gene_ids, mask)
+                attr = explainer.attribute(
+                    features, positions, gene_ids, mask,
+                    covariates=chunk_covariates,
+                )
 
                 # Extract valid variants (non-padded) to CPU numpy immediately
                 valid_mask = mask[0].cpu().numpy()
@@ -528,10 +616,18 @@ def main():
         else:
             print("  ⚠️ WARNING: No chromosome column in variant rankings!")
 
-        # Rank genes
+        # Rank genes — primary (max) and two alternatives
         gene_rankings = ranker.rank_genes(
             variant_rankings=variant_rankings,
             aggregation='max'
+        )
+        gene_rankings_mean = ranker.rank_genes(
+            variant_rankings=variant_rankings,
+            aggregation='mean'
+        )
+        gene_rankings_size_norm = ranker.rank_genes(
+            variant_rankings=variant_rankings,
+            aggregation='size_normalised'
         )
 
         print(f"Ranked {len(gene_rankings)} genes")
@@ -559,6 +655,15 @@ def main():
             output_dir=str(output_dir),
             prefix='sieve'
         )
+
+        # Export alternative gene rankings
+        gene_rankings_mean.to_csv(output_dir / 'sieve_gene_rankings_mean.csv', index=False)
+        gene_rankings_size_norm.to_csv(
+            output_dir / 'sieve_gene_rankings_size_normalised.csv', index=False
+        )
+        print(f"Alternative gene rankings saved:")
+        print(f"  {output_dir / 'sieve_gene_rankings_mean.csv'}")
+        print(f"  {output_dir / 'sieve_gene_rankings_size_normalised.csv'}")
 
     # === ATTENTION ANALYSIS ===
     if not args.skip_attention:
