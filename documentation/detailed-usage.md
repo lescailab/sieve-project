@@ -112,19 +112,18 @@ bcftools query -f '%CHROM\t%POS\t%ALT\t%INFO/CSQ\n' variants_vep.vcf.gz | head -
 
 #### Phenotype File Format
 
-Tab-separated file with header:
+Tab-delimited, **no header**, two columns:
 ```
-sample_id	phenotype
 SAMPLE001	1
-SAMPLE002	0
+SAMPLE002	2
 SAMPLE003	1
-SAMPLE004	0
+SAMPLE004	2
 ```
 
 - Column 1: `sample_id` (must match VCF exactly)
-- Column 2: `phenotype` (0 = control, 1 = case)
+- Column 2: `phenotype` (**1 = control, 2 = case**)
 
-**Note**: Sample order doesn't matter, but names must match VCF.
+**Note**: Sample order doesn't matter, but names must match VCF. Do not include a header row.
 
 ---
 

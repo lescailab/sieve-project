@@ -52,7 +52,7 @@
 - VEP-annotated (CSQ field with SIFT, PolyPhen, Consequence, SYMBOL)
 - Reference genome build specified as GRCh37 or GRCh38 (`--genome-build`)
 - Contig labels with or without `chr` prefix are accepted (normalised internally)
-- Phenotype file (TSV: sample_id, phenotype)
+- Phenotype file (tab-delimited, no header: `sample_id<TAB>phenotype`, with 1=control and 2=case)
 
 **Command**:
 ```bash
@@ -92,7 +92,7 @@ python scripts/infer_sex.py \
 
 **Theory**: SIEVE uses position-aware sparse attention to learn relationships between variants. Training includes:
 - Classification loss: Binary cross-entropy on case/control prediction
-- Attribution regularisation (optional): Encourages model to rely on fewer variants
+- Embedding sparsity regularisation (optional): Encourages model to rely on fewer variants
 
 **Annotation Levels**:
 - **L0**: Genotype dosage only (0, 1, 2) - tests annotation-free discovery

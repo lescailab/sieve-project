@@ -130,7 +130,7 @@ During training, we compute a simplified attribution score (gradient × input) a
 
 #### Hyperparameter: λ_attr
 
-The attribution regularisation weight λ_attr controls the trade-off:
+The embedding sparsity regularisation weight λ_attr controls the trade-off:
 - λ_attr = 0: Standard training, no sparsity constraint
 - λ_attr small (0.01-0.1): Mild encouragement toward sparsity
 - λ_attr large (>0.5): Strong sparsity, may hurt classification performance

@@ -15,7 +15,7 @@ SIEVE addresses three scientific questions:
 
 2. **Do spatial relationships between variants carry disease signal?** Unlike permutation-invariant deep set approaches, SIEVE uses position-aware sparse attention to test whether the relative positions of an individual's variants (e.g., potential compound heterozygosity) are informative.
 
-3. **Can inherent interpretability improve discovery?** Rather than applying explainability post-hoc, SIEVE incorporates attribution sparsity into the training objective, encouraging the model to rely on a small set of variants and producing more stable, meaningful attributions.
+3. **Can inherent interpretability improve discovery?** Rather than applying explainability post-hoc, SIEVE incorporates embedding sparsity regularisation into the training objective, encouraging the model to rely on a small set of variants and producing more stable, meaningful attributions.
 
 ## Key Innovations
 
@@ -134,13 +134,17 @@ tabix -p vcf variants_vep.vcf.gz
 
 #### Phenotype file
 
-```bash
-# Example phenotype file format (TSV)
-sample_id    phenotype
-SAMPLE001    1
-SAMPLE002    0
-...
+Tab-delimited, **no header**, two columns: sample ID and phenotype code.
+Phenotype encoding follows the standard PLINK convention: **1 = control, 2 = case**.
+
 ```
+SAMPLE001	1
+SAMPLE002	2
+SAMPLE003	1
+```
+
+> **Note**: Do not include a header row. The parser interprets the first field
+> of every non-comment line as a sample ID. Lines beginning with `#` are ignored.
 
 ### 2. Preprocess VCF
 
@@ -364,7 +368,7 @@ sieve-project/
 │   ├── data/              # VCF parsing and dataset construction
 │   ├── encoding/          # Multi-level feature encoding
 │   ├── models/            # SIEVE architecture components
-│   ├── training/          # Training with attribution regularization
+│   ├── training/          # Training with embedding sparsity regularisation
 │   ├── explain/           # Explainability methods (IG, attention, epistasis)
 │   └── visualization/     # R scripts for figures
 ├── configs/               # Experiment configurations

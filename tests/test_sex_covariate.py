@@ -17,6 +17,7 @@ import torch
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.data.vcf_parser import SampleVariants, VariantRecord
+from src.data.covariates import attach_pc_covariates_to_samples
 from src.encoding.chunked_dataset import (
     ChunkedVariantDataset,
     collate_chunks,
@@ -141,6 +142,22 @@ class TestCollateChunksSex:
         batch = collate_chunks(items)
         expected = torch.tensor([1.0, 0.0, 1.0, -1.0])
         assert torch.equal(batch['sex'], expected)
+
+    def test_collated_batch_includes_combined_covariates_when_pcs_attached(self):
+        """When ancestry PCs are attached, batch['covariates'] includes sex first."""
+        samples = _make_samples()[:2]
+        pc_map = {
+            's1': torch.tensor([0.1, 0.2]).numpy(),
+            's2': torch.tensor([-0.4, 0.5]).numpy(),
+        }
+        attach_pc_covariates_to_samples(samples, pc_map=pc_map, include_sex=True)
+        ds = ChunkedVariantDataset(samples, AnnotationLevel.L0)
+        batch = collate_chunks([ds[0], ds[1]])
+        assert 'covariates' in batch
+        torch.testing.assert_close(
+            batch['covariates'],
+            torch.tensor([[1.0, 0.1, 0.2], [0.0, -0.4, 0.5]], dtype=torch.float32),
+        )
 
 
 # ---------------------------------------------------------------------------
