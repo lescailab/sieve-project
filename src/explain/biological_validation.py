@@ -178,6 +178,24 @@ class BiologicalValidator:
         clinvar_working['_chrom_norm'] = _strip_chr(clinvar_working['chrom'])
         top_working['_chrom_norm'] = _strip_chr(top_working['chromosome'])
 
+        # Deduplicate ClinVar on (chrom, pos) before merging to prevent row
+        # duplication when multiple ClinVar entries share the same coordinate.
+        # Keep the first entry; aggregate significance into a semicolon-delimited
+        # string so no information is silently discarded.
+        if clinvar_working.duplicated(subset=['_chrom_norm', 'pos']).any():
+            if 'clinical_significance' in clinvar_working.columns:
+                clinvar_working = (
+                    clinvar_working
+                    .groupby(['_chrom_norm', 'pos'], as_index=False)
+                    .agg({'clinical_significance': lambda x: '; '.join(x.dropna().unique()),
+                          **{c: 'first' for c in clinvar_working.columns
+                             if c not in ('_chrom_norm', 'pos', 'clinical_significance')}})
+                )
+            else:
+                clinvar_working = clinvar_working.drop_duplicates(
+                    subset=['_chrom_norm', 'pos'], keep='first'
+                )
+
         logger.info(
             "ClinVar matching: input_variants=%d clinvar_rows=%d",
             len(top_working), len(clinvar_working),

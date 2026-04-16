@@ -417,7 +417,9 @@ def train_single_fold(
         patience=5,
     )
 
-    # Create loss function
+    # Create loss function (move pos_weight to training device to avoid device mismatch)
+    if pos_weight is not None:
+        pos_weight = pos_weight.to(args.device)
     loss_fn = SIEVELoss(lambda_attr=args.lambda_attr, pos_weight=pos_weight)
 
     # Create trainer

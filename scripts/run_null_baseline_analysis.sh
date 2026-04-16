@@ -415,24 +415,19 @@ if [ -n "$CFG_CV_FOLDS" ]; then
         "${TRAIN_CMD[@]}"
     fi
 
-    # Select best null fold using the same priority as the real model
+    # Select best null fold by AUC from cv_results.yaml
     echo "  Selecting best null fold..."
-    NULL_BEST_FOLD_INFO=$("$PYTHON" "$REPO_ROOT/scripts/select_best_cv_fold.py" \
-        --experiment-dir "$NULL_EXPERIMENT" \
-        --print-fold-index 2>/dev/null || true)
-
-    if [ -z "$NULL_BEST_FOLD_INFO" ]; then
-        # Fallback: parse cv_results.yaml directly
-        NULL_BEST_FOLD=$("$PYTHON" -c "
+    if [ ! -f "${NULL_EXPERIMENT}/cv_results.yaml" ]; then
+        echo "ERROR: Expected null CV results file not found: ${NULL_EXPERIMENT}/cv_results.yaml"
+        exit 1
+    fi
+    NULL_BEST_FOLD=$("$PYTHON" -c "
 import yaml
 with open('${NULL_EXPERIMENT}/cv_results.yaml') as f:
     r = yaml.safe_load(f)
 best = max(range(len(r['fold_results'])), key=lambda i: r['fold_results'][i]['auc'])
 print(best)
 ")
-    else
-        NULL_BEST_FOLD="$NULL_BEST_FOLD_INFO"
-    fi
 
     NULL_MODEL_CHECKPOINT="${NULL_EXPERIMENT}/fold_${NULL_BEST_FOLD}/best_model.pt"
     NULL_EXPLAIN_INPUT_DIR="${NULL_EXPERIMENT}/fold_${NULL_BEST_FOLD}"

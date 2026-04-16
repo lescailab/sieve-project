@@ -200,11 +200,17 @@ class IntegratedGradientsExplainer:
                         f"Model has num_covariates={num_covariates} but the batch "
                         "contains no covariate tensor. Cannot build covariate vector."
                     )
+                # Move covariate tensors to the model device before building
+                target_device = torch.device(self.device)
+                if batch_sex is not None:
+                    batch_sex = batch_sex.to(target_device)
+                if batch_covariates is not None:
+                    batch_covariates = batch_covariates.to(target_device)
                 # Import here to avoid circular dependency at module level
                 from src.models.chunked_sieve import build_sample_covariates
                 batch_covariates_full = build_sample_covariates(
                     batch_sex, num_covariates, batch_size,
-                    torch.device(self.device),
+                    target_device,
                     batch_covariates=batch_covariates,
                 )
             elif (batch_sex is not None or batch_covariates is not None) and num_covariates == 0:
