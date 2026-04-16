@@ -253,7 +253,8 @@ def collate_chunks(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
             'original_sample_indices': torch.tensor([s['original_sample_idx'] for s in batch], dtype=torch.long),
         }
         if has_covariates:
-            cov_dim = batch[0]['covariates'].shape[0]
+            first_with_cov = next(s for s in batch if 'covariates' in s)
+            cov_dim = first_with_cov['covariates'].shape[0]
             collated['covariates'] = torch.zeros((batch_size, cov_dim), dtype=torch.float32)
         return collated
 
@@ -272,7 +273,8 @@ def collate_chunks(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
     original_sample_indices = torch.zeros(batch_size, dtype=torch.long)
     covariates = None
     if has_covariates:
-        cov_dim = batch[0]['covariates'].shape[0]
+        first_with_cov = next(s for s in batch if 'covariates' in s)
+        cov_dim = first_with_cov['covariates'].shape[0]
         covariates = torch.zeros((batch_size, cov_dim), dtype=torch.float32)
 
     # Fill in the data

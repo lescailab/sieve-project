@@ -223,6 +223,24 @@ def main():
         print(f"  Cases: {metadata.get('num_cases', 'unknown')}")
         print(f"  Controls: {metadata.get('num_controls', 'unknown')}")
 
+    # If the model was trained with sex covariates, apply the same sex map here
+    # so that covariates propagated through IG match the training configuration.
+    sex_map_path = config.get('sex_map')
+    if sex_map_path and Path(sex_map_path).exists():
+        import pandas as _pd
+        sex_df = _pd.read_csv(sex_map_path, sep='\t')
+        sex_map = dict(zip(sex_df['sample_id'], sex_df['inferred_sex']))
+        sex_map = {k: v for k, v in sex_map.items() if v in ('M', 'F')}
+        n_updated = 0
+        for sample in all_samples:
+            if sample.sample_id in sex_map:
+                sample.sex = sex_map[sample.sample_id]
+                n_updated += 1
+        print(f"  Applied sex map from config: {n_updated}/{len(all_samples)} samples updated")
+    elif sex_map_path:
+        print(f"  WARNING: Sex map path from config not found ({sex_map_path}); "
+              "sex covariates will use values embedded in preprocessed data (if any)")
+
     pc_map_path = args.pc_map or config.get('pc_map')
     num_pcs = args.num_pcs or config.get('num_pcs', 0)
     if pc_map_path is not None and num_pcs == 0:
@@ -234,7 +252,7 @@ def main():
         attach_pc_covariates_to_samples(
             all_samples,
             pc_map=pc_map,
-            include_sex=config.get('sex_map') is not None,
+            include_sex=sex_map_path is not None,
         )
         print(f"  Attached {num_pcs} PC covariate(s) from {pc_map_path}")
 
@@ -427,10 +445,14 @@ def main():
                     sex_val = chunk.get('sex')
                     sex_tensor = None
                     if sex_val is not None:
-                        sex_tensor = torch.tensor([float(sex_val)], dtype=torch.float32)
+                        sex_tensor = torch.tensor(
+                            [float(sex_val)],
+                            dtype=torch.float32,
+                            device=torch.device(args.device),
+                        )
                     chunk_covariates_tensor = None
                     if 'covariates' in chunk:
-                        chunk_covariates_tensor = chunk['covariates'].unsqueeze(0)
+                        chunk_covariates_tensor = chunk['covariates'].unsqueeze(0).to(args.device)
                     if sex_tensor is None and chunk_covariates_tensor is None:
                         raise ValueError(
                             f"Model has num_covariates={ig_num_covariates} but the "
