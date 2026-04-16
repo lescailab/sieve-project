@@ -306,7 +306,7 @@ class TestChunkedSIEVEModel:
             print(f"✓ Forward without chunking: {batch_size} predictions")
 
     def test_different_aggregation_methods(self, base_model, device):
-        """Test different aggregation methods: max works, attention raises NotImplementedError."""
+        """Test different aggregation methods: max works, disabled modes fail early."""
         # Test 'max' aggregation (should work)
         chunked_model_max = ChunkedSIEVEModel(base_model, aggregation_method='max')
         chunked_model_max.to(device)
@@ -339,23 +339,17 @@ class TestChunkedSIEVEModel:
 
         print(f"✓ Max aggregation works correctly")
 
-        # Test 'attention' aggregation (should raise NotImplementedError)
-        chunked_model_attention = ChunkedSIEVEModel(
-            base_model,
-            aggregation_method='attention',
-            embedding_dim=10  # Required for attention aggregation
-        )
-        chunked_model_attention.to(device)
+        with pytest.raises(NotImplementedError, match="Only 'mean' and 'max' are supported"):
+            ChunkedSIEVEModel(
+                base_model,
+                aggregation_method='attention',
+                embedding_dim=10
+            )
 
-        with pytest.raises(NotImplementedError, match="not yet implemented"):
-            chunked_model_attention.forward(
-                features=features,
-                positions=positions,
-                gene_ids=gene_ids,
-                mask=mask,
-                chunk_indices=chunk_indices,
-                total_chunks=total_chunks,
-                original_sample_indices=original_sample_indices
+        with pytest.raises(NotImplementedError, match="Only 'mean' and 'max' are supported"):
+            ChunkedSIEVEModel(
+                base_model,
+                aggregation_method='logit_mean'
             )
 
         print("✓ Unsupported aggregation methods correctly raise NotImplementedError")

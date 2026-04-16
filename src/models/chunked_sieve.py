@@ -19,6 +19,74 @@ import torch
 import torch.nn as nn
 
 
+def build_sample_covariates(
+    batch_sex: Optional[torch.Tensor],
+    num_covariates: int,
+    num_samples: int,
+    device: torch.device,
+    batch_covariates: Optional[torch.Tensor] = None,
+) -> Optional[torch.Tensor]:
+    """
+    Build a sample-level covariate tensor from batch sex values.
+
+    Sex occupies column 0.  Any remaining covariate columns (columns 1+)
+    are left as zero here; callers that support additional covariates (e.g.
+    ancestry PCs) should fill those columns after calling this helper.
+
+    Parameters
+    ----------
+    batch_sex : Optional[torch.Tensor]
+        Sex tensor, shape ``[num_samples]``, already on ``device``.
+        If ``None`` or ``num_covariates == 0``, returns ``None``.
+    num_covariates : int
+        Total number of covariates expected by the model.
+    num_samples : int
+        Number of samples in this batch.
+    device : torch.device
+        Target device for the output tensor.
+    batch_covariates : Optional[torch.Tensor]
+        Pre-built covariate tensor with shape ``[num_samples, num_covariates]``.
+        When supplied, it is validated and returned directly.
+
+    Returns
+    -------
+    Optional[torch.Tensor]
+        ``[num_samples, num_covariates]`` float tensor, or ``None``.
+    """
+    if num_covariates == 0:
+        if batch_covariates is not None:
+            raise ValueError("Received covariates but num_covariates=0.")
+        return None
+
+    if batch_covariates is not None:
+        batch_covariates = batch_covariates.to(device)
+        if batch_covariates.dim() != 2:
+            raise ValueError(
+                f"batch_covariates must be 2D, got shape {tuple(batch_covariates.shape)}"
+            )
+        if batch_covariates.shape[0] != num_samples:
+            raise ValueError(
+                "batch_covariates first dimension must match num_samples "
+                f"({batch_covariates.shape[0]} vs {num_samples})"
+            )
+        if batch_covariates.shape[1] != num_covariates:
+            raise ValueError(
+                "batch_covariates second dimension must match num_covariates "
+                f"({batch_covariates.shape[1]} vs {num_covariates})"
+            )
+        return batch_covariates
+
+    if batch_sex is None:
+        return None
+
+    sample_covariates = torch.zeros(
+        num_samples, num_covariates,
+        device=device, dtype=batch_sex.dtype,
+    )
+    sample_covariates[:, 0] = batch_sex
+    return sample_covariates
+
+
 class ChunkedSIEVEModel(nn.Module):
     """
     Wrapper around SIEVE model to handle chunked variant processing.
@@ -33,11 +101,10 @@ class ChunkedSIEVEModel(nn.Module):
         The base SIEVE model
     aggregation_method : str
         How to aggregate gene embeddings across chunks:
-        - 'mean' or 'logit_mean': Average gene embeddings (default)
+        - 'mean': Average gene embeddings (default)
         - 'max': Element-wise max of gene embeddings
-        - 'attention': Learned weighted average (not yet implemented)
     embedding_dim : Optional[int]
-        Dimension of embeddings (required for attention aggregation)
+        Unused; retained for API compatibility
 
     Key Methods
     -----------
@@ -63,14 +130,12 @@ class ChunkedSIEVEModel(nn.Module):
         self.base_model = base_model
         self.aggregation_method = aggregation_method
 
-        if aggregation_method == 'attention':
-            if embedding_dim is None:
-                raise ValueError("embedding_dim required for attention aggregation")
-            # Learned attention weights over chunks
-            self.attention = nn.Sequential(
-                nn.Linear(embedding_dim, 64),
-                nn.Tanh(),
-                nn.Linear(64, 1)
+        if aggregation_method in ('attention', 'logit_mean'):
+            raise NotImplementedError(
+                f"aggregation_method='{aggregation_method}' is not implemented. "
+                "Only 'mean' and 'max' are supported. "
+                "'logit_mean' was a provisional alias for 'mean' and has been removed. "
+                "'attention' (learned chunk-level attention) has not been implemented."
             )
 
     def forward(
@@ -163,7 +228,7 @@ class ChunkedSIEVEModel(nn.Module):
         latent_dim = chunk_gene_embeddings.shape[2]
 
         # Aggregate gene embeddings across chunks
-        if self.aggregation_method in ['mean', 'logit_mean']:
+        if self.aggregation_method == 'mean':
             # Average gene embeddings across chunks per sample
             # For each gene, average the embeddings from chunks containing that gene
 
@@ -229,14 +294,9 @@ class ChunkedSIEVEModel(nn.Module):
                 )
 
         elif self.aggregation_method == 'attention':
-            # Learned attention-weighted aggregation
-            if not hasattr(self, 'attention'):
-                raise ValueError("Attention aggregation requires embedding_dim parameter")
-
-            # Reshape for attention: [num_samples, max_chunks_per_sample, num_genes, latent_dim]
-            # This is complex - for now, fall back to mean
             raise NotImplementedError(
-                "Attention aggregation not yet implemented. Use 'mean' or 'max'."
+                "aggregation_method='attention' is not implemented. "
+                "Only 'mean' and 'max' are supported."
             )
         else:
             raise ValueError(f"Unknown aggregation method: {self.aggregation_method}")
@@ -321,6 +381,7 @@ class ChunkedSIEVEModel(nn.Module):
         total_chunks = batch.get('total_chunks')
         original_sample_indices = batch.get('original_sample_indices')
         batch_sex = batch.get('sex')
+        batch_covariates = batch.get('covariates')
 
         # Build sample-level covariates from sex if the base model uses them
         sample_covariates = None
@@ -347,26 +408,27 @@ class ChunkedSIEVEModel(nn.Module):
 
             # Aggregate sex to sample level (same value for all chunks of a sample)
             num_covariates = getattr(self.base_model, 'num_covariates', 0)
-            if batch_sex is not None and num_covariates > 0:
-                batch_sex = batch_sex.to(device)
-                sample_sex = batch_sex[first_chunk_indices]
-                # Build [num_samples, num_covariates] tensor, sex in column 0
-                num_samples = len(unique_samples)
-                sample_covariates = torch.zeros(
-                    num_samples, num_covariates,
-                    device=device, dtype=sample_sex.dtype,
+            if num_covariates > 0:
+                sample_sex = None
+                if batch_sex is not None:
+                    batch_sex = batch_sex.to(device)
+                    sample_sex = batch_sex[first_chunk_indices]
+                sample_batch_covariates = None
+                if batch_covariates is not None:
+                    sample_batch_covariates = batch_covariates.to(device)[first_chunk_indices]
+                sample_covariates = build_sample_covariates(
+                    sample_sex, num_covariates, len(unique_samples), device,
+                    batch_covariates=sample_batch_covariates,
                 )
-                sample_covariates[:, 0] = sample_sex
         else:
             sample_labels = labels
             num_covariates = getattr(self.base_model, 'num_covariates', 0)
-            if batch_sex is not None and num_covariates > 0:
-                batch_sex_dev = batch_sex.to(device)
-                sample_covariates = torch.zeros(
-                    batch_sex_dev.shape[0], num_covariates,
-                    device=device, dtype=batch_sex_dev.dtype,
+            if num_covariates > 0:
+                batch_sex_dev = batch_sex.to(device) if batch_sex is not None else None
+                sample_covariates = build_sample_covariates(
+                    batch_sex_dev, num_covariates, labels.shape[0], device,
+                    batch_covariates=batch_covariates,
                 )
-                sample_covariates[:, 0] = batch_sex_dev
 
         # Forward pass (aggregates chunks automatically)
         # Get intermediates for attribution regularization if needed

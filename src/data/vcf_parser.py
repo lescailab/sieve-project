@@ -384,18 +384,42 @@ def load_phenotypes(phenotype_file: Path) -> Dict[str, int]:
     >>> phenotypes['sample743']
     0  # control
     """
+    # Common column header names that indicate a file with a header row
+    _KNOWN_HEADER_NAMES = frozenset({
+        'id', 'sample', 'sample_id', 'sampleid', 'phenotype', 'status',
+        'label', 'iid', 'fid', '#iid',
+    })
+
     phenotypes = {}
 
+    first_data_line = True
     with open(phenotype_file, 'r') as f:
         for line_num, line in enumerate(f, 1):
             line = line.strip()
 
-            # Skip empty lines and comments
-            if not line or line.startswith('#'):
+            # Skip empty lines
+            if not line:
                 continue
 
-            # Parse tab-delimited
             parts = line.split('\t')
+
+            # Guard: detect accidental header rows on the first data line,
+            # including legacy files that start with '#IID'.
+            if first_data_line and parts and parts[0].lower() in _KNOWN_HEADER_NAMES:
+                raise ValueError(
+                    f"Phenotype file appears to have a header row (first field is "
+                    f"'{parts[0]}').  The expected format has NO header: each row "
+                    f"is '<sample_id>\\t<phenotype>' where phenotype is 1 (control) "
+                    f"or 2 (case).  Remove the header line and try again."
+                )
+
+            # Skip comment lines after header detection
+            if line.startswith('#'):
+                continue
+
+            first_data_line = False
+
+            # Parse tab-delimited
             if len(parts) < 2:
                 raise ValueError(
                     f"Invalid phenotype file format at line {line_num}: "
@@ -403,6 +427,7 @@ def load_phenotypes(phenotype_file: Path) -> Dict[str, int]:
                 )
 
             sample_id = parts[0]
+
             try:
                 pheno_value = int(parts[1])
             except ValueError:

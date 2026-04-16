@@ -344,7 +344,12 @@ class VariantRanker:
         variant_rankings : pd.DataFrame
             Output from rank_variants()
         aggregation : str
-            How to aggregate variants to genes: 'max', 'mean', 'sum'
+            How to aggregate variants to genes:
+            'max'             — gene score = max mean_attribution across variants.
+            'mean'            — gene score = mean of variant mean_attributions.
+            'sum'             — gene score = sum of mean_attributions.
+            'size_normalised' — gene score = max mean_attribution / sqrt(num_variants);
+                               reduces bias towards large genes.
 
         Returns
         -------
@@ -356,6 +361,7 @@ class VariantRanker:
             - top_variant_pos: position of top variant
             - top_variant_score: score of top variant
             - gene_rank: gene ranking
+            - gene_size: same as num_variants (explicit denominator for size_normalised)
         """
         if aggregation == 'max':
             gene_agg = variant_rankings.groupby('gene_id').agg({
@@ -381,8 +387,21 @@ class VariantRanker:
             }).rename(columns={'position': 'num_variants'})
             gene_agg['gene_score'] = gene_agg['mean_attribution']
 
+        elif aggregation == 'size_normalised':
+            gene_agg = variant_rankings.groupby('gene_id').agg(
+                mean_attribution=('mean_attribution', 'max'),
+                num_samples=('num_samples', 'sum'),
+                num_variants=('position', 'count'),
+            )
+            gene_agg['gene_score'] = (
+                gene_agg['mean_attribution']
+                / np.sqrt(gene_agg['num_variants'].clip(lower=1))
+            )
+
         else:
             raise ValueError(f"Unknown aggregation: {aggregation}")
+
+        gene_agg['gene_size'] = gene_agg['num_variants']
 
         # Get top variant per gene
         top_variants = variant_rankings.loc[
@@ -419,6 +438,23 @@ class VariantRanker:
 
         gene_rankings['gene_rank'] = rankdata(-gene_rankings['gene_score']).astype(int)
         gene_rankings = gene_rankings.sort_values('gene_rank').reset_index(drop=True)
+
+        desired_order = [
+            'chromosome',
+            'gene_name',
+            'gene_id',
+            'mean_attribution',
+            'num_samples',
+            'num_variants',
+            'gene_score',
+            'top_variant_pos',
+            'top_variant_score',
+            'gene_rank',
+            'gene_size',
+        ]
+        existing = [col for col in desired_order if col in gene_rankings.columns]
+        remaining = [col for col in gene_rankings.columns if col not in existing]
+        gene_rankings = gene_rankings[existing + remaining]
 
         return gene_rankings
 

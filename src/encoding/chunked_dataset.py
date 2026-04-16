@@ -19,6 +19,7 @@ from torch.utils.data import Dataset
 from src.data import SampleVariants
 from src.encoding.levels import AnnotationLevel
 from src.encoding.sparse_tensor import build_variant_tensor, build_gene_index
+from src.data.covariates import encode_sex_for_covariate
 
 
 def _encode_sex(sex: 'Optional[str]') -> float:
@@ -34,11 +35,7 @@ def _encode_sex(sex: 'Optional[str]') -> float:
     float
         0.0 for female, 1.0 for male, -1.0 for unknown/missing.
     """
-    if sex == 'M':
-        return 1.0
-    elif sex == 'F':
-        return 0.0
-    return -1.0
+    return encode_sex_for_covariate(sex)
 
 
 class ChunkedVariantDataset(Dataset):
@@ -107,6 +104,7 @@ class ChunkedVariantDataset(Dataset):
             self.gene_index = gene_index
 
         self.num_genes = len(self.gene_index)
+        covariate_lengths = set()
 
         # Build chunk metadata
         self.chunk_info = []
@@ -115,6 +113,15 @@ class ChunkedVariantDataset(Dataset):
 
             # Encode sex as float for covariate use
             sex_code = _encode_sex(sample.sex)
+            sample_covariates = getattr(sample, 'covariates', None)
+            if sample_covariates is not None:
+                sample_covariates = np.asarray(sample_covariates, dtype=np.float32)
+                if sample_covariates.ndim != 1:
+                    raise ValueError(
+                        f"Sample {sample.sample_id!r} covariates must be 1D; "
+                        f"got shape {sample_covariates.shape}"
+                    )
+                covariate_lengths.add(int(sample_covariates.shape[0]))
 
             if n_variants == 0:
                 # Empty sample - create one empty chunk
@@ -127,6 +134,7 @@ class ChunkedVariantDataset(Dataset):
                     'sample_id': sample.sample_id,
                     'label': sample.label,
                     'sex': sex_code,
+                    'covariates': sample_covariates,
                 })
             else:
                 # Calculate chunks with overlap
@@ -146,7 +154,14 @@ class ChunkedVariantDataset(Dataset):
                         'sample_id': sample.sample_id,
                         'label': sample.label,
                         'sex': sex_code,
+                        'covariates': sample_covariates,
                     })
+
+        if len(covariate_lengths) > 1:
+            raise ValueError(
+                f"Inconsistent covariate lengths across samples: {sorted(covariate_lengths)}"
+            )
+        self.num_covariates = next(iter(covariate_lengths), 0)
 
         print(f"ChunkedVariantDataset created:")
         print(f"  Samples: {len(samples)}")
@@ -187,6 +202,10 @@ class ChunkedVariantDataset(Dataset):
         chunk_tensor['total_chunks'] = info['total_chunks']
         chunk_tensor['original_sample_idx'] = info['sample_idx']
         chunk_tensor['sex'] = info['sex']
+        if info['covariates'] is not None:
+            chunk_tensor['covariates'] = torch.as_tensor(
+                info['covariates'], dtype=torch.float32
+            )
 
         return chunk_tensor
 
@@ -214,13 +233,14 @@ def collate_chunks(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
         Batched tensors with chunk metadata
     """
     batch_size = len(batch)
+    has_covariates = any('covariates' in sample for sample in batch)
 
     # Get max variants in this batch of chunks
     max_variants = max(sample['features'].shape[0] for sample in batch)
 
     if max_variants == 0:
         feature_dim = batch[0]['features'].shape[1] if len(batch[0]['features'].shape) > 1 else 0
-        return {
+        collated = {
             'features': torch.zeros((batch_size, 0, feature_dim), dtype=torch.float32),
             'positions': torch.zeros((batch_size, 0), dtype=torch.long),
             'gene_ids': torch.zeros((batch_size, 0), dtype=torch.long),
@@ -232,6 +252,10 @@ def collate_chunks(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
             'total_chunks': torch.tensor([s['total_chunks'] for s in batch], dtype=torch.long),
             'original_sample_indices': torch.tensor([s['original_sample_idx'] for s in batch], dtype=torch.long),
         }
+        if has_covariates:
+            cov_dim = batch[0]['covariates'].shape[0]
+            collated['covariates'] = torch.zeros((batch_size, cov_dim), dtype=torch.float32)
+        return collated
 
     feature_dim = batch[0]['features'].shape[1]
 
@@ -246,6 +270,10 @@ def collate_chunks(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
     chunk_indices = torch.zeros(batch_size, dtype=torch.long)
     total_chunks = torch.zeros(batch_size, dtype=torch.long)
     original_sample_indices = torch.zeros(batch_size, dtype=torch.long)
+    covariates = None
+    if has_covariates:
+        cov_dim = batch[0]['covariates'].shape[0]
+        covariates = torch.zeros((batch_size, cov_dim), dtype=torch.float32)
 
     # Fill in the data
     for i, sample in enumerate(batch):
@@ -263,8 +291,14 @@ def collate_chunks(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
         chunk_indices[i] = sample['chunk_idx']
         total_chunks[i] = sample['total_chunks']
         original_sample_indices[i] = sample['original_sample_idx']
+        if has_covariates:
+            if 'covariates' not in sample:
+                raise ValueError(
+                    "Mixed batches with and without covariates are not supported."
+                )
+            covariates[i] = sample['covariates']
 
-    return {
+    collated = {
         'features': features_padded,
         'positions': positions_padded,
         'gene_ids': gene_ids_padded,
@@ -276,3 +310,6 @@ def collate_chunks(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
         'total_chunks': total_chunks,
         'original_sample_indices': original_sample_indices,
     }
+    if covariates is not None:
+        collated['covariates'] = covariates
+    return collated
