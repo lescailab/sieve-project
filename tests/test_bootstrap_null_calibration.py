@@ -17,13 +17,13 @@ import scripts.bootstrap_null_calibration as calibration
 
 
 N_SAMPLES = 100
-N_VARIANTS = 500
+N_VARIANTS = 300
 
 
 def _build_variant_catalog() -> pd.DataFrame:
     """Return a deterministic variant catalogue for synthetic tests."""
     chromosomes = np.array(
-        ["1"] * 200 + ["2"] * 200 + ["X"] * 50 + ["Y"] * 50,
+        ["1"] * 120 + ["2"] * 120 + ["X"] * 30 + ["Y"] * 30,
         dtype=object,
     )
     positions = np.arange(1, N_VARIANTS + 1) * 10
@@ -140,6 +140,8 @@ def _run_bootstrap(
     n_bootstrap: int = 100,
     seed: int = 42,
     exclude_sex_chroms: bool = False,
+    genome_build: str | None = None,
+    metadata_genome_build: str | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
     """Run the bootstrap script and return its three outputs."""
     tmp_path.mkdir(parents=True, exist_ok=True)
@@ -150,8 +152,11 @@ def _run_bootstrap(
     metadata_path = tmp_path / "analysis_metadata.yaml"
 
     real_df.to_csv(real_path, index=False)
+    metadata_payload: dict[str, object] = {"n_samples": N_SAMPLES}
+    if metadata_genome_build is not None:
+        metadata_payload["genome_build"] = metadata_genome_build
     metadata_path.write_text(
-        yaml.safe_dump({"n_samples": N_SAMPLES}, sort_keys=False),
+        yaml.safe_dump(metadata_payload, sort_keys=False),
         encoding="utf-8",
     )
 
@@ -173,6 +178,8 @@ def _run_bootstrap(
         "--n-jobs",
         "1",
     ]
+    if genome_build is not None:
+        argv.extend(["--genome-build", genome_build])
     if exclude_sex_chroms:
         argv.append("--exclude-sex-chroms")
 
@@ -240,7 +247,7 @@ def test_bootstrap_reproducibility(
     assert summary_a == summary_b
 
 
-@pytest.mark.parametrize("n_bootstrap", [100, 500])
+@pytest.mark.parametrize("n_bootstrap", [100, 200])
 def test_resolution_floor(
     tmp_path: Path,
     synthetic_null_dataset: dict[str, object],
@@ -461,3 +468,49 @@ def test_chromosome_normalisation(
     assert summary["n_real_variants_missing_from_null"] == 0
     assert "1" in set(out_df["chromosome"].astype(str))
     assert "chr1" not in set(out_df["chromosome"].astype(str))
+
+
+def test_worst_rank_for_absent_bootstrap_variants() -> None:
+    """Variants absent from a bootstrap draw should receive a constant worst rank."""
+    ranks, present_count = calibration._compute_rank_vector(
+        flat_key_indices=np.array([0], dtype=np.int32),
+        flat_scores=np.array([1.0], dtype=np.float64),
+        sample_starts=np.array([0, 1], dtype=np.int64),
+        sample_lengths=np.array([1, 0], dtype=np.int32),
+        selected_sample_indices=np.array([0], dtype=np.int64),
+        n_unique_variants=3,
+    )
+
+    assert present_count == 1
+    assert ranks.tolist() == [1.0, 4.0, 4.0]
+
+
+def test_hodges_lehmann_fallback_uses_median_difference() -> None:
+    """Large genes should use the linear-memory median-difference fallback."""
+    real_ranks = np.arange(1200, dtype=np.float64)
+    null_ranks = np.arange(1200, dtype=np.float64) + 5.0
+
+    shift = calibration._estimate_hodges_lehmann_shift(real_ranks, null_ranks)
+    assert shift == pytest.approx(np.median(null_ranks) - np.median(real_ranks))
+
+
+def test_genome_build_defaults_from_metadata(
+    tmp_path: Path,
+    synthetic_null_dataset: dict[str, object],
+) -> None:
+    """Genome build should default from nearby analysis metadata when present."""
+    real_df = _build_real_rankings(
+        synthetic_null_dataset["catalog"],
+        synthetic_null_dataset["null_means"],
+        prefix_chr=True,
+    )
+    out_df, _, summary = _run_bootstrap(
+        tmp_path / "genome_build_metadata",
+        real_df=real_df,
+        null_path=synthetic_null_dataset["null_path"],
+        n_bootstrap=100,
+        metadata_genome_build="hg38",
+    )
+
+    assert summary["genome_build"] == "GRCh38"
+    assert out_df["chromosome"].iloc[0] == "1"

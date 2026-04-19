@@ -1515,7 +1515,8 @@ and KS diagnostics.
 | `--exclude-sex-chroms` | flag | `False` | Remove chrX/chrY from both the real and null inputs before ranking |
 | `--min-variants-per-gene` | int | `10` | Minimum number of variants required to test a gene |
 | `--n-jobs` | int | `-1` | Parallel workers for bootstrap replicates (`joblib`) |
-| `--memmap-dir` | path | None | Optional fast-disk directory for on-disk bootstrap rank storage |
+| `--memmap-dir` | path | None | Optional fast-disk directory for the memmap-backed bootstrap rank matrix |
+| `--genome-build` | str | nearby metadata or `GRCh37` | Genome build used for chromosome normalisation and sex-chromosome handling |
 | `--verbose` | flag | `False` | Enable DEBUG logging |
 
 **Example**:

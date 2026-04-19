@@ -48,7 +48,8 @@ DEFAULT_TOP_K = "50,100,200,500,1000"
 DEFAULT_BOOTSTRAP = 1000
 BOOTSTRAP_BATCH_SIZE = 100
 MEMMAP_THRESHOLD_BYTES = 4 * 1024**3
-_CHROM_BUILD = get_genome_build("GRCh37")
+DEFAULT_GENOME_BUILD = "GRCh37"
+MAX_EXACT_HL_PAIRWISE = 1_000_000
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -133,8 +134,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=Path,
         default=None,
         help=(
-            "Optional directory for on-disk bootstrap rank storage. Recommended "
-            "for large runs when n_variants x n_bootstrap would otherwise exceed RAM."
+            "Optional directory for the memmap-backed bootstrap rank matrix. "
+            "The rank matrix is always backed by a memmap file; this flag "
+            "controls where that file is created."
+        ),
+    )
+    parser.add_argument(
+        "--genome-build",
+        type=str,
+        default=None,
+        help=(
+            "Genome build for chromosome normalisation and sex-chromosome "
+            "detection. Defaults to nearby analysis metadata when available, "
+            f"otherwise {DEFAULT_GENOME_BUILD}."
         ),
     )
     parser.add_argument(
@@ -189,7 +201,10 @@ def _unwrap_object(value: Any) -> Any:
     return value
 
 
-def _normalise_real_rankings(real_df: pd.DataFrame) -> tuple[pd.DataFrame, bool]:
+def _normalise_real_rankings(
+    real_df: pd.DataFrame,
+    chrom_build: Any,
+) -> tuple[pd.DataFrame, bool]:
     """Validate and normalise the real rankings dataframe."""
     required = {"chromosome", "position", "gene_name", "mean_attribution"}
     missing = sorted(required - set(real_df.columns))
@@ -201,7 +216,7 @@ def _normalise_real_rankings(real_df: pd.DataFrame) -> tuple[pd.DataFrame, bool]
 
     real_df = real_df.copy()
     real_df["chromosome"] = real_df["chromosome"].astype(str).map(
-        lambda chrom: normalise_chrom(chrom, _CHROM_BUILD)
+        lambda chrom: normalise_chrom(chrom, chrom_build)
     )
     real_df["position"] = pd.to_numeric(real_df["position"], errors="raise").astype(int)
     real_df["mean_attribution"] = pd.to_numeric(
@@ -237,44 +252,72 @@ def _build_variant_keys(
 def _maybe_filter_real_df(
     real_df: pd.DataFrame,
     exclude_sex_chroms: bool,
+    chrom_build: Any,
 ) -> tuple[pd.DataFrame, int]:
     """Optionally remove sex chromosomes from the real dataframe."""
     if not exclude_sex_chroms:
         return real_df, 0
     mask = ~real_df["chromosome"].map(
-        lambda chrom: is_sex_chrom(str(chrom), _CHROM_BUILD)
+        lambda chrom: is_sex_chrom(str(chrom), chrom_build)
     )
     removed = int((~mask).sum())
     return real_df.loc[mask].copy(), removed
 
 
-def _load_real_sample_count(real_rankings_path: Path) -> int | None:
-    """Load n_samples from nearby analysis_metadata.yaml when available."""
-    candidate_dirs = [real_rankings_path.parent, real_rankings_path.parent.parent]
+def _load_nearby_analysis_metadata(reference_path: Path) -> dict[str, Any]:
+    """Load nearby analysis metadata when available."""
+    candidate_dirs = [reference_path.parent, reference_path.parent.parent]
     for candidate_dir in candidate_dirs:
         metadata_path = candidate_dir / "analysis_metadata.yaml"
         if not metadata_path.exists():
             continue
         with metadata_path.open("r", encoding="utf-8") as handle:
-            metadata = yaml.safe_load(handle) or {}
-        n_samples = metadata.get("n_samples")
-        if n_samples is None:
-            continue
+            return yaml.safe_load(handle) or {}
+    return {}
+
+
+def _load_real_sample_count(real_rankings_path: Path) -> int | None:
+    """Load n_samples from nearby analysis_metadata.yaml when available."""
+    metadata = _load_nearby_analysis_metadata(real_rankings_path)
+    n_samples = metadata.get("n_samples")
+    if n_samples is None:
+        return None
+    try:
+        return int(n_samples)
+    except (TypeError, ValueError):
+        LOGGER.warning(
+            "Ignoring non-integer n_samples=%r in nearby analysis metadata.",
+            n_samples,
+        )
+        return None
+
+
+def _resolve_genome_build_name(
+    requested_build: str | None,
+    real_rankings_path: Path,
+) -> str:
+    """Resolve the genome build from CLI or nearby analysis metadata."""
+    if requested_build:
+        return get_genome_build(requested_build).name
+
+    metadata = _load_nearby_analysis_metadata(real_rankings_path)
+    metadata_build = metadata.get("genome_build")
+    if metadata_build:
         try:
-            return int(n_samples)
-        except (TypeError, ValueError):
+            return get_genome_build(str(metadata_build)).name
+        except ValueError:
             LOGGER.warning(
-                "Ignoring non-integer n_samples=%r in %s",
-                n_samples,
-                metadata_path,
+                "Ignoring unsupported genome_build=%r in nearby analysis metadata.",
+                metadata_build,
             )
-    return None
+    return DEFAULT_GENOME_BUILD
 
 
 def _load_null_attributions(
     null_path: Path,
     use_gene_id: bool,
     exclude_sex_chroms: bool,
+    chrom_build: Any,
 ) -> dict[str, Any]:
     """Load null attributions.npz into a flat bootstrap substrate."""
     with np.load(null_path, allow_pickle=True) as data:
@@ -330,13 +373,13 @@ def _load_null_attributions(
 
         total_rows += len(sample_scores)
         norm_chromosomes = np.array(
-            [normalise_chrom(chrom, _CHROM_BUILD) for chrom in chromosomes],
+            [normalise_chrom(chrom, chrom_build) for chrom in chromosomes],
             dtype=object,
         )
         if exclude_sex_chroms:
             mask = np.array(
                 [
-                    not is_sex_chrom(str(chrom), _CHROM_BUILD)
+                    not is_sex_chrom(str(chrom), chrom_build)
                     for chrom in norm_chromosomes
                 ],
                 dtype=bool,
@@ -435,7 +478,7 @@ def _compute_rank_vector(
     counts = np.bincount(selected_keys, minlength=n_unique_variants)
     present = counts > 0
     present_count = int(present.sum())
-    ranks = np.full(n_unique_variants, float(present_count + 1), dtype=np.float32)
+    ranks = np.full(n_unique_variants, float(n_unique_variants + 1), dtype=np.float32)
     if present_count == 0:
         return ranks, 0
 
@@ -477,7 +520,7 @@ def _bootstrap_worker(
     """Run one bootstrap replicate and return small summary statistics."""
     rng = np.random.default_rng(seed)
     selected_sample_indices = rng.integers(0, n_samples, size=n_samples)
-    null_ranks, present_count = _compute_rank_vector(
+    null_ranks, _ = _compute_rank_vector(
         flat_key_indices=flat_key_indices,
         flat_scores=flat_scores,
         sample_starts=sample_starts,
@@ -486,7 +529,7 @@ def _bootstrap_worker(
         n_unique_variants=n_unique_variants,
     )
 
-    worst_rank = float(present_count + 1)
+    worst_rank = float(n_unique_variants + 1)
     real_ranks = np.full(n_real_variants, worst_rank, dtype=np.float32)
     present_in_null = real_to_null_index >= 0
     real_ranks[present_in_null] = null_ranks[real_to_null_index[present_in_null]]
@@ -529,7 +572,19 @@ def _estimate_hodges_lehmann_shift(
     real_ranks: np.ndarray,
     null_ranks: np.ndarray,
 ) -> float:
-    """Estimate the Hodges-Lehmann shift as median(null - real)."""
+    """Estimate the Hodges-Lehmann shift as median(null - real).
+
+    For small inputs, use the exact pairwise-difference estimator. For larger
+    inputs, fall back to a linear-memory approximation based on the difference
+    in medians to avoid materializing an O(n_real * n_null) matrix.
+    """
+    if real_ranks.size == 0 or null_ranks.size == 0:
+        return float("nan")
+
+    pair_count = int(real_ranks.size) * int(null_ranks.size)
+    if pair_count > MAX_EXACT_HL_PAIRWISE:
+        return float(np.median(null_ranks) - np.median(real_ranks))
+
     differences = null_ranks[:, None] - real_ranks[None, :]
     return float(np.median(differences))
 
@@ -685,13 +740,17 @@ def main(argv: list[str] | None = None) -> int:
     LOGGER.info("exclude_sex_chroms=%s", args.exclude_sex_chroms)
 
     overall_start = time.monotonic()
+    genome_build_name = _resolve_genome_build_name(args.genome_build, args.real_rankings)
+    chrom_build = get_genome_build(genome_build_name)
+    LOGGER.info("genome_build=%s", chrom_build.name)
 
     load_start = time.monotonic()
     real_df = pd.read_csv(args.real_rankings)
-    real_df, use_gene_id = _normalise_real_rankings(real_df)
+    real_df, use_gene_id = _normalise_real_rankings(real_df, chrom_build)
     real_df, n_real_sex_removed = _maybe_filter_real_df(
         real_df,
         args.exclude_sex_chroms,
+        chrom_build,
     )
     real_gene_ids = (
         real_df["gene_id"].astype(int).tolist() if use_gene_id else None
@@ -711,6 +770,7 @@ def main(argv: list[str] | None = None) -> int:
         args.null_attributions,
         use_gene_id=use_gene_id,
         exclude_sex_chroms=args.exclude_sex_chroms,
+        chrom_build=chrom_build,
     )
     LOGGER.info(
         "Loaded %d real variants and %d null samples (%d unique null variants).",
@@ -870,7 +930,7 @@ def main(argv: list[str] | None = None) -> int:
     real_df_out["at_resolution_floor"] = np.isclose(p_rank_boot, resolution_floor)
 
     selected_sample_indices = np.arange(null_payload["n_samples"], dtype=np.int64)
-    rank_null_full, full_present_count = _compute_rank_vector(
+    rank_null_full, _ = _compute_rank_vector(
         flat_key_indices=null_payload["flat_key_indices"],
         flat_scores=null_payload["flat_scores"],
         sample_starts=null_payload["sample_starts"],
@@ -905,7 +965,11 @@ def main(argv: list[str] | None = None) -> int:
             ks_p = 1.0
         else:
             real_pool = real_rank_extended[pool_ids]
-            null_pool = np.full(pool_ids.size, float(full_present_count + 1), dtype=np.float32)
+            null_pool = np.full(
+                pool_ids.size,
+                float(null_payload["n_unique_variants"] + 1),
+                dtype=np.float32,
+            )
             canonical_mask = pool_ids < null_payload["n_unique_variants"]
             if canonical_mask.any():
                 null_pool[canonical_mask] = rank_null_full[pool_ids[canonical_mask]]
@@ -944,6 +1008,7 @@ def main(argv: list[str] | None = None) -> int:
     valid_gene_p = gene_stats_df["wilcoxon_p"].notna()
     summary = {
         "n_bootstrap": int(args.n_bootstrap),
+        "genome_build": chrom_build.name,
         "n_real_variants": int(len(real_df_out)),
         "n_null_samples": int(null_payload["n_samples"]),
         "n_unique_null_variants": int(null_payload["n_unique_variants"]),

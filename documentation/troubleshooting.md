@@ -229,7 +229,7 @@ Check these first:
 The bootstrap stores one null-rank value per tested variant per replicate. On large runs, `n_variants x n_bootstrap` can exceed RAM.
 
 - Reduce `--n-bootstrap` from `1000` to `500` to halve storage.
-- Use `--memmap-dir /path/to/fast/disk` so the rank matrix is stored on disk instead of in memory.
+- Use `--memmap-dir /path/to/fast/disk` to place the memmap-backed rank matrix on fast local storage. This flag controls where the backing file is created; it does not switch the matrix between in-memory and on-disk modes.
 
 #### Bootstrap saturates only a few cores
 

@@ -252,6 +252,9 @@ def test_delta_rank_is_descending() -> None:
         ("corrected_rank", True),
         ("rank", True),
         ("empirical_p_rank", True),
+        ("p_rank_boot", True),
+        ("rank_real", True),
+        ("median_rank_null_boot", True),
     ],
 )
 def test_existing_rank_columns_still_ascending(
