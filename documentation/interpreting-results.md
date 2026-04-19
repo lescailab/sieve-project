@@ -109,7 +109,7 @@ The script adds:
 
 All existing columns — including `empirical_p_variant` and `fdr_variant` — are preserved unchanged. By default, the corrected rankings exclude sex chromosomes. Use `--include-sex-chroms` if you want to keep them in the output (they remain flagged).
 
-For ablation comparison, use the chrX-corrected files `corrected_variant_rankings.csv` from `corrected/` and rank variants with `--score-column empirical_p_variant`. Lower empirical p-values are treated as better ranks automatically, so the cross-level comparison operates on null-compared evidence while also having cross-chromosome-normalised z-scores available.
+For ablation comparison, use the chrX-corrected files `corrected_variant_rankings.csv` from `corrected/` and rank variants with `--score-column z_attribution` for the continuity view. If you have also run `bootstrap_null_calibration.py`, use the resulting rank-calibrated files with `--score-column delta_rank` for the bootstrap-informed view. `z_attribution` and `delta_rank` answer related but distinct questions: the former preserves the chrX-corrected ordering, while the latter measures promotion relative to the bootstrap-null ensemble.
 
 #### Gene Rankings
 
@@ -250,6 +250,8 @@ Variants ranked in the top-100 at one level but outside the top-500 at all other
 - **L0-specific variants**: Discovered from genotype patterns alone — potentially novel mechanisms invisible to annotation-based methods. Priority candidates for experimental follow-up.
 - **L3-specific variants**: Only discovered when SIFT/PolyPhen are provided — may reflect annotation-dependent signal (known pathogenicity) rather than novel discovery.
 - **L1-specific variants**: Position carries information not captured by genotype alone — may indicate positional clustering or regulatory elements.
+
+If you rank the same ablation inputs by `delta_rank`, interpret positive `delta_rank` as bootstrap-null-corrected promotion: the real model ranks that variant better than the null ensemble does. Comparing the `level_specific_variants.tsv` list from the `z_attribution` run against the `delta_rank` run shows which level-specific discoveries are robust across both views and which ones only appear under one ranking scheme.
 
 #### Multi-Panel Figure (`ablation_comparison.png`)
 

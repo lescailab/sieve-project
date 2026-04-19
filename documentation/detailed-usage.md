@@ -495,4 +495,46 @@ python scripts/plot_ablation_comparison.py \
 
 Using `--include-sex-chroms` retains chrX/chrY variants in the output (flagged via `is_sex_chrom`) but normalises their scores relative to other variants on the same chromosome. This removes systematic inflation while preserving genuinely important sex-chromosome variants.
 
+#### Rank-Based Null Calibration
+
+After the magnitude-based null comparison, `bootstrap_null_calibration.py` runs a complementary rank-based null calibration that generates an ensemble of `B = 1000` null rankings by bootstrap-resampling the null's per-sample attributions. This adds per-variant empirical p-values and BH-FDR with resolution `1 / (B + 1)`, a per-gene Wilcoxon rank-sum test, top-k overlap and KS diagnostics, and a `delta_rank` column where positive values mean the real model promotes that variant relative to the bootstrap-null ensemble.
+
+```bash
+python scripts/bootstrap_null_calibration.py \
+    --real-rankings results/<cohort>/real_experiments/L1/attributions/variant_rankings_with_significance.csv \
+    --null-attributions results/<cohort>/null_baselines/L1/attributions/attributions.npz \
+    --output results/<cohort>/real_experiments/L1/attributions/variant_rankings_rank_calibrated.csv \
+    --n-bootstrap 1000 \
+    --seed 42
+```
+
+#### Bootstrap-Calibrated Ablation Workflow
+
+The bootstrap-calibrated file carries both the chrX-corrected `z_attribution` view and the bootstrap-informed `delta_rank` view. Run `compare_ablation_rankings.py` twice:
+
+- `--score-column z_attribution`: preserves continuity with the existing chrX-corrected workflow and manuscript numbers
+- `--score-column delta_rank`: adds a scale-free view that incorporates the null contribution explicitly
+
+Concordance between the two Jaccard matrices strengthens the level-specific-discovery claim. Divergence is also informative: it tells you which discoveries depend mostly on the real-signal ordering versus the bootstrap-null contrast.
+
+```bash
+# View 1: chrX-corrected continuity
+python scripts/compare_ablation_rankings.py \
+    --ranking-dir results/ablation/rank_calibrated_rankings \
+    --score-column z_attribution \
+    --top-k 100,500,1000,2000 \
+    --out-comparison results/ablation/z_ablation_comparison.yaml \
+    --out-jaccard results/ablation/z_ablation_jaccard.tsv \
+    --out-level-specific results/ablation/z_level_specific_variants.tsv
+
+# View 2: bootstrap-informed
+python scripts/compare_ablation_rankings.py \
+    --ranking-dir results/ablation/rank_calibrated_rankings \
+    --score-column delta_rank \
+    --top-k 100,500,1000,2000 \
+    --out-comparison results/ablation/delta_ablation_comparison.yaml \
+    --out-jaccard results/ablation/delta_ablation_jaccard.tsv \
+    --out-level-specific results/ablation/delta_level_specific_variants.tsv
+```
+
 ---
