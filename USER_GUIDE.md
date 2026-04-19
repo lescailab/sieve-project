@@ -1137,6 +1137,43 @@ python scripts/plot_ablation_comparison.py \
 
 Using `--include-sex-chroms` retains chrX/chrY variants in the output (flagged via `is_sex_chrom`) but normalises their scores relative to other variants on the same chromosome. This removes systematic inflation while preserving genuinely important sex-chromosome variants.
 
+#### Bootstrap-Calibrated Ablation Comparison
+
+After the chrX-corrected workflow, `bootstrap_null_calibration.py` adds a complementary `delta_rank` column to each level-specific rankings file. The ablation script can then be run in two complementary modes:
+
+- `--score-column z_attribution`: the existing chrX-corrected continuity view, which preserves comparability with earlier numbers
+- `--score-column delta_rank`: the new bootstrap-informed view, where positive `delta_rank` means the real model promotes a variant relative to the bootstrap-null ensemble
+
+Concordance between the two Jaccard matrices strengthens the level-specific-discovery claim. Divergence is also interpretable and worth investigating, because it shows where the chrX-corrected ordering and the bootstrap-null contrast disagree.
+
+```bash
+# Generate rank-calibrated files for each level first
+python scripts/bootstrap_null_calibration.py \
+    --real-rankings results/<cohort>/real_experiments/L1/attributions/variant_rankings_with_significance.csv \
+    --null-attributions results/<cohort>/null_baselines/L1/attributions/attributions.npz \
+    --output results/<cohort>/real_experiments/L1/attributions/variant_rankings_rank_calibrated.csv \
+    --n-bootstrap 1000 \
+    --seed 42
+
+# View 1: chrX-corrected continuity
+python scripts/compare_ablation_rankings.py \
+    --ranking-dir results/ablation/rank_calibrated_rankings \
+    --score-column z_attribution \
+    --top-k 100,500,1000,2000 \
+    --out-comparison results/ablation/z_ablation_comparison.yaml \
+    --out-jaccard results/ablation/z_ablation_jaccard.tsv \
+    --out-level-specific results/ablation/z_level_specific_variants.tsv
+
+# View 2: bootstrap-informed
+python scripts/compare_ablation_rankings.py \
+    --ranking-dir results/ablation/rank_calibrated_rankings \
+    --score-column delta_rank \
+    --top-k 100,500,1000,2000 \
+    --out-comparison results/ablation/delta_ablation_comparison.yaml \
+    --out-jaccard results/ablation/delta_ablation_jaccard.tsv \
+    --out-level-specific results/ablation/delta_level_specific_variants.tsv
+```
+
 ---
 
 ## Command Reference
@@ -1454,6 +1491,46 @@ python scripts/compare_attributions.py \
 
 ---
 
+### bootstrap_null_calibration.py
+
+```bash
+python scripts/bootstrap_null_calibration.py [OPTIONS]
+```
+
+Generates a bootstrap ensemble of null rankings from `attributions.npz`, adds
+rank-based empirical p-values and BH-FDR to a real rankings CSV, emits
+gene-level Mann-Whitney statistics, and writes a YAML summary of top-k overlap
+and KS diagnostics.
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--real-rankings` | path | required | Real rankings CSV. Must contain `chromosome`, `position`, `gene_name`, and `mean_attribution` |
+| `--null-attributions` | path | required | Null `attributions.npz` produced by `scripts/explain.py` |
+| `--output` | path | required | Output CSV path for the rank-calibrated variant rankings |
+| `--output-gene-stats` | path | `<output>_gene_stats.csv` | Optional output CSV path for per-gene Wilcoxon statistics |
+| `--output-summary` | path | `<output>_summary.yaml` | Optional output YAML path for bootstrap overlap and KS summaries |
+| `--n-bootstrap` | int | `1000` | Number of bootstrap replicates |
+| `--seed` | int | `42` | Random seed for bootstrap sample draws |
+| `--top-k` | str | `50,100,200,500,1000` | Comma-separated top-k thresholds for overlap and KS summaries |
+| `--exclude-sex-chroms` | flag | `False` | Remove chrX/chrY from both the real and null inputs before ranking |
+| `--min-variants-per-gene` | int | `10` | Minimum number of variants required to test a gene |
+| `--n-jobs` | int | `-1` | Parallel workers for bootstrap replicates (`joblib`) |
+| `--memmap-dir` | path | None | Optional fast-disk directory for the memmap-backed bootstrap rank matrix |
+| `--genome-build` | str | nearby metadata or `GRCh37` | Genome build used for chromosome normalisation and sex-chromosome handling |
+| `--verbose` | flag | `False` | Enable DEBUG logging |
+
+**Example**:
+```bash
+python scripts/bootstrap_null_calibration.py \
+    --real-rankings results/<cohort>/real_experiments/L1/attributions/variant_rankings_with_significance.csv \
+    --null-attributions results/<cohort>/null_baselines/L1/attributions/attributions.npz \
+    --output results/<cohort>/real_experiments/L1/attributions/variant_rankings_rank_calibrated.csv \
+    --n-bootstrap 1000 \
+    --seed 42
+```
+
+---
+
 ### correct_chrx_bias.py
 
 ```bash
@@ -1503,7 +1580,7 @@ Compares variant attribution rankings across annotation levels. Computes pairwis
 | `--out-comparison` | path | `ablation_ranking_comparison.yaml` | Output YAML summary |
 | `--out-jaccard` | path | `ablation_jaccard_matrix.tsv` | Output Jaccard matrix TSV |
 | `--out-level-specific` | path | `level_specific_variants.tsv` | Output level-specific variants TSV |
-| `--score-column` | str | `z_attribution` | Column to rank variants by. The default is the per-chromosome z-normalised attribution from `correct_chrx_bias.py`; p/FDR-like columns are ranked ascending automatically. See KNOWN_LIMITATIONS.md for why `empirical_p_variant` is not the default. |
+| `--score-column` | str | `z_attribution` | Column to rank variants by. Recommended choices are `z_attribution` for the chrX-corrected continuity view and `delta_rank` for the bootstrap-informed null-calibrated view. P/FDR-like columns and true rank columns are ranked ascending automatically; `delta_rank` is ranked descending. |
 
 **Example**:
 ```bash
@@ -2187,6 +2264,19 @@ If using `--experiment-dir`, check that `best_model.pt` or `fold_*/best_model.pt
 4. **Wrong parameters**: Ensure null trained with exact same params as real
 
 **Solution**: Review real model performance first, then consider increasing sample size.
+
+#### Rank-based null calibration
+
+After the magnitude-based null comparison, `bootstrap_null_calibration.py` runs a complementary rank-based null calibration that generates an ensemble of `B = 1000` null rankings by bootstrap-resampling the null's per-sample attributions. This provides per-variant empirical p-values and BH-FDR with resolution `1 / (B + 1) ≈ 10^-3`, a per-gene Wilcoxon rank-sum test, and a global Kolmogorov-Smirnov statistic at top-k for `k ∈ {50, 100, 200, 500, 1000}`. The output also carries a `delta_rank` column (positive = variant promoted by real signal relative to the bootstrap-null ensemble), which is used as a complementary ranking view in the ablation analysis. Both the magnitude-based and rank-based tests are complementary; concordant variants across both tests form the highest-confidence shortlist.
+
+```bash
+python scripts/bootstrap_null_calibration.py \
+    --real-rankings results/<cohort>/real_experiments/L1/attributions/variant_rankings_with_significance.csv \
+    --null-attributions results/<cohort>/null_baselines/L1/attributions/attributions.npz \
+    --output results/<cohort>/real_experiments/L1/attributions/variant_rankings_rank_calibrated.csv \
+    --n-bootstrap 1000 \
+    --seed 42
+```
 
 ---
 

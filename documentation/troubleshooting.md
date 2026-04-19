@@ -216,6 +216,25 @@ If using `--experiment-dir`, check that `best_model.pt` or `fold_*/best_model.pt
 
 **Solution**: Review real model performance first, then consider increasing sample size.
 
+#### Bootstrap null calibration runs but produces no significant variants
+
+Check these first:
+
+1. The real model AUC. If it is below about `0.55`, there may be little signal to detect.
+2. The `at_resolution_floor` flag in the rank-calibrated output. If zero variants hit the floor, the real ranking is not separating clearly from the null bootstrap ensemble.
+3. The summary YAML `top_k_analysis` entries. Low KS statistics at `k = 100` usually mean the real and null rank distributions still overlap heavily near the top of the ranking.
+
+#### Bootstrap runs out of memory
+
+The bootstrap stores one null-rank value per tested variant per replicate. On large runs, `n_variants x n_bootstrap` can exceed RAM.
+
+- Reduce `--n-bootstrap` from `1000` to `500` to halve storage.
+- Use `--memmap-dir /path/to/fast/disk` to place the memmap-backed rank matrix on fast local storage. This flag controls where the backing file is created; it does not switch the matrix between in-memory and on-disk modes.
+
+#### Bootstrap saturates only a few cores
+
+If the wall-clock time scales poorly with `--n-jobs`, confirm the script is capping BLAS threads at startup (`OMP_NUM_THREADS`, `OPENBLAS_NUM_THREADS`, `MKL_NUM_THREADS`, `BLIS_NUM_THREADS` all set to `1`). Without those caps, BLAS threads compete with `joblib` workers and reduce parallel efficiency.
+
 ---
 
 ### Interpretation Issues
@@ -250,6 +269,14 @@ If using `--experiment-dir`, check that `best_model.pt` or `fold_*/best_model.pt
        --score-column empirical_p_variant \
        --out-comparison significance_ablation_ranking_comparison.yaml
    ```
+
+#### Ablation comparison with `--score-column delta_rank` gives Jaccard values of `1.0` across all level pairs
+
+This usually means `delta_rank` is being sorted in the wrong direction, so the comparison is selecting the most demoted variants rather than the most promoted ones. Confirm you are on a version where `_score_column_is_ascending("delta_rank")` returns `False`, then rerun:
+
+```bash
+pytest tests/test_compare_ablation_rankings.py -v
+```
 
 #### Very low attributions overall
 

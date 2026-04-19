@@ -418,9 +418,10 @@ if __name__ == '__main__':
 
 def test_validate_epistasis_empty_file():
     """Test validate_epistasis.py handles empty interaction files."""
-    import subprocess
-    import tempfile
     import os
+    import subprocess
+    import sys
+    import tempfile
     from pathlib import Path
 
     # Create temporary empty interactions file
@@ -436,7 +437,7 @@ def test_validate_epistasis_empty_file():
 
         # Run validate_epistasis.py script
         result = subprocess.run(
-            ['python', 'scripts/validate_epistasis.py',
+            [sys.executable, 'scripts/validate_epistasis.py',
              '--interactions', empty_file,
              '--checkpoint', 'test_data/small/test_model/L3_run/fold_0/best_model.pt',
              '--config', 'test_data/small/test_model/L3_run/config.yaml',
@@ -461,9 +462,10 @@ def test_validate_epistasis_empty_file():
 
 def test_validate_epistasis_no_data():
     """Test validate_epistasis.py handles CSV with headers but no data."""
-    import subprocess
-    import tempfile
     import os
+    import subprocess
+    import sys
+    import tempfile
     from pathlib import Path
 
     # Create CSV with headers but no data
@@ -478,7 +480,7 @@ def test_validate_epistasis_no_data():
         env['PYTHONPATH'] = str(project_root)
 
         result = subprocess.run(
-            ['python', 'scripts/validate_epistasis.py',
+            [sys.executable, 'scripts/validate_epistasis.py',
              '--interactions', header_only_file,
              '--checkpoint', 'test_data/small/test_model/L3_run/fold_0/best_model.pt',
              '--config', 'test_data/small/test_model/L3_run/config.yaml',

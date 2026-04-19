@@ -100,6 +100,14 @@ GENE_COLUMNS = ["gene_name", "gene", "gene_symbol"]
 GENE_ID_COLUMNS = ["gene_id"]
 CHROM_COLUMNS = ["chromosome", "chrom", "chr"]
 POS_COLUMNS = ["position", "pos", "start"]
+_DESCENDING_RANK_COLUMNS = frozenset({"delta_rank"})
+_ASCENDING_SCORE_COLUMNS = frozenset(
+    {
+        "p_rank_boot",
+        "rank_real",
+        "median_rank_null_boot",
+    }
+)
 
 
 def _find_column(headers: List[str], candidates: List[str]) -> Optional[str]:
@@ -177,6 +185,10 @@ def _resolve_score_column(
 def _score_column_is_ascending(score_column: str) -> bool:
     """Return True when lower values indicate stronger ranking."""
     lowered = score_column.lower()
+    if lowered in _DESCENDING_RANK_COLUMNS:
+        return False
+    if lowered in _ASCENDING_SCORE_COLUMNS:
+        return True
     return (
         lowered.startswith("empirical_p")
         or lowered.startswith("fdr")
