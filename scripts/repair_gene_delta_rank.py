@@ -206,9 +206,6 @@ def main(argv: list[str] | None = None) -> int:
     n_matched = len(stats_genes & variant_genes)
     n_missing = len(missing_genes)
 
-    for gene in sorted(missing_genes):
-        print(f"  WARNING: gene '{gene}' in gene-stats has no variants in variant-rankings; delta_rank will be NaN.")
-
     if n_missing > 0 and (n_missing / n_stats) > MISSING_FRACTION_LIMIT:
         print(
             f"ERROR: {n_missing}/{n_stats} ({100.0 * n_missing / n_stats:.1f}%) of "
@@ -218,6 +215,12 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         sys.exit(1)
+
+    _MAX_MISSING_WARNINGS = 20
+    for gene in sorted(missing_genes)[:_MAX_MISSING_WARNINGS]:
+        print(f"  WARNING: gene '{gene}' in gene-stats has no variants in variant-rankings; delta_rank will be NaN.")
+    if n_missing > _MAX_MISSING_WARNINGS:
+        print(f"  WARNING: ... and {n_missing - _MAX_MISSING_WARNINGS} more missing genes (suppressed).")
 
     _integrity_check(gene_to_delta, variant_df, gene_col_variant, args.aggregation)
 
@@ -257,9 +260,8 @@ def main(argv: list[str] | None = None) -> int:
     summary_max = float(finite_vals.max()) if len(finite_vals) else float("nan")
     fraction_positive = float((finite_vals > 0).mean()) if len(finite_vals) else float("nan")
 
-    log_path = args.output.with_suffix("").with_name(
-        args.output.stem + ".repair_log.txt"
-    )
+    output_prefix = args.output.with_suffix("") if args.output.suffix else args.output
+    log_path = output_prefix.with_name(output_prefix.stem + ".repair_log.txt")
     sha_variant = _sha256(args.variant_rankings)
     sha_gene_stats = _sha256(args.gene_stats)
     log_lines = [

@@ -641,8 +641,13 @@ def _compute_gene_statistics(
             agg_delta = float("nan")
         elif delta_rank_aggregation == "max":
             agg_delta = float(np.max(gene_delta_vals))
-        else:
+        elif delta_rank_aggregation == "mean":
             agg_delta = float(np.mean(gene_delta_vals))
+        else:
+            raise ValueError(
+                "Unsupported delta_rank_aggregation: "
+                f"{delta_rank_aggregation!r}. Expected one of: 'max', 'mean'."
+            )
 
         record: dict[str, Any] = {
             "gene_name": gene_name,
