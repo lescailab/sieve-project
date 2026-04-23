@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import sys
 from pathlib import Path
 
@@ -514,3 +515,126 @@ def test_genome_build_defaults_from_metadata(
 
     assert summary["genome_build"] == "GRCh38"
     assert out_df["chromosome"].iloc[0] == "1"
+
+
+# ---------------------------------------------------------------------------
+# gene_delta_rank tests
+# ---------------------------------------------------------------------------
+
+
+def _make_minimal_real_df(delta_rank_values: list[float], gene_names: list[str]) -> pd.DataFrame:
+    """Construct the minimal real_df required by _compute_gene_statistics."""
+    n = len(delta_rank_values)
+    return pd.DataFrame(
+        {
+            "chromosome": ["1"] * n,
+            "position": list(range(1, n + 1)),
+            "gene_name": gene_names,
+            "mean_attribution": [float(i) for i in range(n, 0, -1)],
+            "delta_rank": delta_rank_values,
+        }
+    )
+
+
+def _call_compute_gene_statistics(
+    real_df: pd.DataFrame,
+    aggregation: str,
+    min_variants: int = 1,
+) -> pd.DataFrame:
+    """Call _compute_gene_statistics with dummy rank arrays."""
+    n = len(real_df)
+    rank_real = np.arange(1, n + 1, dtype=float)
+    rank_null_full = np.arange(1, n + 1, dtype=float)
+    real_to_null_index = np.arange(n, dtype=np.int64)
+    return calibration._compute_gene_statistics(
+        real_df=real_df,
+        rank_real=rank_real,
+        rank_null_full=rank_null_full,
+        real_to_null_index=real_to_null_index,
+        min_variants_per_gene=min_variants,
+        delta_rank_aggregation=aggregation,
+    )
+
+
+def test_gene_delta_rank_max_matches_manual_aggregation() -> None:
+    """gene_delta_rank with aggregation='max' must equal manual per-gene max."""
+    delta_values = [5.0, 3.0, 4.0, 2.0, 1.0, 6.0, 3.0, 4.0, 2.0]
+    gene_names = ["A", "A", "B", "B", "B", "C", "C", "C", "C"]
+    real_df = _make_minimal_real_df(delta_values, gene_names)
+    gene_df = _call_compute_gene_statistics(real_df, aggregation="max")
+
+    gene_df = gene_df.set_index("gene_name")
+    assert math.isclose(gene_df.loc["A", "gene_delta_rank"], 5.0)
+    assert math.isclose(gene_df.loc["B", "gene_delta_rank"], 4.0)
+    assert math.isclose(gene_df.loc["C", "gene_delta_rank"], 6.0)
+
+
+def test_gene_delta_rank_mean_matches_manual_aggregation() -> None:
+    """gene_delta_rank with aggregation='mean' must equal manual per-gene mean."""
+    delta_values = [5.0, 3.0, 4.0, 2.0, 1.0, 6.0, 3.0, 4.0, 2.0]
+    gene_names = ["A", "A", "B", "B", "B", "C", "C", "C", "C"]
+    real_df = _make_minimal_real_df(delta_values, gene_names)
+    gene_df = _call_compute_gene_statistics(real_df, aggregation="mean")
+
+    gene_df = gene_df.set_index("gene_name")
+    assert math.isclose(gene_df.loc["A", "gene_delta_rank"], 4.0)
+    assert math.isclose(gene_df.loc["B", "gene_delta_rank"], 7.0 / 3.0)
+    assert math.isclose(gene_df.loc["C", "gene_delta_rank"], 15.0 / 4.0)
+
+
+def test_gene_delta_rank_aggregation_column_is_constant() -> None:
+    """gene_delta_rank_aggregation must be the same constant string on every row."""
+    delta_values = [1.0, 2.0, 3.0, 4.0]
+    gene_names = ["A", "A", "B", "B"]
+    real_df = _make_minimal_real_df(delta_values, gene_names)
+
+    for agg in ("max", "mean"):
+        gene_df = _call_compute_gene_statistics(real_df, aggregation=agg)
+        assert (gene_df["gene_delta_rank_aggregation"] == agg).all(), (
+            f"Expected all rows to have aggregation='{agg}'"
+        )
+
+
+def test_gene_delta_rank_respects_underpowered_variants(
+    tmp_path: Path,
+    synthetic_null_dataset: dict[str, object],
+) -> None:
+    """Underpowered genes must still receive a gene_delta_rank value."""
+    real_df = _build_real_rankings(
+        synthetic_null_dataset["catalog"],
+        synthetic_null_dataset["null_means"],
+        boost_indices=list(range(20)),
+    )
+    _, gene_df, _ = _run_bootstrap(
+        tmp_path / "gene_delta_rank_underpowered",
+        real_df=real_df,
+        null_path=synthetic_null_dataset["null_path"],
+        n_bootstrap=100,
+    )
+
+    underpowered_rows = gene_df[gene_df["underpowered"]]
+    assert len(underpowered_rows) > 0, "Expected at least one underpowered gene in fixture"
+    assert not underpowered_rows["gene_delta_rank"].isna().any(), (
+        "Underpowered genes must have a gene_delta_rank value, not NaN"
+    )
+
+
+def test_cli_default_is_max() -> None:
+    """parse_args with no --gene-delta-rank-aggregation must default to 'max'."""
+    args = calibration.parse_args([
+        "--real-rankings", "r.csv",
+        "--null-attributions", "n.npz",
+        "--output", "o.csv",
+    ])
+    assert args.gene_delta_rank_aggregation == "max"
+
+
+def test_cli_rejects_invalid_aggregation() -> None:
+    """parse_args must reject --gene-delta-rank-aggregation sum with SystemExit."""
+    with pytest.raises(SystemExit):
+        calibration.parse_args([
+            "--real-rankings", "r.csv",
+            "--null-attributions", "n.npz",
+            "--output", "o.csv",
+            "--gene-delta-rank-aggregation", "sum",
+        ])

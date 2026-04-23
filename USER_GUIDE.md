@@ -1144,6 +1144,8 @@ After the chrX-corrected workflow, `bootstrap_null_calibration.py` adds a comple
 - `--score-column z_attribution`: the existing chrX-corrected continuity view, which preserves comparability with earlier numbers
 - `--score-column delta_rank`: the new bootstrap-informed view, where positive `delta_rank` means the real model promotes a variant relative to the bootstrap-null ensemble
 
+The gene-stats CSV also carries a `gene_delta_rank` column computed as `max(delta_rank)` per gene by default, mirroring the `gene_z_score = max(z_attribution)` convention; this is configurable via `--gene-delta-rank-aggregation mean` when running `bootstrap_null_calibration.py`.
+
 Concordance between the two Jaccard matrices strengthens the level-specific-discovery claim. Divergence is also interpretable and worth investigating, because it shows where the chrX-corrected ordering and the bootstrap-null contrast disagree.
 
 ```bash

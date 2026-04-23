@@ -124,6 +124,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Minimum number of variants required to test a gene.",
     )
     parser.add_argument(
+        "--gene-delta-rank-aggregation",
+        type=str,
+        choices=("max", "mean"),
+        default="max",
+        help=(
+            "How to aggregate variant-level delta_rank values to the gene level. "
+            "'max' (default) mirrors the gene_z_score=max(z_attribution) convention "
+            "used by the chrX-corrected workflow. 'mean' is the alternative mirroring "
+            "mean_z_score=mean(z_attribution). Higher gene_delta_rank values indicate "
+            "stronger promotion of the gene's variants by the real model relative to "
+            "the bootstrap null."
+        ),
+    )
+    parser.add_argument(
         "--n-jobs",
         type=int,
         default=-1,
@@ -604,6 +618,8 @@ def _compute_gene_statistics(
     rank_null_full: np.ndarray,
     real_to_null_index: np.ndarray,
     min_variants_per_gene: int,
+    *,
+    delta_rank_aggregation: str,
 ) -> pd.DataFrame:
     """Compute per-gene Mann-Whitney tests on real versus null ranks."""
     gene_column = _gene_key_column(real_df)
@@ -620,6 +636,19 @@ def _compute_gene_statistics(
             or len(gene_null_ranks) < min_variants_per_gene
         )
 
+        gene_delta_vals = real_df.loc[row_indices, "delta_rank"].to_numpy(dtype=float)
+        if len(gene_delta_vals) == 0:
+            agg_delta = float("nan")
+        elif delta_rank_aggregation == "max":
+            agg_delta = float(np.max(gene_delta_vals))
+        elif delta_rank_aggregation == "mean":
+            agg_delta = float(np.mean(gene_delta_vals))
+        else:
+            raise ValueError(
+                "Unsupported delta_rank_aggregation: "
+                f"{delta_rank_aggregation!r}. Expected one of: 'max', 'mean'."
+            )
+
         record: dict[str, Any] = {
             "gene_name": gene_name,
             "n_variants_real": int(len(gene_real_ranks)),
@@ -634,6 +663,8 @@ def _compute_gene_statistics(
             "wilcoxon_p": np.nan,
             "effect_size_hodges_lehmann": np.nan,
             "underpowered": bool(underpowered),
+            "gene_delta_rank": agg_delta,
+            "gene_delta_rank_aggregation": delta_rank_aggregation,
         }
 
         if not underpowered:
@@ -944,6 +975,7 @@ def main(argv: list[str] | None = None) -> int:
         rank_null_full=rank_null_full,
         real_to_null_index=real_to_null_index,
         min_variants_per_gene=args.min_variants_per_gene,
+        delta_rank_aggregation=args.gene_delta_rank_aggregation,
     )
 
     top_k_analysis: dict[str, Any] = {}
@@ -1032,6 +1064,10 @@ def main(argv: list[str] | None = None) -> int:
             ),
             "n_fdr_gene_wilcoxon_001": int(
                 (gene_stats_df["fdr_gene_wilcoxon"] < 0.01).fillna(False).sum()
+            ),
+            "gene_delta_rank_aggregation": args.gene_delta_rank_aggregation,
+            "gene_delta_rank_median": float(
+                gene_stats_df["gene_delta_rank"].median(skipna=True)
             ),
         },
     }

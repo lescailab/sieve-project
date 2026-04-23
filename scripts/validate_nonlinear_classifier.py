@@ -268,6 +268,8 @@ def resolve_score_column(df: pd.DataFrame, requested_score_column: str) -> str:
     aliases = [requested_score_column]
     if requested_score_column == "z_attribution":
         aliases = ["gene_z_score", "z_attribution", "mean_z_score", "gene_score"]
+    elif requested_score_column == "delta_rank":
+        aliases = ["gene_delta_rank", "delta_rank"]
 
     for candidate in aliases:
         if candidate in df.columns:
