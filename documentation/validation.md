@@ -133,6 +133,8 @@ Use `--score-column z_attribution` for the default corrected-score workflow. The
 
 Use `--score-column fdr_gene` when you want to rank genes by their gene-level null-contrast significance instead of corrected effect size. Lower values are treated as better for FDR-based ranking.
 
+Use `--score-column delta_rank` for a bootstrap-informed robustness check. This maps onto the `gene_delta_rank` column in the gene-stats CSV produced by `bootstrap_null_calibration.py`, where each gene's score is `max(delta_rank)` across its variants by default (mirroring `gene_z_score = max(z_attribution)`). Higher values indicate stronger promotion of the gene's variants by the real model relative to the bootstrap-null ensemble. Run the validation twice with separate `--output-tsv` paths — one for `z_attribution` and one for `delta_rank` — and apply BH-FDR independently within each invocation across the full result grid. Pooling the two runs would halve statistical power and prevent a clean determination of whether the robustness finding holds independently.
+
 ### FDR-Threshold Gene Selection
 
 Instead of choosing a fixed number of top genes, you can let the gene set size be determined by an FDR cutoff:

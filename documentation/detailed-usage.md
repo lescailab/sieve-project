@@ -497,7 +497,7 @@ Using `--include-sex-chroms` retains chrX/chrY variants in the output (flagged v
 
 #### Rank-Based Null Calibration
 
-After the magnitude-based null comparison, `bootstrap_null_calibration.py` runs a complementary rank-based null calibration that generates an ensemble of `B = 1000` null rankings by bootstrap-resampling the null's per-sample attributions. This adds per-variant empirical p-values and BH-FDR with resolution `1 / (B + 1)`, a per-gene Wilcoxon rank-sum test, top-k overlap and KS diagnostics, and a `delta_rank` column where positive values mean the real model promotes that variant relative to the bootstrap-null ensemble.
+After the magnitude-based null comparison, `bootstrap_null_calibration.py` runs a complementary rank-based null calibration that generates an ensemble of `B = 1000` null rankings by bootstrap-resampling the null's per-sample attributions. This adds per-variant empirical p-values and BH-FDR with resolution `1 / (B + 1)`, a per-gene Wilcoxon rank-sum test, top-k overlap and KS diagnostics, and a `delta_rank` column where positive values mean the real model promotes that variant relative to the bootstrap-null ensemble. The gene-stats CSV also carries a `gene_delta_rank` column computed as `max(delta_rank)` per gene by default (mirroring `gene_z_score = max(z_attribution)`), configurable via `--gene-delta-rank-aggregation`.
 
 ```bash
 python scripts/bootstrap_null_calibration.py \
@@ -536,5 +536,9 @@ python scripts/compare_ablation_rankings.py \
     --out-jaccard results/ablation/delta_ablation_jaccard.tsv \
     --out-level-specific results/ablation/delta_level_specific_variants.tsv
 ```
+
+#### Non-Linear Classifier Robustness Run Pattern
+
+The non-linear classifier validation (`validate_nonlinear_classifier.py`) also supports `--score-column delta_rank`, which resolves automatically to the `gene_delta_rank` column in the gene-stats CSV. The recommended workflow is to run the validation twice with separate output TSVs — one primary run using `--score-column z_attribution` and one robustness run using `--score-column delta_rank` — and apply Benjamini-Hochberg FDR independently within each invocation across the full 16-cell grid. Do not pool the two sets of p-values into a single FDR correction, as that would halve statistical power and obscure whether the robustness finding survives on its own.
 
 ---
