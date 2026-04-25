@@ -340,3 +340,35 @@ def create_sieve_model(
         num_covariates=config.get('num_covariates', 0),
         num_chromosomes=config.get('num_chromosomes', 0),
     )
+
+
+def load_state_dict_with_legacy_upgrade(
+    model: nn.Module,
+    state_dict: Dict[str, Tensor],
+) -> None:
+    """
+    Load a checkpoint into ``model``, padding tensors that grew shape between
+    versions and tolerating newly added parameters.
+
+    Two model changes break ``strict=True`` for legacy checkpoints:
+    ``position_bias.weight`` gained one row (cross-chromosome bucket) and
+    ``chrom_embedding.weight`` is newly added. This helper copies overlapping
+    rows from the checkpoint and leaves new entries at their fresh init
+    (zero), matching option 2 in the migration plan.
+
+    Parameters
+    ----------
+    model : nn.Module
+        Target model; its ``state_dict()`` defines the destination shapes.
+    state_dict : Dict[str, Tensor]
+        Source checkpoint state dict. Mutated locally only.
+    """
+    current_state = model.state_dict()
+    upgraded = dict(state_dict)
+    for key, tensor in list(upgraded.items()):
+        if key in current_state and current_state[key].shape != tensor.shape:
+            target = current_state[key].clone()
+            slices = tuple(slice(0, s) for s in tensor.shape)
+            target[slices] = tensor
+            upgraded[key] = target
+    model.load_state_dict(upgraded, strict=False)

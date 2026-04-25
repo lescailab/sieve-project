@@ -55,7 +55,7 @@ from src.encoding import (
     get_feature_dimension,
     AnnotationLevel
 )
-from src.models.sieve import create_sieve_model
+from src.models.sieve import create_sieve_model, load_state_dict_with_legacy_upgrade
 from src.models import ChunkedSIEVEModel
 from src.explain.gradients import IntegratedGradientsExplainer
 from src.explain.attention_analysis import AttentionAnalyzer
@@ -294,12 +294,12 @@ def main():
             base_model=base_model,
             aggregation_method=config.get('aggregation_method', 'mean')
         )
-        model.load_state_dict(state_dict)
+        load_state_dict_with_legacy_upgrade(model, state_dict)
     else:
         # Checkpoint is from base model only - just use base model for IG
         # (IG works on individual chunks, doesn't need aggregation)
         model = base_model
-        model.load_state_dict(state_dict)
+        load_state_dict_with_legacy_upgrade(model, state_dict)
 
     model = model.to(args.device)
     model.eval()

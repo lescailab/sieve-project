@@ -25,7 +25,7 @@ import pandas as pd
 
 from src.encoding import VariantDataset, get_feature_dimension, AnnotationLevel
 from src.encoding.sparse_tensor import build_variant_tensor
-from src.models.sieve import create_sieve_model
+from src.models.sieve import create_sieve_model, load_state_dict_with_legacy_upgrade
 from src.models import ChunkedSIEVEModel
 from src.data import SampleVariants
 from src.explain.counterfactual_epistasis import CounterfactualEpistasisDetector
@@ -181,10 +181,10 @@ def main():
             base_model=base_model,
             aggregation_method=config.get('aggregation_method', 'mean')
         )
-        model.load_state_dict(state_dict)
+        load_state_dict_with_legacy_upgrade(model, state_dict)
     else:
         model = base_model
-        model.load_state_dict(state_dict)
+        load_state_dict_with_legacy_upgrade(model, state_dict)
 
     model = model.to(args.device)
     model.eval()

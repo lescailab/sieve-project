@@ -7,7 +7,7 @@ import numpy as np
 from pathlib import Path
 
 from src.encoding import VariantDataset, collate_samples, AnnotationLevel
-from src.models.sieve import create_sieve_model
+from src.models.sieve import create_sieve_model, load_state_dict_with_legacy_upgrade
 from src.explain.gradients import IntegratedGradientsExplainer
 from src.explain.attention_analysis import AttentionAnalyzer
 from src.explain.variant_ranking import VariantRanker
@@ -57,21 +57,9 @@ def test_model(test_checkpoint, test_dataset):
         'dropout': 0.1,
     }
     model = create_sieve_model(config, num_genes=test_dataset.num_genes)
-
-    # Backward-compatibility: legacy checkpoints predate the chromosome-aware
-    # position bias (one extra cross-chromosome bucket row) and chrom_embedding.
-    # Pad legacy position_bias rows with zeros and skip missing keys so the
-    # fixture continues to load. New parameters keep their fresh init (zeros
-    # for chrom_embedding, default for the cross-chrom bucket row).
-    state_dict = dict(test_checkpoint['model_state_dict'])
-    current_state = model.state_dict()
-    for key, tensor in list(state_dict.items()):
-        if key in current_state and current_state[key].shape != tensor.shape:
-            target = current_state[key].clone()
-            slices = tuple(slice(0, s) for s in tensor.shape)
-            target[slices] = tensor
-            state_dict[key] = target
-    model.load_state_dict(state_dict, strict=False)
+    # Legacy checkpoints predate the chromosome-aware position bias and
+    # chrom_embedding; the helper pads grown tensors and tolerates new keys.
+    load_state_dict_with_legacy_upgrade(model, test_checkpoint['model_state_dict'])
     model.eval()
     return model
 
