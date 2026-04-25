@@ -7,7 +7,7 @@ import numpy as np
 from pathlib import Path
 
 from src.encoding import VariantDataset, collate_samples, AnnotationLevel
-from src.models.sieve import create_sieve_model
+from src.models.sieve import create_sieve_model, load_state_dict_with_legacy_upgrade
 from src.explain.gradients import IntegratedGradientsExplainer
 from src.explain.attention_analysis import AttentionAnalyzer
 from src.explain.variant_ranking import VariantRanker
@@ -57,7 +57,9 @@ def test_model(test_checkpoint, test_dataset):
         'dropout': 0.1,
     }
     model = create_sieve_model(config, num_genes=test_dataset.num_genes)
-    model.load_state_dict(test_checkpoint['model_state_dict'])
+    # Legacy checkpoints predate the chromosome-aware position bias and
+    # chrom_embedding; the helper pads grown tensors and tolerates new keys.
+    load_state_dict_with_legacy_upgrade(model, test_checkpoint['model_state_dict'])
     model.eval()
     return model
 

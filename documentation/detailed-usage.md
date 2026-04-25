@@ -207,7 +207,7 @@ The annotation ablation protocol tests whether deep learning can discover varian
 - **L1 (+ Position)**: Does knowing where variants are located help?
 - **L2 (+ Consequence)**: Does basic VEP info (missense/LoF) matter?
 - **L3 (+ SIFT/PolyPhen)**: Do deleteriousness scores improve discovery?
-- **L4 (Full annotations)**: Maximum information
+- **L4**: currently identical to L3; reserved for future annotation features
 
 #### Decision Guide
 
@@ -220,7 +220,7 @@ The annotation ablation protocol tests whether deep learning can discover varian
 - If L0 performs well (AUC > 0.6), genotype patterns alone carry signal
 - Variants unique to L0 may represent novel mechanisms
 
-**Compare L0 vs L3 vs L4** for ablation studies:
+**Compare L0 vs L2 vs L3** for ablation studies:
 - Identifies which annotations are actually helpful
 - Reveals annotation-dependent vs independent discoveries
 
@@ -284,22 +284,26 @@ python scripts/train.py \
 
 ---
 
-### Attribution-Regularized Training
+### Embedding-Sparsity-Regularized Training
 
 #### Theory
 
 Standard training:
-```
-Loss = Classification_Loss
-```
+$$
+\mathcal{L}_{\mathrm{total}} = \mathcal{L}_{\mathrm{BCE}}
+$$
 
-Attribution-regularised training:
-```
-Loss = Classification_Loss + λ × Attribution_Sparsity_Loss
-```
+Embedding-sparsity-regularised training:
+$$
+\mathcal{L}_{\mathrm{total}}
+= \mathcal{L}_{\mathrm{BCE}}
++ \lambda_{\mathrm{attr}}\mathcal{L}_{\mathrm{sparse}}
+$$
 
-The sparsity term encourages the model to:
-- Rely on fewer variants (better interpretability)
+The implemented sparsity term penalises L2 norms of variant embeddings in
+non-chunked training, or gene embeddings in chunked training. It encourages the
+model to:
+- Concentrate signal in fewer variant or gene embeddings
 - Produce more stable attributions across CV folds
 - Potentially improve generalisation
 

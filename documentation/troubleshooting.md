@@ -282,7 +282,7 @@ pytest tests/test_compare_ablation_rankings.py -v
 
 **Possible causes**:
 - Model has low confidence (AUC close to 0.5)
-- Attribution regularisation too strong (reduce `--lambda-attr`)
+- Embedding sparsity regularisation too strong (reduce `--lambda-attr`)
 - Integration steps too low (increase `--n-steps`)
 
 **Solution**:

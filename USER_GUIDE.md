@@ -34,19 +34,19 @@ Unlike existing methods:
 - **Direct VCF Processing**: No conversion to PLINK or custom formats required
 - **Annotation-Free Discovery**: Tests whether ML can discover variants without prior knowledge
 - **Position-Aware**: Learns spatial relationships between variants (e.g., compound heterozygosity)
-- **Built-in Interpretability**: Attribution sparsity incorporated into training
+- **Built-in Interpretability**: Embedding sparsity regularisation incorporated into training
 - **Statistical Validation**: Null baseline analysis establishes significance thresholds
 
 ### Scientific Questions SIEVE Addresses
 
-1. **Can deep learning discover variants that annotations miss?** → Annotation ablation experiments (L0-L4)
+1. **Can deep learning discover variants that annotations miss?** → Annotation ablation experiments (L0-L3, with L4 reserved as a compatibility placeholder)
 2. **Do spatial relationships between variants matter?** → Position-aware sparse attention
-3. **Can we make models interpretable by design?** → Attribution-regularised training
+3. **Can we make models interpretable by design?** → Embedding-sparsity-regularised training
 4. **Are discoveries statistically significant?** → Null baseline analysis
 
 ### Key Capabilities
 
-- **Train** models at multiple annotation levels (genotype-only to full annotations)
+- **Train** models at multiple annotation levels (genotype-only to current functional-score annotations)
 - **Explain** predictions with integrated gradients attribution
 - **Discover** novel variant associations with statistical validation
 - **Detect** epistatic interactions via attention patterns and post-hoc attribution/co-occurrence analysis
@@ -281,14 +281,14 @@ python scripts/infer_sex.py \
 
 **Theory**: SIEVE uses position-aware sparse attention to learn relationships between variants. Training includes:
 - Classification loss: Binary cross-entropy on case/control prediction
-- Attribution regularisation (optional): Encourages model to rely on fewer variants
+- Embedding sparsity regularisation (optional): Encourages model to concentrate signal in fewer variant or gene embeddings
 
 **Annotation Levels**:
 - **L0**: Genotype dosage only (0, 1, 2) - tests annotation-free discovery
 - **L1**: L0 + genomic position
 - **L2**: L1 + consequence class (missense/synonymous/LoF)
 - **L3**: L2 + SIFT + PolyPhen ← **recommended starting point**
-- **L4**: L3 + additional annotations (extensible)
+- **L4**: currently identical to L3; reserved for future annotation features
 
 **Command**:
 ```bash
@@ -440,7 +440,7 @@ The null comparison operates on raw `mean_attribution` because both models (real
 
 **Purpose**: Compare variant rankings and model performance across annotation levels to assess whether deep learning can discover disease-associated variants without relying on functional annotations.
 
-**Theory**: The annotation ablation is the core experiment of SIEVE. By training models at levels L0 (genotype only) through L3 (full annotations), you can determine:
+**Theory**: The annotation ablation is the core experiment of SIEVE. By training models at levels L0 (genotype only) through L3 (the current functional-score level), you can determine:
 - Whether positional or functional information is needed for discovery
 - Which variants are found regardless of annotation level (robust discoveries)
 - Which variants are only found at specific levels (annotation-dependent)
@@ -460,7 +460,7 @@ python scripts/ablation_compare.py \
 # Collect chrX-corrected significance files into one directory with level prefixes.
 # Use corrected_variant_rankings.csv — it contains significance + chrX-corrected z-scores.
 # PROJECT_DIR should match what was used in Step 5a.
-PROJECT_DIR=/data/CohortName
+PROJECT_DIR=/path/to/project
 mkdir -p results/ablation/rankings
 for LEVEL in L0 L1 L2 L3; do
     cp "${PROJECT_DIR}/real_experiments/${LEVEL}/attributions/corrected/corrected_variant_rankings.csv" \
@@ -828,7 +828,7 @@ The annotation ablation protocol tests whether deep learning can discover varian
 - **L1 (+ Position)**: Does knowing where variants are located help?
 - **L2 (+ Consequence)**: Does basic VEP info (missense/LoF) matter?
 - **L3 (+ SIFT/PolyPhen)**: Do deleteriousness scores improve discovery?
-- **L4 (Full annotations)**: Maximum information
+- **L4**: currently identical to L3; reserved for future annotation features
 
 #### Decision Guide
 
@@ -841,7 +841,7 @@ The annotation ablation protocol tests whether deep learning can discover varian
 - If L0 performs well (AUC > 0.6), genotype patterns alone carry signal
 - Variants unique to L0 may represent novel mechanisms
 
-**Compare L0 vs L3 vs L4** for ablation studies:
+**Compare L0 vs L2 vs L3** for ablation studies:
 - Identifies which annotations are actually helpful
 - Reveals annotation-dependent vs independent discoveries
 
@@ -905,22 +905,26 @@ python scripts/train.py \
 
 ---
 
-### Attribution-Regularized Training
+### Embedding-Sparsity-Regularized Training
 
 #### Theory
 
 Standard training:
-```
-Loss = Classification_Loss
-```
+$$
+\mathcal{L}_{\mathrm{total}} = \mathcal{L}_{\mathrm{BCE}}
+$$
 
-Attribution-regularised training:
-```
-Loss = Classification_Loss + λ × Attribution_Sparsity_Loss
-```
+Embedding-sparsity-regularised training:
+$$
+\mathcal{L}_{\mathrm{total}}
+= \mathcal{L}_{\mathrm{BCE}}
++ \lambda_{\mathrm{attr}}\mathcal{L}_{\mathrm{sparse}}
+$$
 
-The sparsity term encourages the model to:
-- Rely on fewer variants (better interpretability)
+The implemented sparsity term penalises L2 norms of variant embeddings in
+non-chunked training, or gene embeddings in chunked training. It encourages the
+model to:
+- Concentrate signal in fewer variant or gene embeddings
 - Produce more stable attributions across CV folds
 - Potentially improve generalisation
 
@@ -1037,7 +1041,7 @@ python scripts/ablation_compare.py \
 
 # Run the required null baseline at each level (preferred: cohort-centric layout)
 # Set PROJECT_DIR once; reuse it in the loop.
-PROJECT_DIR=/data/CohortName
+PROJECT_DIR=/path/to/project
 for LEVEL in L0 L1 L2 L3; do
     PROJECT_DIR=$PROJECT_DIR \
     LEVEL=$LEVEL \
@@ -1071,7 +1075,7 @@ python scripts/plot_ablation_comparison.py \
 If your ranking files are not in a single directory with level prefixes, you can specify them individually:
 
 ```bash
-PROJECT_DIR=/data/CohortName
+PROJECT_DIR=/path/to/project
 python scripts/compare_ablation_rankings.py \
     --rankings L0:"${PROJECT_DIR}/real_experiments/L0/attributions/corrected/corrected_variant_rankings.csv" \
                L1:"${PROJECT_DIR}/real_experiments/L1/attributions/corrected/corrected_variant_rankings.csv" \
@@ -1098,7 +1102,7 @@ When chrX ploidy bias inflates attributions on sex chromosomes, run `correct_chr
 
 ```bash
 # Set PROJECT_DIR once; reuse it throughout.
-PROJECT_DIR=/data/CohortName
+PROJECT_DIR=/path/to/project
 
 # 1. Apply chrX correction to each level's significance-annotated file
 for LEVEL in L0 L1 L2 L3; do
@@ -1284,7 +1288,7 @@ python scripts/train.py [OPTIONS]
 | `--gradient-accumulation-steps` | int | 1 | Gradient accumulation |
 | `--epochs` | int | 100 | Maximum epochs |
 | `--lr` | float | 0.001 | Learning rate |
-| `--lambda-attr` | float | 0.0 | Attribution regularisation |
+| `--lambda-attr` | float | 0.0 | Embedding sparsity regularisation |
 | `--early-stopping` | int | 10 | Early stopping patience |
 | `--gradient-clip` | float | None | Gradient clipping value |
 
@@ -1423,7 +1427,7 @@ This wrapper is configured through environment variables.
 
 | Variable | Required | Description |
 |---------|----------|-------------|
-| `PROJECT_DIR` | Yes | Cohort project root directory (e.g. `/data/CohortName`) |
+| `PROJECT_DIR` | Yes | Cohort project root directory (e.g. `/path/to/project`) |
 | `LEVEL` | Yes | Annotation level to run (e.g. `L3`) |
 | `NULL_DATA` | No | Pre-existing permuted `.pt` file — skips Step 1 if set |
 | `DEVICE` | No | `cuda` or `cpu` (default: `cuda`) |
@@ -1446,7 +1450,7 @@ Behaviour:
 
 **Preferred example**:
 ```bash
-PROJECT_DIR=/data/CohortName \
+PROJECT_DIR=/path/to/project \
 LEVEL=L3 \
 DEVICE=cuda \
 bash scripts/run_null_baseline_analysis.sh
@@ -2319,7 +2323,7 @@ python scripts/bootstrap_null_calibration.py \
 
 **Possible causes**:
 - Model has low confidence (AUC close to 0.5)
-- Attribution regularisation too strong (reduce `--lambda-attr`)
+- Embedding sparsity regularisation too strong (reduce `--lambda-attr`)
 - Integration steps too low (increase `--n-steps`)
 
 **Solution**:
@@ -2485,7 +2489,7 @@ MIT License - See LICENSE file for details.
 
 SIEVE (Sparse Interpretable Exome Variant Explainer) is designed around three core innovations:
 1. Position-aware sparse attention that preserves spatial relationships between variants
-2. Attribution-regularised training that builds interpretability into the objective
+2. Embedding-sparsity-regularised training that builds interpretability into the objective
 3. Annotation-ablation protocol that distinguishes genuine discovery from annotation recovery
 
 This appendix provides the mathematical foundations and implementation details.
@@ -2505,50 +2509,64 @@ The input is a VCF file with N samples and V variant sites. Each variant site v 
 Each variant v is represented by a feature vector x_v whose composition depends on the annotation level:
 
 **Level L0** (genotype only):
-```
-x_v = [g_v]  # Just genotype dosage, dimension 1
-```
+$$
+x_v^{L0} = [d_v]
+$$
 
 **Level L1** (genotype + position):
-```
-x_v = [g_v, PE(pos_v)]  # Genotype + positional encoding, dimension 1 + d_pos
-```
+$$
+x_v^{L1} = [d_v, \mathrm{PE}(\mathrm{pos}_v)]
+$$
 
 **Level L2** (L1 + consequence):
-```
-x_v = [g_v, PE(pos_v), one_hot(consequence_v)]  # Add consequence class
-```
+$$
+x_v^{L2} = [d_v, \mathrm{PE}(\mathrm{pos}_v), c_v]
+$$
 
 **Level L3** (L2 + SIFT/PolyPhen):
-```
-x_v = [g_v, PE(pos_v), one_hot(consequence_v), sift_v, polyphen_v]
-```
+$$
+x_v^{L3} =
+[d_v, \mathrm{PE}(\mathrm{pos}_v), c_v,
+\mathrm{sift}^{\mathrm{norm}}_v,
+\mathrm{polyphen}^{\mathrm{norm}}_v]
+$$
 
-**Level L4** (full annotations):
-```
-x_v = [g_v, PE(pos_v), one_hot(consequence_v), sift_v, polyphen_v, lof_v, ...]
-```
+**Level L4** (compatibility placeholder):
+$$
+x_v^{L4} = x_v^{L3}
+$$
+L4 is currently identical to L3 in the implementation and is reserved for
+future annotation features.
 
 #### Positional Encoding
 
 We use sinusoidal positional encodings adapted for genomic positions:
 
-```
-PE(pos, 2i) = sin(pos / 10000^(2i/d_pos))
-PE(pos, 2i+1) = cos(pos / 10000^(2i/d_pos))
-```
+$$
+\begin{aligned}
+\mathrm{PE}(\mathrm{pos}, 2i)
+&= \sin\!\left(\mathrm{pos}\cdot
+   \exp\!\left(-\log(10000)\frac{2i}{d}\right)\right) \\
+\mathrm{PE}(\mathrm{pos}, 2i+1)
+&= \cos\!\left(\mathrm{pos}\cdot
+   \exp\!\left(-\log(10000)\frac{2i}{d}\right)\right)
+\end{aligned}
+$$
 
-where d_pos is the positional embedding dimension (default 64).
+where the positional embedding dimension is $d=64$.
 
 This encoding allows the model to learn functions of relative position (important for detecting compound heterozygosity or clustered variants).
+The implementation also builds chromosome indices. During attention, chromosome
+embeddings can be added to variant embeddings, and cross-chromosome pairs use a
+dedicated learned bias bucket instead of a meaningless coordinate difference.
 
 #### Per-Sample Sparse Representation
 
 For sample n, we construct a sparse representation S_n containing only their non-reference variants:
 
-```
-S_n = {(v, x_v, g_{v,n}) : g_{v,n} > 0}
-```
+$$
+S_n = \{(x_{nv}, \mathrm{pos}_v, \mathrm{chrom}_v, g(v)) : d_{nv} > 0\}
+$$
 
 This is the key to handling sparsity: we never materialise the full V-dimensional tensor, only the positions where the individual has variants.
 
@@ -2579,7 +2597,8 @@ This is the core architectural innovation. Standard self-attention is O(n²) in 
 
 The key insight: we want to preserve positional information without requiring dense encoding. We achieve this by:
 1. Operating only on positions with variants (natural sparsity)
-2. Encoding relative distances in attention computation
+2. Encoding within-chromosome relative distances in attention computation
+3. Routing cross-chromosome pairs to a dedicated learned bias bucket
 
 **Why this matters**: The relative position bias allows the model to learn that variants close together (potential compound heterozygosity) or at specific distances (potential haplotype patterns) are informative. This is impossible with permutation-invariant deep sets.
 
@@ -2591,21 +2610,32 @@ After attention layers process variant relationships, we aggregate to gene level
 
 Simple classification head on gene representations with dropout for regularisation.
 
-### Attribution-Regularised Training
+### Embedding-Sparsity-Regularised Training
 
 #### Standard Loss
 
 Binary cross-entropy for case-control classification:
 
-```python
-bce_loss = F.binary_cross_entropy_with_logits(logits, labels)
-```
+$$
+\mathcal{L}_{\mathrm{BCE}}(z,y)
+= -y\log\sigma(z) - (1-y)\log(1-\sigma(z))
+$$
 
-#### Attribution Sparsity Loss
+#### Embedding Sparsity Loss
 
-We want the model to produce sparse attributions—most of its prediction should depend on a small number of variants. This is implemented through a differentiable approximation.
+We want the model to concentrate predictive signal in a smaller number of loci.
+During training this is implemented by penalising embedding magnitudes, not by
+computing attribution gradients or Integrated Gradients.
 
-During training, we compute a simplified attribution score (gradient × input) and penalise its entropy:
+For non-chunked training, the regulariser is the mean normalised sum of variant
+embedding L2 norms. For chunked training, the same idea is applied to aggregated
+gene embeddings:
+
+$$
+\mathcal{L}_{\mathrm{total}}
+= \mathcal{L}_{\mathrm{BCE}}
++ \lambda_{\mathrm{attr}}\mathcal{L}_{\mathrm{sparse}}
+$$
 
 **Why this matters**: Without this regularisation, a model might achieve good classification by using many weak signals spread across the genome. Such a model is hard to interpret—which variants really matter? The sparsity loss encourages the model to "commit" to a small set of variants, making explainability more meaningful.
 
@@ -2635,14 +2665,12 @@ The attention weights reveal which variant pairs the model considers together. H
 
 To validate that detected interactions are truly epistatic (non-additive):
 
-```
-effect_i = f(with variant i) - f(without variant i)
-effect_j = f(with variant j) - f(without variant j)
-effect_ij = f(with both) - f(without both)
-epistasis_score = effect_ij - (effect_i + effect_j)
-```
+$$
+\Delta_{ij} = p_{11} - p_{10} - p_{01} + p_{00}
+$$
 
-Non-zero epistasis score indicates non-additive interaction.
+A non-zero $\Delta_{ij}$ indicates a non-additive model response under the
+counterfactual perturbation.
 
 ### Model Complexity and Scalability
 
@@ -2678,9 +2706,9 @@ This appendix describes the rigorous experimental protocol for evaluating SIEVE.
 
 #### Question 1: Can deep learning discover variants that annotation-based methods miss?
 
-**Hypothesis**: Models trained with minimal annotations will identify some disease-associated variants that models using full annotations rank lower, because the annotation-heavy models may over-rely on prior knowledge.
+**Hypothesis**: Models trained with minimal annotations will identify some disease-associated variants that models using current functional annotations rank lower, because annotation-informed models may over-rely on prior knowledge.
 
-**Experiment**: Annotation ablation study comparing variant rankings across annotation levels L0-L4.
+**Experiment**: Annotation ablation study comparing variant rankings across annotation levels L0-L3. L4 is currently identical to L3 and can be run only as a compatibility check.
 
 #### Question 2: Do spatial relationships between variants carry disease signal?
 
@@ -2772,20 +2800,20 @@ Determine whether models with minimal annotations can discover variants that ann
 
 #### Protocol
 
-1. **Train 5 models at each annotation level** (L0 through L4) using identical architecture and hyperparameters except for input dimension
+1. **Train replicate models at each implemented annotation level** (L0 through L3 as the primary comparison; L4 is currently identical to L3 and retained as a compatibility placeholder) using identical architecture and hyperparameters except for input dimension
 
 2. **For each model**, compute integrated gradients to obtain variant-level attribution scores
 
 3. **Compare variant rankings** across annotation levels:
    - Top 100 variants at each level
    - Overlap analysis (Jaccard similarity)
-   - Identify "L0-specific" variants: high rank at L0, low rank at L4
-   - Identify "L4-specific" variants: high rank at L4, low rank at L0
+   - Identify "L0-specific" variants: high rank at L0, low rank at L3
+   - Identify "L3-specific" variants: high rank at L3, low rank at L0
 
 4. **Biological interpretation**:
    - Are L0-specific variants in genes not annotated as pathogenic?
    - Are they enriched for regulatory regions or novel mechanisms?
-   - Do L4-specific variants simply have high CADD/SIFT scores?
+   - Do L3-specific variants simply have high SIFT or PolyPhen scores?
 
 #### Expected Outcomes
 
@@ -2796,7 +2824,7 @@ Determine whether models with minimal annotations can discover variants that ann
 
 **If hypothesis is refuted**:
 - L0 model fails to learn (AUC ~0.5), suggesting annotations are necessary
-- All high-ranking variants at L0 are subset of L4 rankings
+- All high-ranking variants at L0 are a subset of L3 rankings
 - This would still be informative: it means annotation-free discovery is not feasible for this phenotype
 
 ### Experiment 2: Position-Aware vs Position-Agnostic
@@ -2838,7 +2866,7 @@ Determine whether training with embedding sparsity regularisation improves the s
 
 2. **For each λ_attr**, evaluate:
    - Classification performance (AUC)
-   - Attribution sparsity: entropy of normalised attributions
+   - Embedding concentration during training and attribution concentration after explanation
    - Ranking stability: Jaccard similarity of top 100 variants across CV folds
    - Biological enrichment: KEGG/Reactome pathway p-values
 
@@ -2848,7 +2876,7 @@ Determine whether training with embedding sparsity regularisation improves the s
 
 **If regularisation helps**:
 - Models with moderate λ_attr (0.05-0.1) have similar AUC but higher ranking stability
-- Top variants are more concentrated (lower entropy)
+- Top variants are more concentrated and rankings are more stable
 - Pathway enrichment p-values are lower (more meaningful discoveries)
 
 ### Experiment 4: Epistasis Detection and Validation
@@ -2923,7 +2951,7 @@ Report:
 
 1. **Annotation ablation**: Heatmap of Jaccard similarities between levels
 2. **Position-aware comparison**: ROC curves for SIEVE vs DeepSet
-3. **Attribution regularisation**: Pareto plot of AUC vs stability for different λ_attr
+3. **Embedding sparsity regularisation**: Pareto plot of AUC vs stability for different λ_attr
 4. **Epistasis**: Network diagram of significant epistatic pairs
 5. **Biological validation**: Pathway enrichment bar plot
 

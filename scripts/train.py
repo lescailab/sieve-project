@@ -188,6 +188,7 @@ def create_model(
     hidden_dim: int,
     aggregation_method: str = 'mean',
     num_covariates: int = 0,
+    num_chromosomes: int = 0,
 ) -> ChunkedSIEVEModel:
     """
     Create Chunked SIEVE model for whole-genome processing.
@@ -204,6 +205,7 @@ def create_model(
         num_heads=num_heads,
         hidden_dim=hidden_dim,
         num_covariates=num_covariates,
+        num_chromosomes=num_chromosomes,
     )
 
     # Wrap in chunked model for whole-genome coverage
@@ -675,6 +677,7 @@ def main():
                 hidden_dim=args.hidden_dim,
                 aggregation_method=args.aggregation_method,
                 num_covariates=num_covariates,
+                num_chromosomes=dataset.num_chromosomes,
             )
 
             # Create fold checkpoint directory

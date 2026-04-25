@@ -25,7 +25,7 @@ import pandas as pd
 
 from src.encoding import VariantDataset, get_feature_dimension, AnnotationLevel
 from src.encoding.sparse_tensor import build_variant_tensor
-from src.models.sieve import create_sieve_model
+from src.models.sieve import create_sieve_model, load_state_dict_with_legacy_upgrade
 from src.models import ChunkedSIEVEModel
 from src.data import SampleVariants
 from src.explain.counterfactual_epistasis import CounterfactualEpistasisDetector
@@ -167,6 +167,10 @@ def main():
     # Create model (add input_dim if missing)
     if 'input_dim' not in config:
         config['input_dim'] = get_feature_dimension(annotation_level)
+    # The chromosome embedding / cross-chromosome bias bucket are sized from
+    # the dataset, not stored in the original config — surface it here so the
+    # constructed model matches the checkpoint's tensor shapes.
+    config['num_chromosomes'] = dataset.num_chromosomes
 
     base_model = create_sieve_model(config, num_genes=dataset.num_genes)
 
@@ -177,10 +181,10 @@ def main():
             base_model=base_model,
             aggregation_method=config.get('aggregation_method', 'mean')
         )
-        model.load_state_dict(state_dict)
+        load_state_dict_with_legacy_upgrade(model, state_dict)
     else:
         model = base_model
-        model.load_state_dict(state_dict)
+        load_state_dict_with_legacy_upgrade(model, state_dict)
 
     model = model.to(args.device)
     model.eval()
@@ -292,6 +296,7 @@ def main():
                 chunk_tensor = build_variant_tensor(
                     chunk_sv, dataset.annotation_level,
                     dataset.gene_index, impute_value=dataset.impute_value,
+                    chrom_index=dataset.chrom_index,
                 )
                 # Remap target indices into the chunk
                 chunk_v1_idx = v1_idx - start
@@ -303,6 +308,7 @@ def main():
                 chunk_tensor = build_variant_tensor(
                     sv, dataset.annotation_level,
                     dataset.gene_index, impute_value=dataset.impute_value,
+                    chrom_index=dataset.chrom_index,
                 )
                 chunk_v1_idx = v1_idx
                 chunk_v2_idx = v2_idx
@@ -318,6 +324,7 @@ def main():
                     mask=chunk_tensor['mask'],
                     variant1_idx=chunk_v1_idx,
                     variant2_idx=chunk_v2_idx,
+                    chrom_ids=chunk_tensor.get('chrom_ids'),
                 )
 
                 result = {

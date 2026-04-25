@@ -11,11 +11,11 @@ Genome-wide association studies (GWAS) and existing deep learning methods for va
 
 SIEVE addresses three scientific questions:
 
-1. **Can deep learning discover variants that annotation-based methods miss?** We implement an annotation-ablation protocol, training models with minimal annotations (genotype only) through full annotations, to identify variants that emerge only from genotype patterns.
+1. **Can deep learning discover variants that annotation-based methods miss?** We implement an annotation-ablation protocol, training models from genotype-only input through the current functional-score level, to identify variants that emerge from genotype patterns rather than annotation priors.
 
 2. **Do spatial relationships between variants carry disease signal?** Unlike permutation-invariant deep set approaches, SIEVE uses position-aware sparse attention to test whether the relative positions of an individual's variants (e.g., potential compound heterozygosity) are informative.
 
-3. **Can inherent interpretability improve discovery?** Rather than applying explainability post-hoc, SIEVE incorporates embedding sparsity regularisation into the training objective, encouraging the model to rely on a small set of variants and producing more stable, meaningful attributions.
+3. **Can inherent interpretability improve discovery?** Rather than applying explainability post-hoc, SIEVE incorporates embedding sparsity regularisation into the training objective, encouraging the model to concentrate signal in fewer variant or gene embeddings and producing more stable, meaningful attributions.
 
 ## Key Innovations
 
@@ -27,12 +27,12 @@ SIEVE trains models at five annotation levels:
 - **L1**: L0 + genomic position
 - **L2**: L1 + consequence class (missense/synonymous/LoF)
 - **L3**: L2 + SIFT + PolyPhen scores
-- **L4**: Full functional annotations
+- **L4**: currently identical to L3; reserved for future annotation features
 
 By comparing variant rankings across levels, we identify:
 
 - *L0-specific variants*: Associations found without any annotations—potential novel discoveries
-- *L4-specific variants*: Associations that require annotation context—validating that annotations add value
+- *L3-specific variants*: Associations that depend on current functional annotation context—validating that annotations add value
 
 ### 2. Position-Aware Sparse Attention
 
@@ -44,15 +44,17 @@ Standard approaches treat variants as unordered sets (permutation-invariant). SI
 
 This enables learning that nearby variants (compound heterozygosity) or specific distance patterns matter, while avoiding the computational burden of dense tensors.
 
-### 3. Attribution-Regularized Training
+### 3. Embedding-Sparsity-Regularized Training
 
 Instead of training purely for classification and explaining afterward, SIEVE incorporates interpretability into the loss function:
 
-```text
-Loss = Classification_Loss + λ × Attribution_Sparsity_Loss
-```
+$$
+\mathcal{L}_{\mathrm{total}}
+= \mathcal{L}_{\mathrm{BCE}}
++ \lambda_{\mathrm{attr}}\mathcal{L}_{\mathrm{sparse}}
+$$
 
-This encourages the model to achieve good classification while relying on a small number of variants, producing more stable and meaningful attributions.
+The implemented sparsity term penalises L2 norms of variant embeddings in non-chunked training, or gene embeddings in chunked training. This encourages the model to concentrate predictive signal in fewer loci, producing more stable and meaningful post-training attributions.
 
 ### 4. Null Baseline Attribution Analysis
 
@@ -195,7 +197,7 @@ To establish statistical significance:
 
 ```bash
 # Option 1: Use the complete pipeline wrapper (preferred — cohort-centric layout)
-PROJECT_DIR=/data/CohortName \
+PROJECT_DIR=/path/to/project \
 LEVEL=L3 \
 bash scripts/run_null_baseline_analysis.sh
 
@@ -448,7 +450,7 @@ If validation AUC stays near 0.5:
 
 - Check that phenotypes are loaded correctly (cases/controls balanced?)
 - Reduce learning rate: `--lr 0.000001`
-- Increase `--lambda-attr` if model is too sparse
+- Reduce `--lambda-attr` if the model is too sparse
 - Check for data leakage in preprocessing
 
 ## Citation

@@ -98,19 +98,33 @@ def relative_position_bucket(
     query_positions: Tensor,
     key_positions: Tensor,
     num_buckets: int = 32,
-    max_distance: int = 100000
+    max_distance: int = 100000,
+    query_chroms: Optional[Tensor] = None,
+    key_chroms: Optional[Tensor] = None,
 ) -> Tensor:
     """
     Compute relative position buckets for attention bias.
 
     This implements logarithmic bucketing of relative distances between variants,
-    as used in T5 and other models. It will be used in Phase 1C for attention bias.
+    as used in T5 and other models. It is consumed inside
+    :class:`PositionAwareSparseAttention` to add a learnable per-bucket bias to
+    attention logits.
 
-    Bucketing strategy:
+    Bucketing strategy (within a single chromosome):
     - Half the buckets for negative distances (query < key)
     - Half for positive distances (query > key)
     - Linear bucketing for small distances (< max_exact)
     - Logarithmic bucketing for large distances (>= max_exact)
+
+    Cross-chromosome handling:
+    When ``query_chroms`` and ``key_chroms`` are provided, every (q, k) pair
+    where ``query_chroms[q] != key_chroms[k]`` is assigned the dedicated bucket
+    index ``num_buckets`` (i.e. one past the highest within-chromosome bucket).
+    Callers must therefore size their bias embedding to ``num_buckets + 1``.
+    The cross-chromosome bias is a single learned scalar per attention head
+    that does not damp cross-chromosome attention with a meaningless distance
+    prior (chromosomes are independent molecules — coordinate differences
+    across them are not a metric).
 
     Parameters
     ----------
@@ -119,29 +133,25 @@ def relative_position_bucket(
     key_positions : Tensor
         Positions of key variants, shape (n_keys,)
     num_buckets : int
-        Number of position buckets (default: 32)
+        Number of within-chromosome position buckets (default: 32). The total
+        number of distinct bucket indices returned is ``num_buckets + 1`` when
+        chromosome tensors are supplied, otherwise ``num_buckets``.
     max_distance : int
         Maximum distance to consider (default: 100,000 bp)
+    query_chroms : Optional[Tensor]
+        Chromosome ids for query variants, shape (n_queries,). Required if
+        ``key_chroms`` is provided.
+    key_chroms : Optional[Tensor]
+        Chromosome ids for key variants, shape (n_keys,). Required if
+        ``query_chroms`` is provided.
 
     Returns
     -------
     Tensor
-        Bucket indices, shape (n_queries, n_keys)
-        Values in range [0, num_buckets-1]
-
-    Notes
-    -----
-    This encoding serves a different purpose than sinusoidal encoding:
-    - Sinusoidal: Absolute position, input features
-    - Bucketing: Relative distance, attention bias
-
-    Will be used in Phase 1C like:
-    ```python
-    # In attention mechanism
-    buckets = relative_position_bucket(query_pos, key_pos)
-    bias = self.position_bias_embedding(buckets)  # Learnable
-    attention_scores += bias
-    ```
+        Bucket indices, shape (n_queries, n_keys). Values in
+        ``[0, num_buckets - 1]`` for same-chromosome pairs, or equal to
+        ``num_buckets`` for different-chromosome pairs (when chromosome
+        tensors are provided).
 
     Examples
     --------
@@ -152,9 +162,12 @@ def relative_position_bucket(
     torch.Size([3, 3])
     >>> buckets[0, 0]  # Same position
     tensor(16)
-    >>> buckets[0, 1]  # Query before key (+50 bp)
-    tensor(...)
     """
+    if (query_chroms is None) != (key_chroms is None):
+        raise ValueError(
+            "query_chroms and key_chroms must be provided together (or both omitted)."
+        )
+
     # Compute relative positions (query - key)
     # Shape: (n_queries, 1) - (1, n_keys) = (n_queries, n_keys)
     relative_position = query_positions[:, None] - key_positions[None, :]
@@ -174,9 +187,12 @@ def relative_position_bucket(
     max_exact = num_buckets_half // 2
     is_small = n < max_exact
 
-    # For large distances, use logarithmic bucketing
+    # For large distances, use logarithmic bucketing.
+    # Guard against log(0): n is clamped only for the log computation; the
+    # is_small branch still routes small distances away from val_if_large.
+    n_safe = torch.clamp(n, min=1).float()
     val_if_large = max_exact + (
-        torch.log(n.float() / max_exact) /
+        torch.log(n_safe / max_exact) /
         np.log(max_distance / max_exact) *
         (num_buckets_half - max_exact)
     ).long()
@@ -189,6 +205,17 @@ def relative_position_bucket(
 
     # Select small or large bucketing
     ret = ret + torch.where(is_small, n, val_if_large)
+
+    # Route cross-chromosome pairs to the dedicated extra bucket. The
+    # within-chromosome bucket value computed above is left in place for
+    # same-chromosome pairs and replaced with `num_buckets` for differing
+    # chromosomes — preserving cross-chromosome attention while removing the
+    # spurious linkage prior that the coordinate-difference bucket would
+    # otherwise impose.
+    if query_chroms is not None:
+        same_chrom = query_chroms[:, None] == key_chroms[None, :]
+        cross_bucket = torch.full_like(ret, num_buckets)
+        ret = torch.where(same_chrom, ret, cross_bucket)
 
     return ret
 

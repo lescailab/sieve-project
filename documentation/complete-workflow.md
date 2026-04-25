@@ -92,14 +92,14 @@ python scripts/infer_sex.py \
 
 **Theory**: SIEVE uses position-aware sparse attention to learn relationships between variants. Training includes:
 - Classification loss: Binary cross-entropy on case/control prediction
-- Embedding sparsity regularisation (optional): Encourages model to rely on fewer variants
+- Embedding sparsity regularisation (optional): Encourages model to concentrate signal in fewer variant or gene embeddings
 
 **Annotation Levels**:
 - **L0**: Genotype dosage only (0, 1, 2) - tests annotation-free discovery
 - **L1**: L0 + genomic position
 - **L2**: L1 + consequence class (missense/synonymous/LoF)
 - **L3**: L2 + SIFT + PolyPhen ← **recommended starting point**
-- **L4**: L3 + additional annotations (extensible)
+- **L4**: currently identical to L3; reserved for future annotation features
 
 **Command**:
 ```bash
@@ -254,7 +254,7 @@ ChrX correction (`correct_chrx_bias.py`) is a separate ranking adjustment applie
 
 **Purpose**: Compare variant rankings and model performance across annotation levels to assess whether deep learning can discover disease-associated variants without relying on functional annotations.
 
-**Theory**: The annotation ablation is the core experiment of SIEVE. By training models at levels L0 (genotype only) through L3 (full annotations), you can determine:
+**Theory**: The annotation ablation is the core experiment of SIEVE. By training models at levels L0 (genotype only) through L3 (the current functional-score level), you can determine:
 - Whether positional or functional information is needed for discovery
 - Which variants are found regardless of annotation level (robust discoveries)
 - Which variants are only found at specific levels (annotation-dependent)
@@ -275,7 +275,7 @@ python scripts/ablation_compare.py \
 ```bash
 # Preferred: cohort-centric layout (PROJECT_DIR must contain data/ and real_experiments/)
 for LEVEL in L0 L1 L2 L3; do
-    PROJECT_DIR=/data/CohortName \
+    PROJECT_DIR=/path/to/project \
     LEVEL=$LEVEL \
     bash scripts/run_null_baseline_analysis.sh
 done
@@ -287,7 +287,7 @@ done
 # Use corrected_variant_rankings.csv — it contains significance + chrX-corrected z-scores.
 mkdir -p results/ablation/rankings
 for LEVEL in L0 L1 L2 L3; do
-    cp /data/CohortName/real_experiments/${LEVEL}/attributions/corrected/corrected_variant_rankings.csv \
+    cp /path/to/project/real_experiments/${LEVEL}/attributions/corrected/corrected_variant_rankings.csv \
        results/ablation/rankings/${LEVEL}_sieve_variant_rankings.csv
 done
 
@@ -862,8 +862,8 @@ python scripts/generate_sieve_gene_list.py \
 
 # --- Cohort B ---
 python scripts/extract_validation_burden.py \
-    --vcf /data/cohort_b/cohort.vcf.gz \
-    --phenotypes /data/cohort_b/phenotypes.tsv \
+    --vcf /path/to/validation_cohort_b.vcf.gz \
+    --phenotypes /path/to/validation_cohort_b_phenotypes.tsv \
     --sieve-genes validation/sieve_gene_lists/sieve_genes.tsv \
     --output-dir validation/cohort_b \
     --top-k 50 100 200 \
@@ -881,8 +881,8 @@ python scripts/test_burden_enrichment.py \
 
 # --- Cohort C ---
 python scripts/extract_validation_burden.py \
-    --vcf /data/cohort_c/cohort.vcf.gz \
-    --phenotypes /data/cohort_c/phenotypes.tsv \
+    --vcf /path/to/validation_cohort_c.vcf.gz \
+    --phenotypes /path/to/validation_cohort_c_phenotypes.tsv \
     --sieve-genes validation/sieve_gene_lists/sieve_genes.tsv \
     --output-dir validation/cohort_c \
     --top-k 50 100 200 \

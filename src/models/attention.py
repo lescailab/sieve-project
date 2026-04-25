@@ -85,6 +85,7 @@ class PositionAwareSparseAttention(nn.Module):
         dropout: float = 0.1,
         num_position_buckets: int = 32,
         max_distance: int = 100000,
+        num_chromosomes: int = 0,
     ):
         super().__init__()
 
@@ -95,15 +96,29 @@ class PositionAwareSparseAttention(nn.Module):
         self.head_dim = latent_dim // num_heads
         self.num_position_buckets = num_position_buckets
         self.max_distance = max_distance
+        self.num_chromosomes = num_chromosomes
 
         # Attention projections
         self.query = nn.Linear(latent_dim, latent_dim)
         self.key = nn.Linear(latent_dim, latent_dim)
         self.value = nn.Linear(latent_dim, latent_dim)
 
-        # Learnable position bias
-        # Shape: (num_position_buckets, num_heads)
-        self.position_bias = nn.Embedding(num_position_buckets, num_heads)
+        # Learnable position bias.
+        # Shape: (num_position_buckets + 1, num_heads). The extra row holds the
+        # single learned cross-chromosome bias used when chrom_ids are passed
+        # through forward(); it is unused (and untouched) in the legacy
+        # chromosome-blind path.
+        self.position_bias = nn.Embedding(num_position_buckets + 1, num_heads)
+
+        # Optional chromosome embedding added to inputs before computing Q/K/V.
+        # Disambiguates variants that share a coordinate on different
+        # chromosomes. Allocated only when num_chromosomes > 0; one extra row
+        # covers padding sentinel values that may be passed during forward().
+        if num_chromosomes > 0:
+            self.chrom_embedding = nn.Embedding(num_chromosomes + 1, latent_dim)
+            nn.init.zeros_(self.chrom_embedding.weight)
+        else:
+            self.chrom_embedding = None
 
         # Output projection
         self.output_proj = nn.Linear(latent_dim, latent_dim)
@@ -116,7 +131,9 @@ class PositionAwareSparseAttention(nn.Module):
     def _compute_position_bias(
         self,
         query_positions: Tensor,
-        key_positions: Tensor
+        key_positions: Tensor,
+        query_chroms: Optional[Tensor] = None,
+        key_chroms: Optional[Tensor] = None,
     ) -> Tensor:
         """
         Compute relative position bias.
@@ -127,6 +144,11 @@ class PositionAwareSparseAttention(nn.Module):
             Query positions, shape (batch, num_queries)
         key_positions : Tensor
             Key positions, shape (batch, num_keys)
+        query_chroms : Optional[Tensor]
+            Query chromosome ids, shape (batch, num_queries). When provided,
+            cross-chromosome pairs are routed to the dedicated bucket.
+        key_chroms : Optional[Tensor]
+            Key chromosome ids, shape (batch, num_keys).
 
         Returns
         -------
@@ -143,12 +165,17 @@ class PositionAwareSparseAttention(nn.Module):
             query_pos_b = query_positions[b]  # (num_queries,)
             key_pos_b = key_positions[b]      # (num_keys,)
 
+            q_chrom_b = query_chroms[b] if query_chroms is not None else None
+            k_chrom_b = key_chroms[b] if key_chroms is not None else None
+
             # Compute buckets for this sample
             buckets_b = relative_position_bucket(
                 query_pos_b,
                 key_pos_b,
                 num_buckets=self.num_position_buckets,
-                max_distance=self.max_distance
+                max_distance=self.max_distance,
+                query_chroms=q_chrom_b,
+                key_chroms=k_chrom_b,
             )  # (num_queries, num_keys)
 
             position_buckets_list.append(buckets_b)
@@ -157,7 +184,7 @@ class PositionAwareSparseAttention(nn.Module):
         position_buckets = torch.stack(position_buckets_list, dim=0)
 
         # Get learnable bias for each bucket
-        # position_bias.weight: (num_position_buckets, num_heads)
+        # position_bias.weight: (num_position_buckets + 1, num_heads)
         # position_buckets: (batch, num_queries, num_keys)
         # Result: (batch, num_queries, num_keys, num_heads)
         bias = self.position_bias(position_buckets)
@@ -172,7 +199,8 @@ class PositionAwareSparseAttention(nn.Module):
         x: Tensor,
         positions: Tensor,
         mask: Optional[Tensor] = None,
-        return_attention: bool = False
+        return_attention: bool = False,
+        chrom_ids: Optional[Tensor] = None,
     ) -> Tuple[Tensor, Optional[Tensor]]:
         """
         Apply position-aware sparse attention.
@@ -188,6 +216,16 @@ class PositionAwareSparseAttention(nn.Module):
             True = valid position, False = padding
         return_attention : bool
             Whether to return attention weights (for explainability)
+        chrom_ids : Optional[Tensor]
+            Chromosome indices, shape (batch, num_variants). When provided,
+            two effects:
+            (1) ``self.chrom_embedding(chrom_ids)`` is added to ``x`` before
+            computing Q/K/V, disambiguating same-coordinate variants on
+            different chromosomes; this requires ``num_chromosomes > 0`` at
+            construction time.
+            (2) cross-chromosome pairs are routed to the dedicated relative-
+            position bias bucket. Cross-chromosome attention itself is **not**
+            masked — only the position-bias prior changes.
 
         Returns
         -------
@@ -198,6 +236,12 @@ class PositionAwareSparseAttention(nn.Module):
             shape (batch, num_heads, num_variants, num_variants)
         """
         batch_size, num_variants, _ = x.shape
+
+        # Add chromosome embedding to inputs (when configured). This is the
+        # absolute-disambiguation half of the chromosome-aware fix and is
+        # independent of the relative-bias half below.
+        if chrom_ids is not None and self.chrom_embedding is not None:
+            x = x + self.chrom_embedding(chrom_ids)
 
         # Project to Q, K, V
         # Shape: (batch, num_variants, latent_dim)
@@ -221,9 +265,13 @@ class PositionAwareSparseAttention(nn.Module):
         # -> (batch, num_heads, num_variants, num_variants)
         attn_scores = torch.matmul(Q, K.transpose(-2, -1)) / (self.head_dim ** 0.5)
 
-        # Add relative position bias
-        # Shape: (batch, num_heads, num_variants, num_variants)
-        position_bias = self._compute_position_bias(positions, positions)
+        # Add relative position bias. When chrom_ids is supplied, cross-
+        # chromosome pairs use the dedicated bucket; otherwise the legacy
+        # chromosome-blind bucketing is preserved for backward compatibility.
+        position_bias = self._compute_position_bias(
+            positions, positions,
+            query_chroms=chrom_ids, key_chroms=chrom_ids,
+        )
         attn_scores = attn_scores + position_bias
 
         # Apply mask if provided
@@ -304,6 +352,7 @@ class MultiLayerAttention(nn.Module):
         dropout: float = 0.1,
         num_position_buckets: int = 32,
         max_distance: int = 100000,
+        num_chromosomes: int = 0,
     ):
         super().__init__()
 
@@ -316,6 +365,7 @@ class MultiLayerAttention(nn.Module):
                 dropout=dropout,
                 num_position_buckets=num_position_buckets,
                 max_distance=max_distance,
+                num_chromosomes=num_chromosomes,
             )
             for _ in range(num_layers)
         ])
@@ -331,7 +381,8 @@ class MultiLayerAttention(nn.Module):
         x: Tensor,
         positions: Tensor,
         mask: Optional[Tensor] = None,
-        return_attention: bool = False
+        return_attention: bool = False,
+        chrom_ids: Optional[Tensor] = None,
     ) -> Tuple[Tensor, Optional[list]]:
         """
         Apply multiple attention layers with residual connections.
@@ -346,6 +397,9 @@ class MultiLayerAttention(nn.Module):
             Attention mask, shape (batch, num_variants)
         return_attention : bool
             Whether to return attention weights from all layers
+        chrom_ids : Optional[Tensor]
+            Chromosome indices, shape (batch, num_variants). Forwarded to each
+            ``PositionAwareSparseAttention`` layer.
 
         Returns
         -------
@@ -362,7 +416,8 @@ class MultiLayerAttention(nn.Module):
                 x,
                 positions,
                 mask,
-                return_attention=return_attention
+                return_attention=return_attention,
+                chrom_ids=chrom_ids,
             )
 
             # Residual connection + layer norm

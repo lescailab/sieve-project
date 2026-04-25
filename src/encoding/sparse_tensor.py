@@ -69,12 +69,67 @@ def build_gene_index(all_samples: List[SampleVariants]) -> Dict[str, int]:
     return gene_to_idx
 
 
+def _chrom_sort_key(chrom: str):
+    """Natural sort key for chromosome names: 1..22, X, Y, MT, then anything else."""
+    s = chrom[3:] if chrom.startswith('chr') else chrom
+    if s.isdigit():
+        return (0, int(s), '')
+    if s == 'X':
+        return (1, 0, '')
+    if s == 'Y':
+        return (1, 1, '')
+    if s in ('MT', 'M'):
+        return (1, 2, '')
+    return (2, 0, s)
+
+
+def build_chrom_index(all_samples: List[SampleVariants]) -> Dict[str, int]:
+    """
+    Build mapping from chromosome names to integer indices.
+
+    Used by the model to disambiguate variants that share genomic coordinates
+    on different chromosomes (positional features alone are chromosome-blind)
+    and to route cross-chromosome relative-position pairs to a dedicated
+    attention bias bucket.
+
+    Parameters
+    ----------
+    all_samples : List[SampleVariants]
+        All samples in the dataset.
+
+    Returns
+    -------
+    Dict[str, int]
+        Mapping from chromosome name (as it appears on ``VariantRecord.chrom``)
+        to integer index. Standard human chromosomes are ordered 1..22, X, Y,
+        MT; any non-standard names are appended in lexical order.
+
+    Examples
+    --------
+    >>> from src.data import SampleVariants, VariantRecord
+    >>> v1 = VariantRecord('1', 100, 'A', 'T', 'GENE1', 'missense', 1, {})
+    >>> v2 = VariantRecord('X', 200, 'C', 'G', 'GENE2', 'missense', 1, {})
+    >>> sample = SampleVariants('s1', 1, [v1, v2])
+    >>> idx = build_chrom_index([sample])
+    >>> idx['1'] < idx['X']
+    True
+    """
+    chrom_names = set()
+    for sample in all_samples:
+        for variant in sample.variants:
+            chrom_names.add(variant.chrom)
+
+    sorted_chroms = sorted(chrom_names, key=_chrom_sort_key)
+    return {chrom: idx for idx, chrom in enumerate(sorted_chroms)}
+
+
 def build_variant_tensor(
     sample: SampleVariants,
     annotation_level: AnnotationLevel,
     gene_index: Dict[str, int],
     max_variants: Optional[int] = None,
-    impute_value: float = 0.5
+    impute_value: float = 0.5,
+    chrom_index: Optional[Dict[str, int]] = None,
 ) -> Dict[str, Tensor]:
     """
     Convert a single sample's variants to PyTorch tensors.
@@ -91,6 +146,11 @@ def build_variant_tensor(
         If specified, limit to first N variants (for debugging/testing)
     impute_value : float
         Value for missing functional scores (default: 0.5)
+    chrom_index : Optional[Dict[str, int]]
+        Mapping from chromosome name to integer index. When provided, the
+        returned dict includes a ``chrom_ids`` tensor used by chromosome-aware
+        positional bias and chromosome embedding in the model. When ``None``,
+        ``chrom_ids`` is omitted (legacy chromosome-blind path).
 
     Returns
     -------
@@ -102,6 +162,8 @@ def build_variant_tensor(
         - 'mask': Valid variant mask [num_variants] (all 1s, no padding yet)
         - 'label': Phenotype label [scalar]
         - 'sample_id': Sample identifier (string, not tensor)
+        - 'chrom_ids': Chromosome indices [num_variants] (only if
+          ``chrom_index`` is provided)
 
     Examples
     --------
@@ -124,7 +186,7 @@ def build_variant_tensor(
 
     # Handle empty variant case
     if n_variants == 0:
-        return {
+        empty = {
             'features': torch.zeros((0, feature_dim), dtype=torch.float32),
             'positions': torch.zeros(0, dtype=torch.long),
             'gene_ids': torch.zeros(0, dtype=torch.long),
@@ -132,6 +194,9 @@ def build_variant_tensor(
             'label': torch.tensor(sample.label, dtype=torch.long),
             'sample_id': sample.sample_id,
         }
+        if chrom_index is not None:
+            empty['chrom_ids'] = torch.zeros(0, dtype=torch.long)
+        return empty
 
     # Extract positions for positional encoding
     positions_np = np.array([v.pos for v in variants], dtype=np.int64)
@@ -157,7 +222,7 @@ def build_variant_tensor(
     mask_np = np.ones(n_variants, dtype=bool)
 
     # Convert to tensors
-    return {
+    out = {
         'features': torch.from_numpy(features_np),
         'positions': torch.from_numpy(positions_np),
         'gene_ids': torch.from_numpy(gene_ids_np),
@@ -165,6 +230,12 @@ def build_variant_tensor(
         'label': torch.tensor(sample.label, dtype=torch.long),
         'sample_id': sample.sample_id,
     }
+    if chrom_index is not None:
+        chrom_ids_np = np.array(
+            [chrom_index[v.chrom] for v in variants], dtype=np.int64
+        )
+        out['chrom_ids'] = torch.from_numpy(chrom_ids_np)
+    return out
 
 
 def collate_samples(
@@ -232,6 +303,14 @@ def collate_samples(
     if max_variants_per_batch is not None and max_variants > max_variants_per_batch:
         max_variants = max_variants_per_batch
 
+    # Detect whether the per-sample tensors carry chrom_ids. All samples in a
+    # batch must agree (mixed batches are not supported).
+    has_chrom_ids = any('chrom_ids' in sample for sample in batch)
+    if has_chrom_ids and not all('chrom_ids' in sample for sample in batch):
+        raise ValueError(
+            "Mixed batches with and without 'chrom_ids' are not supported."
+        )
+
     # Handle edge case where all samples have zero variants
     if max_variants == 0:
         # Find feature dimension from any sample with known dimension
@@ -240,7 +319,7 @@ def collate_samples(
         feature_dim = batch[0]['features'].shape[1] if len(batch[0]['features'].shape) > 1 else 0
 
         # Return empty batch with proper structure
-        return {
+        empty = {
             'features': torch.zeros((batch_size, 0, feature_dim), dtype=torch.float32),
             'positions': torch.zeros((batch_size, 0), dtype=torch.long),
             'gene_ids': torch.zeros((batch_size, 0), dtype=torch.long),
@@ -248,6 +327,9 @@ def collate_samples(
             'labels': torch.tensor([sample['label'] for sample in batch], dtype=torch.long),
             'sample_ids': [sample['sample_id'] for sample in batch],
         }
+        if has_chrom_ids:
+            empty['chrom_ids'] = torch.zeros((batch_size, 0), dtype=torch.long)
+        return empty
 
     # Get feature dimension from first sample (safe now since max_variants > 0)
     feature_dim = batch[0]['features'].shape[1]
@@ -271,6 +353,13 @@ def collate_samples(
     )
     labels = torch.zeros(batch_size, dtype=torch.long)
     sample_ids = []
+    # Pad chrom_ids with zeros (a real chromosome index). The attention mask
+    # already prevents padded slots from contributing to the loss; the value
+    # is irrelevant operationally as long as it indexes a valid embedding row.
+    chrom_ids_padded = (
+        torch.zeros((batch_size, max_variants), dtype=torch.long)
+        if has_chrom_ids else None
+    )
 
     # Fill in the data
     for i, sample in enumerate(batch):
@@ -283,11 +372,13 @@ def collate_samples(
             positions_padded[i, :n_to_copy] = sample['positions'][:n_to_copy]
             gene_ids_padded[i, :n_to_copy] = sample['gene_ids'][:n_to_copy]
             mask_padded[i, :n_to_copy] = sample['mask'][:n_to_copy]
+            if has_chrom_ids:
+                chrom_ids_padded[i, :n_to_copy] = sample['chrom_ids'][:n_to_copy]
 
         labels[i] = sample['label']
         sample_ids.append(sample['sample_id'])
 
-    return {
+    out = {
         'features': features_padded,
         'positions': positions_padded,
         'gene_ids': gene_ids_padded,
@@ -295,6 +386,9 @@ def collate_samples(
         'labels': labels,
         'sample_ids': sample_ids,
     }
+    if has_chrom_ids:
+        out['chrom_ids'] = chrom_ids_padded
+    return out
 
 
 class VariantDataset(Dataset):
@@ -349,7 +443,8 @@ class VariantDataset(Dataset):
         annotation_level: AnnotationLevel,
         gene_index: Optional[Dict[str, int]] = None,
         max_variants: Optional[int] = None,
-        impute_value: float = 0.5
+        impute_value: float = 0.5,
+        chrom_index: Optional[Dict[str, int]] = None,
     ):
         self.samples = samples
         self.annotation_level = annotation_level
@@ -364,6 +459,15 @@ class VariantDataset(Dataset):
 
         self.num_genes = len(self.gene_index)
 
+        # Build chromosome index if not provided. Always populated so the model
+        # can run in chromosome-aware mode by default.
+        if chrom_index is None:
+            self.chrom_index = build_chrom_index(samples)
+        else:
+            self.chrom_index = chrom_index
+
+        self.num_chromosomes = len(self.chrom_index)
+
     def __len__(self) -> int:
         return len(self.samples)
 
@@ -375,7 +479,8 @@ class VariantDataset(Dataset):
             self.annotation_level,
             self.gene_index,
             self.max_variants,
-            self.impute_value
+            self.impute_value,
+            chrom_index=self.chrom_index,
         )
 
     def get_sample_statistics(self) -> Dict[str, Any]:

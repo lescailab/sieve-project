@@ -231,9 +231,19 @@ class EfficientGeneAggregator(nn.Module):
         batch_size, num_variants, latent_dim = variant_embeddings.shape
         device = variant_embeddings.device
 
-        # Apply mask
+        # Apply mask. For max aggregation, padded slots must NOT compete in the
+        # element-wise max — a padded zero would beat real negative embedding
+        # coordinates for whichever gene id pads carry (gene 0 by default), and
+        # that gene's embedding would be silently clipped to >= 0. Setting
+        # padded positions to -inf makes them lose every max comparison while
+        # leaving the empty-gene case (all -inf -> 0 via the where below) intact.
         if mask is not None:
-            variant_embeddings = variant_embeddings * mask.unsqueeze(-1).float()
+            if self.aggregation == 'max':
+                variant_embeddings = variant_embeddings.masked_fill(
+                    ~mask.unsqueeze(-1), float('-inf')
+                )
+            else:
+                variant_embeddings = variant_embeddings * mask.unsqueeze(-1).float()
 
         # Initialize output
         if self.aggregation == 'max':

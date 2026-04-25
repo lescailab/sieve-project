@@ -37,6 +37,7 @@ from .positional import (
 
 from .sparse_tensor import (
     build_gene_index,
+    build_chrom_index,
     build_variant_tensor,
     collate_samples,
     VariantDataset,
@@ -75,6 +76,7 @@ __all__ = [
 
     # Sparse tensor construction
     'build_gene_index',
+    'build_chrom_index',
     'build_variant_tensor',
     'collate_samples',
     'VariantDataset',

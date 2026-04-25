@@ -72,6 +72,7 @@ class AttentionAnalyzer:
         positions: Tensor,
         gene_ids: Tensor,
         mask: Tensor,
+        chrom_ids: Optional[Tensor] = None,
     ) -> List[Tensor]:
         """
         Extract attention weights from all layers.
@@ -86,6 +87,10 @@ class AttentionAnalyzer:
             Gene assignments, shape (batch, num_variants)
         mask : Tensor
             Validity mask, shape (batch, num_variants)
+        chrom_ids : Optional[Tensor]
+            Chromosome indices, shape (batch, num_variants). When provided
+            (and the model was constructed with ``num_chromosomes > 0``),
+            enables chromosome-aware position bias and chromosome embedding.
 
         Returns
         -------
@@ -98,6 +103,8 @@ class AttentionAnalyzer:
         positions = positions.to(self.device)
         gene_ids = gene_ids.to(self.device)
         mask = mask.to(self.device)
+        if chrom_ids is not None:
+            chrom_ids = chrom_ids.to(self.device)
 
         # Get attention patterns
         with torch.no_grad():
@@ -105,7 +112,8 @@ class AttentionAnalyzer:
                 variant_features,
                 positions,
                 gene_ids,
-                mask
+                mask,
+                chrom_ids=chrom_ids,
             )
 
         return attention_weights

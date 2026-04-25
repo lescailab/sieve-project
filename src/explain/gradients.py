@@ -77,6 +77,7 @@ class IntegratedGradientsExplainer:
         target: Optional[int] = None,
         baseline: Optional[Tensor] = None,
         covariates: Optional[Tensor] = None,
+        chrom_ids: Optional[Tensor] = None,
     ) -> Tensor:
         """
         Compute integrated gradients attributions for variants.
@@ -113,14 +114,17 @@ class IntegratedGradientsExplainer:
         mask = mask.to(self.device)
         if covariates is not None:
             covariates = covariates.to(self.device)
+        if chrom_ids is not None:
+            chrom_ids = chrom_ids.to(self.device)
 
         # Create baseline (zero features)
         if baseline is None:
             baseline = torch.zeros_like(variant_features)
 
-        # Build additional_forward_args — covariates always included so the
-        # wrapper signature stays stable; None is passed when unused.
-        additional = (positions, gene_ids, mask, covariates)
+        # Build additional_forward_args — covariates and chrom_ids always
+        # included so the wrapper signature stays stable; None is passed when
+        # unused.
+        additional = (positions, gene_ids, mask, covariates, chrom_ids)
 
         # Compute attributions
         attributions = self.ig.attribute(
@@ -187,6 +191,7 @@ class IntegratedGradientsExplainer:
             positions = batch['positions']
             gene_ids = batch['gene_ids']
             mask = batch['mask']
+            chrom_ids_batch = batch.get('chrom_ids')
             batch_size = features.shape[0]
 
             # --- Covariate handling ---
@@ -236,6 +241,9 @@ class IntegratedGradientsExplainer:
                 sample_positions = positions[i:i+1]
                 sample_gene_ids = gene_ids[i:i+1]
                 sample_mask = mask[i:i+1]
+                sample_chrom_ids = (
+                    chrom_ids_batch[i:i+1] if chrom_ids_batch is not None else None
+                )
 
                 # Per-sample covariate slice
                 sample_covariates = (
@@ -259,6 +267,10 @@ class IntegratedGradientsExplainer:
                     sample_positions_truncated = sample_positions[:, selected_indices]
                     sample_gene_ids_truncated = sample_gene_ids[:, selected_indices]
                     sample_mask_truncated = sample_mask[:, selected_indices]
+                    sample_chrom_ids_truncated = (
+                        sample_chrom_ids[:, selected_indices]
+                        if sample_chrom_ids is not None else None
+                    )
 
                     # Track original indices for metadata
                     original_indices = selected_indices
@@ -268,6 +280,7 @@ class IntegratedGradientsExplainer:
                     sample_positions_truncated = sample_positions
                     sample_gene_ids_truncated = sample_gene_ids
                     sample_mask_truncated = sample_mask
+                    sample_chrom_ids_truncated = sample_chrom_ids
                     original_indices = None
 
                 # Compute attributions for this single sample (possibly truncated)
@@ -275,6 +288,7 @@ class IntegratedGradientsExplainer:
                     sample_features_truncated, sample_positions_truncated,
                     sample_gene_ids_truncated, sample_mask_truncated,
                     covariates=sample_covariates,
+                    chrom_ids=sample_chrom_ids_truncated,
                 )
 
                 # Convert to numpy
@@ -398,6 +412,7 @@ class SIEVEWrapper(nn.Module):
         gene_ids: Tensor,
         mask: Tensor,
         covariates: Optional[Tensor] = None,
+        chrom_ids: Optional[Tensor] = None,
     ) -> Tensor:
         """Forward pass returning only logits."""
         logits, _ = self.model(
@@ -407,6 +422,7 @@ class SIEVEWrapper(nn.Module):
             mask,
             covariates=covariates,
             return_attention=False,
-            return_intermediate=False
+            return_intermediate=False,
+            chrom_ids=chrom_ids,
         )
         return logits

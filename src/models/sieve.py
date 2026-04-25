@@ -94,6 +94,7 @@ class SIEVE(nn.Module):
         num_position_buckets: int = 32,
         max_distance: int = 100000,
         num_covariates: int = 0,
+        num_chromosomes: int = 0,
     ):
         super().__init__()
 
@@ -101,6 +102,7 @@ class SIEVE(nn.Module):
         self.num_genes = num_genes
         self.latent_dim = latent_dim
         self.num_covariates = num_covariates
+        self.num_chromosomes = num_chromosomes
 
         # 1. Variant encoder
         self.variant_encoder = VariantEncoder(
@@ -118,6 +120,7 @@ class SIEVE(nn.Module):
             dropout=dropout,
             num_position_buckets=num_position_buckets,
             max_distance=max_distance,
+            num_chromosomes=num_chromosomes,
         )
 
         # 3. Gene aggregation
@@ -145,7 +148,8 @@ class SIEVE(nn.Module):
         covariates: Optional[Tensor] = None,
         return_attention: bool = False,
         return_intermediate: bool = False,
-        return_embeddings: bool = False
+        return_embeddings: bool = False,
+        chrom_ids: Optional[Tensor] = None,
     ) -> Tuple[Tensor, Optional[Dict]]:
         """
         Forward pass through SIEVE model.
@@ -170,6 +174,11 @@ class SIEVE(nn.Module):
             Whether to return intermediate representations
         return_embeddings : bool
             If True, return gene embeddings instead of logits (for chunked aggregation)
+        chrom_ids : Optional[Tensor]
+            Chromosome indices, shape (batch, num_variants). When provided
+            (and the model was constructed with ``num_chromosomes > 0``),
+            enables chromosome-aware position bias and chromosome embedding
+            in attention. Cross-chromosome attention itself is **not** masked.
 
         Returns
         -------
@@ -195,7 +204,8 @@ class SIEVE(nn.Module):
             variant_embeddings,
             positions,
             mask,
-            return_attention=return_attention
+            return_attention=return_attention,
+            chrom_ids=chrom_ids,
         )
         if return_intermediate or return_embeddings:
             intermediates['attended_embeddings'] = attended_embeddings
@@ -248,6 +258,7 @@ class SIEVE(nn.Module):
         positions: Tensor,
         gene_ids: Tensor,
         mask: Optional[Tensor] = None,
+        chrom_ids: Optional[Tensor] = None,
     ) -> List[Tensor]:
         """
         Extract attention patterns for explainability.
@@ -262,6 +273,10 @@ class SIEVE(nn.Module):
             Gene assignments, shape (batch, num_variants)
         mask : Optional[Tensor]
             Validity mask, shape (batch, num_variants)
+        chrom_ids : Optional[Tensor]
+            Chromosome indices, shape (batch, num_variants). Enables
+            chromosome-aware attention bias when the model was constructed
+            with ``num_chromosomes > 0``.
 
         Returns
         -------
@@ -275,7 +290,8 @@ class SIEVE(nn.Module):
                 positions,
                 gene_ids,
                 mask,
-                return_attention=True
+                return_attention=True,
+                chrom_ids=chrom_ids,
             )
             return intermediates['attention_weights']
 
@@ -322,4 +338,37 @@ def create_sieve_model(
         num_position_buckets=config.get('num_position_buckets', 32),
         max_distance=config.get('max_distance', 100000),
         num_covariates=config.get('num_covariates', 0),
+        num_chromosomes=config.get('num_chromosomes', 0),
     )
+
+
+def load_state_dict_with_legacy_upgrade(
+    model: nn.Module,
+    state_dict: Dict[str, Tensor],
+) -> None:
+    """
+    Load a checkpoint into ``model``, padding tensors that grew shape between
+    versions and tolerating newly added parameters.
+
+    Two model changes break ``strict=True`` for legacy checkpoints:
+    ``position_bias.weight`` gained one row (cross-chromosome bucket) and
+    ``chrom_embedding.weight`` is newly added. This helper copies overlapping
+    rows from the checkpoint and leaves new entries at their fresh init
+    (zero), matching option 2 in the migration plan.
+
+    Parameters
+    ----------
+    model : nn.Module
+        Target model; its ``state_dict()`` defines the destination shapes.
+    state_dict : Dict[str, Tensor]
+        Source checkpoint state dict. Mutated locally only.
+    """
+    current_state = model.state_dict()
+    upgraded = dict(state_dict)
+    for key, tensor in list(upgraded.items()):
+        if key in current_state and current_state[key].shape != tensor.shape:
+            target = current_state[key].clone()
+            slices = tuple(slice(0, s) for s in tensor.shape)
+            target[slices] = tensor
+            upgraded[key] = target
+    model.load_state_dict(upgraded, strict=False)

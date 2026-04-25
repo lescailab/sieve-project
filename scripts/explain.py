@@ -55,7 +55,7 @@ from src.encoding import (
     get_feature_dimension,
     AnnotationLevel
 )
-from src.models.sieve import create_sieve_model
+from src.models.sieve import create_sieve_model, load_state_dict_with_legacy_upgrade
 from src.models import ChunkedSIEVEModel
 from src.explain.gradients import IntegratedGradientsExplainer
 from src.explain.attention_analysis import AttentionAnalyzer
@@ -276,6 +276,10 @@ def main():
     print("\nCreating model...")
     if 'input_dim' not in config:
         config['input_dim'] = get_feature_dimension(annotation_level)
+    # The chromosome embedding / cross-chromosome bias bucket are sized from
+    # the dataset, not stored in the original config — surface it here so the
+    # constructed model matches the checkpoint's tensor shapes.
+    config['num_chromosomes'] = dataset.num_chromosomes
 
     # Load base model
     base_model = create_sieve_model(config, num_genes=dataset.num_genes)
@@ -290,12 +294,12 @@ def main():
             base_model=base_model,
             aggregation_method=config.get('aggregation_method', 'mean')
         )
-        model.load_state_dict(state_dict)
+        load_state_dict_with_legacy_upgrade(model, state_dict)
     else:
         # Checkpoint is from base model only - just use base model for IG
         # (IG works on individual chunks, doesn't need aggregation)
         model = base_model
-        model.load_state_dict(state_dict)
+        load_state_dict_with_legacy_upgrade(model, state_dict)
 
     model = model.to(args.device)
     model.eval()
@@ -437,6 +441,10 @@ def main():
                 positions = chunk['positions'].unsqueeze(0).to(args.device)
                 gene_ids = chunk['gene_ids'].unsqueeze(0).to(args.device)
                 mask = chunk['mask'].unsqueeze(0).to(args.device)
+                chrom_ids = (
+                    chunk['chrom_ids'].unsqueeze(0).to(args.device)
+                    if 'chrom_ids' in chunk else None
+                )
 
                 # Build covariate tensor for this sample if the model needs it
                 chunk_covariates = None
@@ -468,6 +476,7 @@ def main():
                 attr = explainer.attribute(
                     features, positions, gene_ids, mask,
                     covariates=chunk_covariates,
+                    chrom_ids=chrom_ids,
                 )
 
                 # Extract valid variants (non-padded) to CPU numpy immediately
@@ -484,6 +493,8 @@ def main():
 
                 # Free GPU tensors immediately after extracting to CPU
                 del features, positions, gene_ids, mask, attr
+                if chrom_ids is not None:
+                    del chrom_ids
 
             # Combine all chunks for this sample
             sample_attributions = np.concatenate(chunk_attributions, axis=0)
@@ -701,13 +712,18 @@ def main():
             positions = batch['positions'].to(args.device)
             gene_ids = batch['gene_ids'].to(args.device)
             mask = batch['mask'].to(args.device)
+            chrom_ids = (
+                batch['chrom_ids'].to(args.device)
+                if 'chrom_ids' in batch else None
+            )
 
             # Extract attention
             attention_weights = analyzer.extract_attention_weights(
                 variant_features=features,
                 positions=positions,
                 gene_ids=gene_ids,
-                mask=mask
+                mask=mask,
+                chrom_ids=chrom_ids,
             )
 
             # Find interactions
@@ -729,6 +745,8 @@ def main():
 
             # Free GPU tensors after each batch
             del features, positions, gene_ids, mask, attention_weights
+            if chrom_ids is not None:
+                del chrom_ids
             if args.device == 'cuda':
                 torch.cuda.empty_cache()
 

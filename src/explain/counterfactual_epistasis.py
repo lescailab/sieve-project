@@ -17,7 +17,7 @@ Workflow:
 Author: Francesco Lescai
 """
 
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -125,7 +125,8 @@ class CounterfactualEpistasisDetector:
         gene_ids: Tensor,
         mask: Tensor,
         background: Tuple[Tensor, Tensor, Tensor, Tensor],
-        max_variants: int = 100
+        max_variants: int = 100,
+        chrom_ids: Optional[Tensor] = None,
     ) -> np.ndarray:
         """
         Compute marginal SHAP values for individual variants.
@@ -156,6 +157,10 @@ class CounterfactualEpistasisDetector:
         shap_values : np.ndarray
             Marginal SHAP values for each variant
         """
+        chrom_ids_dev = (
+            chrom_ids.to(self.device) if chrom_ids is not None else None
+        )
+
         # Create wrapper model
         def model_fn(variant_features_numpy):
             """Wrapper for SHAP."""
@@ -171,7 +176,8 @@ class CounterfactualEpistasisDetector:
                     positions.to(self.device),
                     gene_ids.to(self.device),
                     mask.to(self.device),
-                    return_attention=False
+                    return_attention=False,
+                    chrom_ids=chrom_ids_dev,
                 )
 
             return torch.sigmoid(logits).cpu().numpy()
@@ -290,7 +296,8 @@ class CounterfactualEpistasisDetector:
         gene_ids: Tensor,
         mask: Tensor,
         variant1_idx: int,
-        variant2_idx: int
+        variant2_idx: int,
+        chrom_ids: Optional[Tensor] = None,
     ) -> Dict:
         """
         Validate interaction using counterfactual perturbation.
@@ -334,15 +341,21 @@ class CounterfactualEpistasisDetector:
             positions = positions.unsqueeze(0)
             gene_ids = gene_ids.unsqueeze(0)
             mask = mask.unsqueeze(0)
+            if chrom_ids is not None and chrom_ids.dim() == 1:
+                chrom_ids = chrom_ids.unsqueeze(0)
 
         features = features.to(self.device)
         positions = positions.to(self.device)
         gene_ids = gene_ids.to(self.device)
         mask = mask.to(self.device)
+        if chrom_ids is not None:
+            chrom_ids = chrom_ids.to(self.device)
 
         with torch.no_grad():
             # Condition 1: Both present (original)
-            logits_both, _ = self.model(features, positions, gene_ids, mask)
+            logits_both, _ = self.model(
+                features, positions, gene_ids, mask, chrom_ids=chrom_ids
+            )
             pred_both = torch.sigmoid(logits_both).item()
 
             # Condition 2: Only variant1 (ablate variant2)
@@ -351,7 +364,9 @@ class CounterfactualEpistasisDetector:
             mask_v1 = mask.clone()
             mask_v1[0, variant2_idx] = False
 
-            logits_v1, _ = self.model(features_v1, positions, gene_ids, mask_v1)
+            logits_v1, _ = self.model(
+                features_v1, positions, gene_ids, mask_v1, chrom_ids=chrom_ids
+            )
             pred_v1 = torch.sigmoid(logits_v1).item()
 
             # Condition 3: Only variant2 (ablate variant1)
@@ -360,7 +375,9 @@ class CounterfactualEpistasisDetector:
             mask_v2 = mask.clone()
             mask_v2[0, variant1_idx] = False
 
-            logits_v2, _ = self.model(features_v2, positions, gene_ids, mask_v2)
+            logits_v2, _ = self.model(
+                features_v2, positions, gene_ids, mask_v2, chrom_ids=chrom_ids
+            )
             pred_v2 = torch.sigmoid(logits_v2).item()
 
             # Condition 4: Neither present (ablate both)
@@ -371,7 +388,10 @@ class CounterfactualEpistasisDetector:
             mask_neither[0, variant1_idx] = False
             mask_neither[0, variant2_idx] = False
 
-            logits_neither, _ = self.model(features_neither, positions, gene_ids, mask_neither)
+            logits_neither, _ = self.model(
+                features_neither, positions, gene_ids, mask_neither,
+                chrom_ids=chrom_ids,
+            )
             pred_neither = torch.sigmoid(logits_neither).item()
 
         # Compute synergy
