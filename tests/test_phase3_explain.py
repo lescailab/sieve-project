@@ -57,7 +57,21 @@ def test_model(test_checkpoint, test_dataset):
         'dropout': 0.1,
     }
     model = create_sieve_model(config, num_genes=test_dataset.num_genes)
-    model.load_state_dict(test_checkpoint['model_state_dict'])
+
+    # Backward-compatibility: legacy checkpoints predate the chromosome-aware
+    # position bias (one extra cross-chromosome bucket row) and chrom_embedding.
+    # Pad legacy position_bias rows with zeros and skip missing keys so the
+    # fixture continues to load. New parameters keep their fresh init (zeros
+    # for chrom_embedding, default for the cross-chrom bucket row).
+    state_dict = dict(test_checkpoint['model_state_dict'])
+    current_state = model.state_dict()
+    for key, tensor in list(state_dict.items()):
+        if key in current_state and current_state[key].shape != tensor.shape:
+            target = current_state[key].clone()
+            slices = tuple(slice(0, s) for s in tensor.shape)
+            target[slices] = tensor
+            state_dict[key] = target
+    model.load_state_dict(state_dict, strict=False)
     model.eval()
     return model
 

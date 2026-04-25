@@ -18,7 +18,11 @@ from torch.utils.data import Dataset
 
 from src.data import SampleVariants
 from src.encoding.levels import AnnotationLevel
-from src.encoding.sparse_tensor import build_variant_tensor, build_gene_index
+from src.encoding.sparse_tensor import (
+    build_variant_tensor,
+    build_gene_index,
+    build_chrom_index,
+)
 from src.data.covariates import encode_sex_for_covariate
 
 
@@ -89,7 +93,8 @@ class ChunkedVariantDataset(Dataset):
         chunk_size: int = 3000,
         overlap: int = 0,
         gene_index: Optional[Dict[str, int]] = None,
-        impute_value: float = 0.5
+        impute_value: float = 0.5,
+        chrom_index: Optional[Dict[str, int]] = None,
     ):
         self.samples = samples
         self.annotation_level = annotation_level
@@ -104,6 +109,15 @@ class ChunkedVariantDataset(Dataset):
             self.gene_index = gene_index
 
         self.num_genes = len(self.gene_index)
+
+        # Build chromosome index if not provided. Always populated so the model
+        # can run in chromosome-aware mode by default.
+        if chrom_index is None:
+            self.chrom_index = build_chrom_index(samples)
+        else:
+            self.chrom_index = chrom_index
+
+        self.num_chromosomes = len(self.chrom_index)
         covariate_lengths = set()
 
         # Build chunk metadata
@@ -194,7 +208,8 @@ class ChunkedVariantDataset(Dataset):
             self.annotation_level,
             self.gene_index,
             max_variants=None,  # Don't truncate - chunk is already sized
-            impute_value=self.impute_value
+            impute_value=self.impute_value,
+            chrom_index=self.chrom_index,
         )
 
         # Add chunk metadata
@@ -234,6 +249,11 @@ def collate_chunks(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
     """
     batch_size = len(batch)
     has_covariates = any('covariates' in sample for sample in batch)
+    has_chrom_ids = any('chrom_ids' in sample for sample in batch)
+    if has_chrom_ids and not all('chrom_ids' in sample for sample in batch):
+        raise ValueError(
+            "Mixed chunk batches with and without 'chrom_ids' are not supported."
+        )
 
     # Get max variants in this batch of chunks
     max_variants = max(sample['features'].shape[0] for sample in batch)
@@ -256,6 +276,8 @@ def collate_chunks(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
             first_with_cov = next(s for s in batch if 'covariates' in s)
             cov_dim = first_with_cov['covariates'].shape[0]
             collated['covariates'] = torch.zeros((batch_size, cov_dim), dtype=torch.float32)
+        if has_chrom_ids:
+            collated['chrom_ids'] = torch.zeros((batch_size, 0), dtype=torch.long)
         return collated
 
     feature_dim = batch[0]['features'].shape[1]
@@ -276,6 +298,10 @@ def collate_chunks(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
         first_with_cov = next(s for s in batch if 'covariates' in s)
         cov_dim = first_with_cov['covariates'].shape[0]
         covariates = torch.zeros((batch_size, cov_dim), dtype=torch.float32)
+    chrom_ids_padded = (
+        torch.zeros((batch_size, max_variants), dtype=torch.long)
+        if has_chrom_ids else None
+    )
 
     # Fill in the data
     for i, sample in enumerate(batch):
@@ -286,6 +312,8 @@ def collate_chunks(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
             positions_padded[i, :n_variants] = sample['positions']
             gene_ids_padded[i, :n_variants] = sample['gene_ids']
             mask_padded[i, :n_variants] = sample['mask']
+            if has_chrom_ids:
+                chrom_ids_padded[i, :n_variants] = sample['chrom_ids']
 
         labels[i] = sample['label']
         sex[i] = sample['sex']
@@ -314,4 +342,6 @@ def collate_chunks(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
     if covariates is not None:
         collated['covariates'] = covariates
+    if has_chrom_ids:
+        collated['chrom_ids'] = chrom_ids_padded
     return collated

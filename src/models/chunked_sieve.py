@@ -149,7 +149,8 @@ class ChunkedSIEVEModel(nn.Module):
         original_sample_indices: Optional[torch.Tensor] = None,
         covariates: Optional[torch.Tensor] = None,
         return_attention: bool = False,
-        return_intermediate: bool = False
+        return_intermediate: bool = False,
+        chrom_ids: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, Optional[Dict]]:
         """
         Forward pass with automatic chunk aggregation.
@@ -204,17 +205,24 @@ class ChunkedSIEVEModel(nn.Module):
             )
             if hasattr(self.base_model, 'num_covariates') and self.base_model.num_covariates > 0:
                 kwargs['covariates'] = covariates
+            if chrom_ids is not None:
+                kwargs['chrom_ids'] = chrom_ids
             return self.base_model(
                 features, positions, gene_ids, mask,
                 **kwargs,
             )
 
         # Process all chunks through base model to get gene embeddings
-        chunk_gene_embeddings, chunk_intermediates = self.base_model(
-            features, positions, gene_ids, mask,
+        base_kwargs = dict(
             return_embeddings=True,  # Get gene embeddings, not logits
             return_attention=return_attention,
-            return_intermediate=return_intermediate
+            return_intermediate=return_intermediate,
+        )
+        if chrom_ids is not None:
+            base_kwargs['chrom_ids'] = chrom_ids
+        chunk_gene_embeddings, chunk_intermediates = self.base_model(
+            features, positions, gene_ids, mask,
+            **base_kwargs,
         )
         # chunk_gene_embeddings: [num_chunks, num_genes, latent_dim]
 
@@ -376,6 +384,9 @@ class ChunkedSIEVEModel(nn.Module):
         gene_ids = batch['gene_ids'].to(device)
         mask = batch['mask'].to(device)
         labels = batch['labels'].to(device)
+        chrom_ids = batch.get('chrom_ids')
+        if chrom_ids is not None:
+            chrom_ids = chrom_ids.to(device)
 
         chunk_indices = batch.get('chunk_indices')
         total_chunks = batch.get('total_chunks')
@@ -438,7 +449,8 @@ class ChunkedSIEVEModel(nn.Module):
             features, positions, gene_ids, mask,
             chunk_indices, total_chunks, original_sample_indices,
             covariates=sample_covariates,
-            return_intermediate=need_embeddings
+            return_intermediate=need_embeddings,
+            chrom_ids=chrom_ids,
         )
         # Ensure 1D tensor for loss computation
         if predictions.dim() > 1:
@@ -470,6 +482,7 @@ class ChunkedSIEVEModel(nn.Module):
         chunk_indices: Optional[torch.Tensor] = None,
         total_chunks: Optional[torch.Tensor] = None,
         original_sample_indices: Optional[torch.Tensor] = None,
+        chrom_ids: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """
         Get aggregated gene embeddings for explainability.
@@ -480,6 +493,8 @@ class ChunkedSIEVEModel(nn.Module):
             Variant data
         chunk_indices, total_chunks, original_sample_indices : Optional[torch.Tensor]
             Chunking metadata
+        chrom_ids : Optional[torch.Tensor]
+            Chromosome indices, shape (batch, num_variants).
 
         Returns
         -------
@@ -489,7 +504,8 @@ class ChunkedSIEVEModel(nn.Module):
         _, intermediates = self.forward(
             features, positions, gene_ids, mask,
             chunk_indices, total_chunks, original_sample_indices,
-            return_intermediate=True
+            return_intermediate=True,
+            chrom_ids=chrom_ids,
         )
 
         if intermediates is None:
@@ -516,6 +532,7 @@ class ChunkedSIEVEModel(nn.Module):
         chunk_indices: Optional[torch.Tensor] = None,
         total_chunks: Optional[torch.Tensor] = None,
         original_sample_indices: Optional[torch.Tensor] = None,
+        chrom_ids: Optional[torch.Tensor] = None,
     ) -> List[torch.Tensor]:
         """
         Get attention patterns for explainability.
@@ -529,6 +546,8 @@ class ChunkedSIEVEModel(nn.Module):
             Variant data
         chunk_indices, total_chunks, original_sample_indices : Optional[torch.Tensor]
             Chunking metadata
+        chrom_ids : Optional[torch.Tensor]
+            Chromosome indices, shape (batch, num_variants).
 
         Returns
         -------
@@ -541,7 +560,8 @@ class ChunkedSIEVEModel(nn.Module):
         _, intermediates = self.forward(
             features, positions, gene_ids, mask,
             chunk_indices, total_chunks, original_sample_indices,
-            return_attention=True
+            return_attention=True,
+            chrom_ids=chrom_ids,
         )
 
         if intermediates is None or 'attention_weights' not in intermediates:

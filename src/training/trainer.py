@@ -160,6 +160,9 @@ class Trainer:
                 gene_ids = batch['gene_ids'].to(self.device)
                 mask = batch['mask'].to(self.device)
                 labels = batch['labels'].to(self.device)
+                chrom_ids = batch.get('chrom_ids')
+                if chrom_ids is not None:
+                    chrom_ids = chrom_ids.to(self.device)
 
                 # Build covariates if available
                 covariates = None
@@ -180,7 +183,8 @@ class Trainer:
                     logits, intermediates = self.model(
                         features, positions, gene_ids, mask,
                         covariates=covariates,
-                        return_intermediate=True
+                        return_intermediate=True,
+                        chrom_ids=chrom_ids,
                     )
                     variant_embeddings = intermediates['variant_embeddings']
                     loss_dict = self.loss_fn(
@@ -194,6 +198,7 @@ class Trainer:
                     logits, _ = self.model(
                         features, positions, gene_ids, mask,
                         covariates=covariates,
+                        chrom_ids=chrom_ids,
                     )
                     loss_dict = self.loss_fn(logits=logits, labels=labels)
 
@@ -310,6 +315,9 @@ class Trainer:
                 gene_ids = batch['gene_ids'].to(self.device)
                 mask = batch['mask'].to(self.device)
                 labels = batch['labels'].to(self.device)
+                chrom_ids = batch.get('chrom_ids')
+                if chrom_ids is not None:
+                    chrom_ids = chrom_ids.to(self.device)
 
                 # Build covariates if available
                 covariates = None
@@ -329,7 +337,8 @@ class Trainer:
                     logits, intermediates = self.model(
                         features, positions, gene_ids, mask,
                         covariates=covariates,
-                        return_intermediate=True
+                        return_intermediate=True,
+                        chrom_ids=chrom_ids,
                     )
                     variant_embeddings = intermediates['variant_embeddings']
                     loss_dict = self.loss_fn(
@@ -342,6 +351,7 @@ class Trainer:
                     logits, _ = self.model(
                         features, positions, gene_ids, mask,
                         covariates=covariates,
+                        chrom_ids=chrom_ids,
                     )
                     loss_dict = self.loss_fn(logits=logits, labels=labels)
 
