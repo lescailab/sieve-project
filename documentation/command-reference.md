@@ -104,7 +104,7 @@ python scripts/train.py [OPTIONS]
 | `--gradient-accumulation-steps` | int | 1 | Gradient accumulation |
 | `--epochs` | int | 100 | Maximum epochs |
 | `--lr` | float | 0.001 | Learning rate |
-| `--lambda-attr` | float | 0.0 | Attribution regularisation |
+| `--lambda-attr` | float | 0.0 | Embedding sparsity regularisation |
 | `--early-stopping` | int | 10 | Early stopping patience |
 | `--gradient-clip` | float | None | Gradient clipping value |
 
@@ -243,7 +243,7 @@ This wrapper is configured through environment variables.
 
 | Variable | Required | Description |
 |---------|----------|-------------|
-| `PROJECT_DIR` | Yes | Cohort project root directory (e.g. `/data/CohortName`) |
+| `PROJECT_DIR` | Yes | Cohort project root directory (e.g. `/path/to/project`) |
 | `LEVEL` | Yes | Annotation level to run (e.g. `L3`) |
 | `NULL_DATA` | No | Pre-existing permuted `.pt` file — skips Step 1 if set |
 | `DEVICE` | No | `cuda` or `cpu` (default: `cuda`) |
@@ -259,7 +259,7 @@ When `PROJECT_DIR` and `LEVEL` are set, all paths are derived automatically:
 
 **Preferred example**:
 ```bash
-PROJECT_DIR=/data/CohortName \
+PROJECT_DIR=/path/to/project \
 LEVEL=L3 \
 DEVICE=cuda \
 bash scripts/run_null_baseline_analysis.sh
@@ -323,11 +323,11 @@ python scripts/compare_attributions.py \
 **Example (project-dir routing)**:
 ```bash
 python scripts/compare_attributions.py \
-    --real /data/CohortName/real_experiments/L3/attributions/sieve_variant_rankings.csv \
-    --null /data/CohortName/null_baselines/L3/attributions/sieve_variant_rankings.csv \
-    --project-dir /data/CohortName \
+    --real /path/to/project/real_experiments/L3/attributions/sieve_variant_rankings.csv \
+    --null /path/to/project/null_baselines/L3/attributions/sieve_variant_rankings.csv \
+    --project-dir /path/to/project \
     --genome-build GRCh37
-# Output: /data/CohortName/real_experiments/L3/attributions/
+# Output: /path/to/project/real_experiments/L3/attributions/
 ```
 
 ---
@@ -412,11 +412,11 @@ python scripts/correct_chrx_bias.py \
 **Example (project-dir routing)**:
 ```bash
 python scripts/correct_chrx_bias.py \
-    --rankings /data/CohortName/real_experiments/L3/attributions/variant_rankings_with_significance.csv \
-    --project-dir /data/CohortName \
+    --rankings /path/to/project/real_experiments/L3/attributions/variant_rankings_with_significance.csv \
+    --project-dir /path/to/project \
     --include-sex-chroms \
     --genome-build GRCh37
-# Output: /data/CohortName/real_experiments/L3/attributions/corrected/
+# Output: /path/to/project/real_experiments/L3/attributions/corrected/
 ```
 
 ---

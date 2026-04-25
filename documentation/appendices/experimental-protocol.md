@@ -8,9 +8,9 @@ This appendix describes the rigorous experimental protocol for evaluating SIEVE.
 
 #### Question 1: Can deep learning discover variants that annotation-based methods miss?
 
-**Hypothesis**: Models trained with minimal annotations will identify some disease-associated variants that models using full annotations rank lower, because the annotation-heavy models may over-rely on prior knowledge.
+**Hypothesis**: Models trained with minimal annotations will identify some disease-associated variants that models using current functional annotations rank lower, because annotation-informed models may over-rely on prior knowledge.
 
-**Experiment**: Annotation ablation study comparing variant rankings across annotation levels L0-L4.
+**Experiment**: Annotation ablation study comparing variant rankings across annotation levels L0-L3. L4 is currently identical to L3 and can be run only as a compatibility check.
 
 #### Question 2: Do spatial relationships between variants carry disease signal?
 
@@ -102,20 +102,20 @@ Determine whether models with minimal annotations can discover variants that ann
 
 #### Protocol
 
-1. **Train 5 models at each annotation level** (L0 through L4) using identical architecture and hyperparameters except for input dimension
+1. **Train replicate models at each implemented annotation level** (L0 through L3 as the primary comparison; L4 is currently identical to L3 and is retained as a compatibility placeholder) using identical architecture and hyperparameters except for input dimension
 
 2. **For each model**, compute integrated gradients to obtain variant-level attribution scores
 
 3. **Compare variant rankings** across annotation levels:
    - Top 100 variants at each level
    - Overlap analysis (Jaccard similarity)
-   - Identify "L0-specific" variants: high rank at L0, low rank at L4
-   - Identify "L4-specific" variants: high rank at L4, low rank at L0
+   - Identify "L0-specific" variants: high rank at L0, low rank at L3
+   - Identify "L3-specific" variants: high rank at L3, low rank at L0
 
 4. **Biological interpretation**:
    - Are L0-specific variants in genes not annotated as pathogenic?
    - Are they enriched for regulatory regions or novel mechanisms?
-   - Do L4-specific variants simply have high CADD/SIFT scores?
+   - Do L3-specific variants simply have high SIFT or PolyPhen scores?
 
 #### Expected Outcomes
 
@@ -126,7 +126,7 @@ Determine whether models with minimal annotations can discover variants that ann
 
 **If hypothesis is refuted**:
 - L0 model fails to learn (AUC ~0.5), suggesting annotations are necessary
-- All high-ranking variants at L0 are subset of L4 rankings
+- All high-ranking variants at L0 are a subset of L3 rankings
 - This would still be informative: it means annotation-free discovery is not feasible for this phenotype
 
 ### Experiment 2: Position-Aware vs Position-Agnostic
@@ -168,7 +168,7 @@ Determine whether training with embedding sparsity regularisation improves the s
 
 2. **For each λ_attr**, evaluate:
    - Classification performance (AUC)
-   - Attribution sparsity: entropy of normalised attributions
+   - Embedding concentration during training and attribution concentration after explanation
    - Ranking stability: Jaccard similarity of top 100 variants across CV folds
    - Biological enrichment: KEGG/Reactome pathway p-values
 
@@ -178,7 +178,7 @@ Determine whether training with embedding sparsity regularisation improves the s
 
 **If regularisation helps**:
 - Models with moderate λ_attr (0.05-0.1) have similar AUC but higher ranking stability
-- Top variants are more concentrated (lower entropy)
+- Top variants are more concentrated and rankings are more stable
 - Pathway enrichment p-values are lower (more meaningful discoveries)
 
 ### Experiment 4: Epistasis Detection and Validation
@@ -253,9 +253,8 @@ Report:
 
 1. **Annotation ablation**: Heatmap of Jaccard similarities between levels
 2. **Position-aware comparison**: ROC curves for SIEVE vs DeepSet
-3. **Attribution regularisation**: Pareto plot of AUC vs stability for different λ_attr
+3. **Embedding sparsity regularisation**: Pareto plot of AUC vs stability for different λ_attr
 4. **Epistasis**: Network diagram of significant epistatic pairs
 5. **Biological validation**: Pathway enrichment bar plot
 
 ---
-
