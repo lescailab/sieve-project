@@ -17,9 +17,18 @@ conda install -c <your-channel> sieve
 ```bash
 conda create -n sieve-build -c conda-forge python=3.11 conda>=26 conda-build>=26
 conda activate sieve-build
-CONDA_SOLVER=libmamba conda build conda --no-anaconda-upload --croot /tmp/sieve-conda-bld
+CONDA_SOLVER=libmamba conda build conda \
+    -c pytorch -c nvidia -c bioconda -c conda-forge \
+    --no-anaconda-upload \
+    --croot /tmp/sieve-conda-bld
 conda install -n sieve -c file:///tmp/sieve-conda-bld sieve
 ```
+
+Notes:
+
+- Channel order matters and must be exactly `-c pytorch -c nvidia -c bioconda -c conda-forge` on every platform, including `osx-arm64`. The pytorch and nvidia channels stay in the list even on Apple Silicon — they are no-ops there but keep the recipe identical across platforms and let bioconda packages (`cyvcf2`, `pysam`) resolve correctly.
+- `CONDA_SOLVER=libmamba` is required. The classic solver in conda 26 fails to inject the `__osx`/`__unix`/`__conda`/`__archspec` virtual packages and aborts with `ResolvePackageNotFound`.
+- Replace `osx-arm64` with `linux-64` or `linux-aarch64` in the install path on those platforms.
 
 ## Verify commands are available
 
