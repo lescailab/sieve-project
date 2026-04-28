@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sieve"
-version = "1.0.0"
+version = "1.2.0"
 description = "Sparse Interpretable Exome Variant Explainer - Deep learning for genetic variant discovery"
 readme = "README.md"
 license = {text = "MIT"}
@@ -108,6 +108,10 @@ sieve-aggregate-gene-interactions = "scripts.aggregate_gene_interactions:main"
 sieve-generate-gene-list = "scripts.generate_sieve_gene_list:main"
 sieve-extract-burden = "scripts.extract_validation_burden:main"
 sieve-test-burden-enrichment = "scripts.test_burden_enrichment:main"
+sieve-bootstrap-null-calibration = "scripts.bootstrap_null_calibration:main"
+sieve-validate-nonlinear-classifier = "scripts.validate_nonlinear_classifier:main"
+sieve-summarize-classifier-comparison = "scripts.summarize_classifier_comparison:main"
+sieve-plot-validation-burden = "scripts.plot_validation_burden:main"
 
 [project.urls]
 Homepage = "https://github.com/lescailab/dl-exome-img"

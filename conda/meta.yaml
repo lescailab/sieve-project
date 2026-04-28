@@ -1,4 +1,4 @@
-{% set version = "1.0.0" %}
+{% set version = "1.2.0" %}
 
 package:
   name: sieve
@@ -8,7 +8,7 @@ source:
   path: ..
 
 build:
-  number: 4
+  number: 1
   script: "{{ PYTHON }} -m pip install . --no-deps -vv"
 
 requirements:
@@ -33,6 +33,9 @@ requirements:
     - tqdm >=4.65.0
     - matplotlib >=3.7.0
     - seaborn >=0.12.0
+    - threadpoolctl >=3.0.0
+    - statsmodels >=0.14.0
+    - pyarrow >=12.0.0
 
 test:
   imports:
@@ -56,6 +59,13 @@ test:
     - sieve-audit-cooccurrence --help
     - sieve-epistasis-power-analysis --help
     - sieve-aggregate-gene-interactions --help
+    - sieve-generate-gene-list --help
+    - sieve-extract-burden --help
+    - sieve-test-burden-enrichment --help
+    - sieve-bootstrap-null-calibration --help
+    - sieve-validate-nonlinear-classifier --help
+    - sieve-summarize-classifier-comparison --help
+    - sieve-plot-validation-burden --help
 
 about:
   home: https://github.com/lescailab/sieve-project
