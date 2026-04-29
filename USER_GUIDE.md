@@ -2549,21 +2549,25 @@ The input is a VCF file with N samples and V variant sites. Each variant site v 
 Each variant v is represented by a feature vector x_v whose composition depends on the annotation level:
 
 **Level L0** (genotype only):
+
 $$
 x_v^{L0} = [d_v]
 $$
 
 **Level L1** (genotype + position):
+
 $$
 x_v^{L1} = [d_v, \mathrm{PE}(\mathrm{pos}_v)]
 $$
 
 **Level L2** (L1 + consequence):
+
 $$
 x_v^{L2} = [d_v, \mathrm{PE}(\mathrm{pos}_v), c_v]
 $$
 
 **Level L3** (L2 + SIFT/PolyPhen):
+
 $$
 x_v^{L3} =
 [d_v, \mathrm{PE}(\mathrm{pos}_v), c_v,
@@ -2572,9 +2576,11 @@ x_v^{L3} =
 $$
 
 **Level L4** (compatibility placeholder):
+
 $$
 x_v^{L4} = x_v^{L3}
 $$
+
 L4 is currently identical to L3 in the implementation and is reserved for
 future annotation features.
 
