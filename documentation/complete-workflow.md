@@ -166,7 +166,7 @@ python scripts/explain.py \
 
 ---
 
-#### Step 4: Null Baseline Analysis ⭐ **CRITICAL**
+#### Step 4: Null Baseline Analysis
 
 **Purpose**: Establish statistical significance of discoveries
 
