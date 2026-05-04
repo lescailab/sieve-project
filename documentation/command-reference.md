@@ -573,6 +573,7 @@ python scripts/aggregate_gene_interactions.py [OPTIONS]
 | `--min-cooccur-samples` | int | 5 | Minimum gene-pair co-occurrence |
 | `--top-k-genes` | int | 50 | Top genes to include |
 | `--min-gene-score` | float | 0.0 | Minimum gene score |
+| `--score-column` | str | `z_attribution` | Variant-level score column for ranking and gene scoring. Choices: `z_attribution`, `delta_rank`. Use `delta_rank` with a rank-calibrated input from `bootstrap_null_calibration.py`. |
 | `--significance-threshold` | str | `p_0.05` | Null-derived significance threshold to enforce when available |
 | `--min-significant-variants` | int | 1 | Minimum number of significant variants required for a gene |
 | `--allow-nonsignificant-genes` | flag | False | Allow genes with no null-significant variants |

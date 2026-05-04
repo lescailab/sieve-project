@@ -113,11 +113,30 @@ def parse_args() -> argparse.Namespace:
         help="Minimum gene score after all filtering (default: 0.0).",
     )
     parser.add_argument(
+        "--score-column",
+        choices=["z_attribution", "delta_rank"],
+        default="z_attribution",
+        help=(
+            "Variant-level score column used for gene scoring and ranking. "
+            "'z_attribution' uses chrX-corrected z-scores (default, preserves "
+            "continuity with earlier runs). 'delta_rank' uses the bootstrap-null-"
+            "anchored rank difference from bootstrap_null_calibration.py — "
+            "requires a rank-calibrated input CSV."
+        ),
+    )
+    parser.add_argument(
         "--significance-threshold",
         type=str,
         default="p_0.01",
         choices=["p_0.05", "p_0.01", "p_0.001"],
-        help="Null-derived significance threshold to use when significance is available.",
+        help=(
+            "Null-derived significance threshold to enforce when available. "
+            "Note: bootstrap empirical p-values are floored at 1/(B+1) (default "
+            "B=1000), so this acts as a coarse pass/fail filter rather than a "
+            "fine-grained significance gate. For ranking, prefer --score-column "
+            "delta_rank with a top-K cutoff via --top-k-genes, combined with "
+            "--allow-nonsignificant-genes to disable the floored-p filter."
+        ),
     )
     parser.add_argument(
         "--min-significant-variants",
@@ -132,8 +151,12 @@ def parse_args() -> argparse.Namespace:
         "--allow-nonsignificant-genes",
         action="store_true",
         help=(
-            "Keep genes without null-significant variants. By default the script "
-            "filters to genes supported by the null comparison when that information exists."
+            "Allow genes with no null-significant variants. Recommended when "
+            "running with --score-column delta_rank: keep --null-rankings so "
+            "the per-variant exceeds_null_* annotations remain in the output as "
+            "descriptive metadata, but pass this flag so gene selection and "
+            "ranking are driven by delta_rank rather than by the floored "
+            "bootstrap p-value gate."
         ),
     )
     return parser.parse_args()
@@ -313,6 +336,7 @@ def load_gene_rankings(
     significance_threshold: str,
     min_significant_variants: int,
     allow_nonsignificant_genes: bool,
+    score_column: str = "z_attribution",
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     """Load gene rankings, align them to corrected/null-aware variant support, and select genes."""
     gene_df = pd.read_csv(gene_rankings_path)
@@ -336,6 +360,16 @@ def load_gene_rankings(
         gene_df = gene_df.merge(gene_name_map, on="gene_id", how="left")
         if "gene_name" in gene_df.columns and not gene_df["gene_name"].isna().all():
             gene_df["gene_symbol"] = gene_df["gene_name"].astype(str)
+
+    if score_column == "delta_rank":
+        if "gene_delta_rank" not in gene_df.columns:
+            raise ValueError(
+                "Requested --score-column delta_rank but gene rankings file "
+                f"{gene_rankings_path} has no 'gene_delta_rank' column. "
+                "Run bootstrap_null_calibration.py to produce a rank-calibrated "
+                "gene-stats CSV before running this script with delta_rank."
+            )
+        gene_df["gene_score"] = pd.to_numeric(gene_df["gene_delta_rank"], errors="coerce")
 
     if "gene_score" not in gene_df.columns:
         if "gene_z_score" in gene_df.columns:
@@ -722,7 +756,17 @@ def main() -> None:
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     real_variant_df = pd.read_csv(args.variant_rankings)
-    real_variant_df = standardise_variant_rankings(real_variant_df)
+    real_variant_df = standardise_variant_rankings(
+        real_variant_df,
+        desired_score_column=args.score_column,
+    )
+    # annotate_with_null_significance always derives null thresholds from
+    # the z_attribution (or mean_attribution) space, regardless of --score-column.
+    # When --score-column delta_rank is used, variant_score is delta_rank and
+    # exceeds_null_* comparisons cross score spaces. This is intentional: the
+    # p-value floor at 1/(B+1) makes these flags a coarse descriptive annotation
+    # rather than a calibrated gate. Use --allow-nonsignificant-genes to disable
+    # gene filtering by these flags and rely on delta_rank ordering instead.
     real_variant_df, significance_metadata = annotate_with_null_significance(
         real_variant_df,
         null_rankings_path=args.null_rankings,
@@ -737,6 +781,7 @@ def main() -> None:
         significance_threshold=args.significance_threshold,
         min_significant_variants=args.min_significant_variants,
         allow_nonsignificant_genes=args.allow_nonsignificant_genes,
+        score_column=args.score_column,
     )
 
     logger.info("Loading preprocessed data from %s ...", args.preprocessed_data)
@@ -805,6 +850,7 @@ def main() -> None:
         **gene_metadata,
         "variant_rankings": str(args.variant_rankings),
         "gene_rankings": str(args.gene_rankings),
+        "score_column": args.score_column,
     }
     summary_path = args.output_dir / "gene_interaction_summary.yaml"
     write_summary(pairs_df, nodes_df, summary_path, summary_metadata)
