@@ -571,12 +571,15 @@ python scripts/aggregate_gene_interactions.py [OPTIONS]
 | `--cooccurrence` | path | - | Per-pair co-occurrence CSV for variant-level enrichment |
 | `--output-dir` | path | required | Output directory |
 | `--min-cooccur-samples` | int | 5 | Minimum gene-pair co-occurrence |
-| `--top-k-genes` | int | 50 | Top genes to include |
+| `--top-k-genes` | int list | `100` | Top-K gene set sizes. List supported (e.g. `100 2000`) for stability sweeps. Quadratic in K. |
 | `--min-gene-score` | float | 0.0 | Minimum gene score |
 | `--score-column` | str | `z_attribution` | Variant-level score column for ranking and gene scoring. Choices: `z_attribution`, `delta_rank`. Use `delta_rank` with a rank-calibrated input from `bootstrap_null_calibration.py`. |
 | `--significance-threshold` | str | `p_0.05` | Null-derived significance threshold to enforce when available |
 | `--min-significant-variants` | int | 1 | Minimum number of significant variants required for a gene |
 | `--allow-nonsignificant-genes` | flag | False | Allow genes with no null-significant variants |
+| `--correction` | str | `fdr_bh` | Multiple-testing correction for per-pair Fisher exact p-values. Choices: `none`, `bonferroni`, `fdr_bh`. |
+| `--alpha` | float | `0.05` | Significance level for the per-pair correction. |
+| `--alternative` | str | `greater` | Direction of the per-pair Fisher exact test. Choices: `greater` (excess co-occurrence; classical synthetic-lethal-style epistasis), `less` (deficit; selection against the double-carrier state), `two-sided` (either direction). Must be chosen before looking at the data. See `detailed-usage.md`. |
 
 This script is the preferred gene-level interaction workflow when you have null-comparison and chrX-corrected attribution outputs available.
 
@@ -597,7 +600,7 @@ python scripts/epistasis_power_analysis.py [OPTIONS]
 | `--epistasis-results` | path | - | `epistasis_validation.csv` if available |
 | `--output-dir` | path | required | Output directory |
 | `--alpha` | float | 0.05 | Family-wise significance level |
-| `--correction` | str | bonferroni | Multiple-testing correction [`bonferroni`, `fdr`] |
+| `--correction` | str | `fdr_bh` | Multiple-testing correction method for MDE planning. Choices: `bonferroni`, `fdr_bh`. The deprecated `fdr` value now errors out with a clear message; users should switch to `fdr_bh`. |
 
 Power is computed from the full `2x2` carrier table for each pair, not just the joint-carrier count. This avoids overstating power for near-ubiquitous common-common pairs.
 
@@ -752,6 +755,7 @@ Permutation-based enrichment test comparing SIEVE gene sets against random gene 
 | `--top-k` | int list | `50 100 200` | Gene set sizes to test |
 | `--covariates` | path | None | TSV with covariates for logistic regression |
 | `--consequence-types` | str list | `total` | Burden types to test: `total`, `missense`, `lof`, `synonymous` |
+| `--correction` | str | `fdr_bh` | Multiple-testing correction for the multi-top-K summary in the report. Choices: `bonferroni`, `fdr_bh`. |
 
 **Example**:
 ```bash

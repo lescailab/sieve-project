@@ -1,3 +1,5 @@
+import sys
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -6,10 +8,11 @@ from scipy import stats
 from scripts.epistasis_power_analysis import (
     add_pair_contingency_metrics,
     build_summary_metric_definitions,
-    compute_corrected_alpha,
+    compute_alpha_threshold,
     compute_effective_n_from_counts,
     compute_mde,
     estimate_sigma_synergy,
+    parse_args,
     summarise_mde_detection_rates,
     summarise_power_by_maf_bin,
 )
@@ -28,8 +31,34 @@ def test_compute_mde_matches_closed_form_solution():
     assert observed == pytest.approx(expected)
 
 
-def test_compute_corrected_alpha_bonferroni():
-    assert compute_corrected_alpha(0.05, 1000, "bonferroni") == pytest.approx(0.00005)
+def test_compute_alpha_threshold_bonferroni():
+    assert compute_alpha_threshold(0.05, 1000, "bonferroni") == pytest.approx(0.00005)
+
+
+def test_compute_alpha_threshold_fdr_bh_returns_alpha():
+    assert compute_alpha_threshold(0.05, 1000, "fdr_bh") == pytest.approx(0.05)
+
+
+def test_old_fdr_value_errors_out(monkeypatch, capsys):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "epistasis_power_analysis.py",
+            "--cooccurrence",
+            "cooccurrence_per_pair.csv",
+            "--cooccurrence-summary",
+            "cooccurrence_by_maf_bin.csv",
+            "--output-dir",
+            "power_analysis",
+            "--correction",
+            "fdr",
+        ],
+    )
+
+    with pytest.raises(SystemExit, match="2"):
+        parse_args()
+    assert "fdr_bh" in capsys.readouterr().err
 
 
 def test_compute_effective_n_requires_all_four_cells():

@@ -545,45 +545,130 @@ python scripts/compare_ablation_rankings.py \
 
 The non-linear classifier validation (`validate_nonlinear_classifier.py`) also supports `--score-column delta_rank`, which resolves automatically to the `gene_delta_rank` column in the gene-stats CSV. The recommended workflow is to run the validation twice with separate output TSVs — one primary run using `--score-column z_attribution` and one robustness run using `--score-column delta_rank` — and apply Benjamini-Hochberg FDR independently within each invocation across the full 16-cell grid. Do not pool the two sets of p-values into a single FDR correction, as that would halve statistical power and obscure whether the robustness finding survives on its own.
 
-#### Epistasis Aggregation Robustness Run Pattern
+#### Top-K Stability Sweep, Per-Pair FDR, and Direction of the Fisher Test
 
-`aggregate_gene_interactions.py` accepts `--score-column z_attribution` (default,
-preserves continuity) and `--score-column delta_rank` (bootstrap-informed view).
-Run the aggregation twice with separate output directories and compare the
-resulting gene-pair networks for stability of hub genes and top pairs:
+The recommended invocation for the gene-pair analysis is:
 
 ```bash
-# Primary view (chrX-corrected z-scores)
 python scripts/aggregate_gene_interactions.py \
     --preprocessed-data preprocessed_<cohort>.pt \
-    --variant-rankings results/<cohort>/real_experiments/L1/attributions/variant_rankings_rank_calibrated.csv \
-    --gene-rankings results/<cohort>/real_experiments/L1/attributions/gene_rankings_with_significance.csv \
-    --null-rankings results/<cohort>/null_baselines/L1/attributions/variant_rankings_with_significance.csv \
-    --cooccurrence results/<cohort>/epistasis_audit/cooccurrence_per_pair.csv \
-    --output-dir results/<cohort>/gene_interactions_z \
-    --score-column z_attribution \
-    --top-k-genes 50
-
-# Robustness view (bootstrap-informed)
-python scripts/aggregate_gene_interactions.py \
-    --preprocessed-data preprocessed_<cohort>.pt \
-    --variant-rankings results/<cohort>/real_experiments/L1/attributions/variant_rankings_rank_calibrated.csv \
-    --gene-rankings results/<cohort>/real_experiments/L1/attributions/gene_rankings_with_significance.csv \
-    --null-rankings results/<cohort>/null_baselines/L1/attributions/variant_rankings_with_significance.csv \
-    --cooccurrence results/<cohort>/epistasis_audit/cooccurrence_per_pair.csv \
-    --output-dir results/<cohort>/gene_interactions_delta \
+    --variant-rankings <rank-calibrated variant rankings CSV> \
+    --gene-rankings <calibrated gene stats CSV> \
+    --null-rankings <null variant rankings CSV> \
+    --cooccurrence <cooccurrence_per_pair.csv> \
+    --output-dir results/<cohort>/gene_interactions \
     --score-column delta_rank \
-    --top-k-genes 50 \
-    --allow-nonsignificant-genes
+    --allow-nonsignificant-genes \
+    --top-k-genes 100 \
+    --correction fdr_bh \
+    --alpha 0.05 \
+    --alternative greater
 ```
 
-Both runs require a rank-calibrated variant rankings CSV (output of
-`bootstrap_null_calibration.py`) and a gene-stats CSV that carries the
-`gene_delta_rank` column. The `--allow-nonsignificant-genes` flag on the
-`delta_rank` run keeps the per-variant `exceeds_null_*` annotations in the
-output as descriptive metadata but disables the floored bootstrap-p filter so
-that gene selection and pair ranking are driven entirely by `delta_rank`. The
-`z_attribution` run keeps the floored-p filter enabled by default for
-continuity with earlier numbers.
+This produces a single network at K=100 (the recommended primary value for
+interpretable hub analysis) with per-pair Benjamini-Hochberg FDR control on
+a one-sided Fisher exact test of carrier-state independence in the direction
+of excess co-occurrence. The `padj` and `reject` columns in
+`gene_pair_interactions.csv` flag pairs that survive the chosen correction.
+
+##### Choosing `--alternative`
+
+The Fisher exact test on the 2x2 carrier table can be run in three
+directions, each corresponding to a distinct scientific hypothesis. The
+choice is consequential and must be made *before* looking at the data -
+post-hoc switching of direction inflates Type I error and invalidates
+the FDR control.
+
+**`--alternative greater` (default).** Tests for *excess* co-occurrence
+relative to independence: pairs where carriers of both genes cluster
+together more often than carriers of either gene alone would predict.
+This is the appropriate direction for:
+
+- Classical synthetic-lethal or synergistic epistasis hypotheses, where
+  having both hits is jointly required (or jointly worsens) the phenotype.
+- Adult-onset cohort studies where ascertainment is not expected to select
+  against a specific double-carrier combination.
+- Most case-control studies of complex phenotype_x where the working
+  hypothesis is that risk variants compound rather than cancel.
+
+This is the right default for nearly all applications.
+
+**`--alternative less`.** Tests for *deficit* of co-occurrence: pairs
+where the double-carrier state appears less often than independence
+predicts. This is the appropriate direction for:
+
+- Early-onset or developmental phenotype_x studies where carriers of both
+  genes may not survive to recruitment, producing survivorship bias in the
+  observed cohort. The deficit is a secondary signal of an interaction
+  that is actively selected against in the population.
+- Compound heterozygous lethality screens.
+- Hypotheses about epistatic suppression - where one variant masks the
+  effect of another - under specific cohort-design conditions.
+
+This is not generally the right test for adult-onset phenotype_x cohorts,
+because deficit-of-co-occurrence in a recruited adult cohort is usually an
+artefact of recruitment criteria rather than a biological signal.
+
+**`--alternative two-sided`.** Tests for departure in either direction
+without prior commitment. Use when:
+
+- Genuine prior uncertainty exists about direction.
+- Reporting a methodological survey rather than a hypothesis test.
+- A reviewer or methods paper specifically requests a direction-agnostic
+  version.
+
+The cost is reduced power: at the same alpha, the two-sided test
+is approximately half as powerful as a correctly-specified one-sided
+test in each direction. Do not switch from one-sided to two-sided
+after seeing no rejections under one-sided - that is post-hoc selection
+of the test and inflates Type I error.
+
+##### Documenting the choice in the manuscript
+
+The `--alternative` value is recorded in the `fisher_alternative` field
+of `gene_interaction_summary.yaml`. When reporting results, state the
+direction explicitly: e.g. *"per-pair excess co-occurrence was tested
+with a one-sided Fisher exact test (`alternative='greater'`) under
+Benjamini-Hochberg FDR control at q < 0.05."* A reviewer cannot evaluate
+the FDR claim without knowing which direction was tested.
+
+##### Top-K stability sweep
+
+To run a stability sweep that aligns with the ablation analysis convention
+(K in {100, 2000}):
+
+```bash
+python scripts/aggregate_gene_interactions.py \
+    ... \
+    --top-k-genes 100 2000 \
+    --correction fdr_bh \
+    --alternative greater
+```
+
+This produces per-K outputs (`gene_pair_interactions_topK{100,2000}.csv`,
+matching network and summary files) plus a top-level
+`gene_interaction_summary_index.yaml` summarising both runs. K=2000 is
+quadratic - about 2 million pairs - and the resulting network is too dense
+for hub interpretation in isolation; its primary value is as a sensitivity
+check that the K=100 hub structure is robust to broader gene inclusion,
+not as a standalone analysis.
+
+**Note on the interaction score formula.** The score uses rank-quantile-
+normalised gene scores so that the ranking is invariant to `--score-column`
+choice. The raw `gene_score_a`/`_b` columns are retained alongside the new
+`gene_score_quantile_a`/`_b` columns for transparency. The score remains a
+heuristic for candidate ranking; use the `padj` and `obs_exp_ratio` columns
+for departure-from-independence inference.
+
+#### Power-Analysis Correction
+
+The `--correction` argument for `epistasis_power_analysis.py` now accepts
+`bonferroni` or `fdr_bh`; the default is `fdr_bh`. The previous `fdr` value
+was implemented identically to Bonferroni (a known bug) and now errors out
+with a message directing the user to `fdr_bh`. For power-analysis MDE
+planning under FDR control, the per-test threshold is taken as `alpha`
+itself rather than the rank-1 BH threshold (which equals Bonferroni); this
+is a conventional planning choice and avoids reporting MDEs that are
+conservative by a factor of the test count.
 
 ---

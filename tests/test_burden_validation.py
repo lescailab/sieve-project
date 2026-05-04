@@ -10,27 +10,26 @@ Covers:
 6. Integration test with test VCF
 """
 
-import tempfile
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pytest
 
-from scripts.generate_sieve_gene_list import generate_gene_list
 from scripts.extract_validation_burden import (
     classify_consequence,
     extract_burden_from_vcf,
     load_sieve_genes,
 )
+from scripts.generate_sieve_gene_list import generate_gene_list
 from scripts.test_burden_enrichment import (
     compute_burden_for_gene_set,
+    generate_report,
     logistic_regression_z,
     mannwhitney_test,
     run_enrichment_test,
 )
 from src.data.vcf_parser import load_phenotypes
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -317,6 +316,62 @@ class TestEnrichmentStatistics:
         # Empirical p should be low (moderate signal)
         assert result["permutation"]["empirical_p"] < 0.1
 
+    def test_burden_enrichment_report_uses_fdr_bh_by_default(self, tmp_path):
+        all_results = {
+            100: {
+                "n_sieve_genes": 100,
+                "n_sieve_genes_found": 100,
+                "observed": {
+                    "mean_cases": 2.0,
+                    "mean_controls": 1.0,
+                    "logistic_z": 2.5,
+                    "logistic_p": 0.01,
+                    "mannwhitney_U": 10.0,
+                    "mannwhitney_p": 0.02,
+                },
+                "permutation": {
+                    "empirical_p": 0.01,
+                    "n_permutations": 1000,
+                    "percentile_rank": 99.0,
+                },
+            },
+            200: {
+                "n_sieve_genes": 200,
+                "n_sieve_genes_found": 200,
+                "observed": {
+                    "mean_cases": 1.4,
+                    "mean_controls": 1.1,
+                    "logistic_z": 1.1,
+                    "logistic_p": 0.27,
+                    "mannwhitney_U": 20.0,
+                    "mannwhitney_p": 0.30,
+                },
+                "permutation": {
+                    "empirical_p": 0.20,
+                    "n_permutations": 1000,
+                    "percentile_rank": 80.0,
+                },
+            },
+        }
+
+        default_report = tmp_path / "default.md"
+        generate_report(all_results, default_report)
+        default_text = default_report.read_text()
+        default_heading = next(
+            line for line in default_text.splitlines() if line.startswith("## Multiple Testing")
+        )
+        assert "Benjamini-Hochberg" in default_heading
+        assert "Bonferroni" not in default_heading
+
+        bonferroni_report = tmp_path / "bonferroni.md"
+        generate_report(all_results, bonferroni_report, correction="bonferroni")
+        bonferroni_text = bonferroni_report.read_text()
+        bonferroni_heading = next(
+            line for line in bonferroni_text.splitlines() if line.startswith("## Multiple Testing")
+        )
+        assert "Bonferroni" in bonferroni_heading
+        assert "Benjamini-Hochberg" not in bonferroni_heading
+
 
 # ---------------------------------------------------------------------------
 # Test burden extraction with real test VCF
@@ -465,8 +520,8 @@ class TestIntegration:
 
         # Step 2: Extract burden with full matrix
         target_gene_sets = {
-            5: set(g.upper() for g in known_genes[:5]),
-            10: set(g.upper() for g in known_genes),
+            5: {g.upper() for g in known_genes[:5]},
+            10: {g.upper() for g in known_genes},
         }
 
         burden_dfs, summaries, full_matrix, metadata, _ = extract_burden_from_vcf(
@@ -497,7 +552,7 @@ class TestIntegration:
         labels = np.array([phenotypes[s] for s in common_samples])
         bg_genes = list(matrix_aligned.columns)
 
-        sieve_genes_top5 = set(g.upper() for g in known_genes[:5])
+        sieve_genes_top5 = {g.upper() for g in known_genes[:5]}
 
         result = run_enrichment_test(
             gene_matrix=matrix_aligned,

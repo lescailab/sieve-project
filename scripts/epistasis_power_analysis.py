@@ -21,9 +21,9 @@ import argparse
 import logging
 import sys
 from pathlib import Path
-from typing import Dict, Optional, Tuple
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
@@ -43,7 +43,7 @@ logger = logging.getLogger(__name__)
 
 def estimate_noise_from_null_attributions(
     null_npz_path: str,
-) -> Tuple[float, str]:
+) -> tuple[float, str]:
     """
     Estimate synergy noise from null-model attribution scores.
 
@@ -84,7 +84,7 @@ def estimate_noise_from_null_attributions(
 
 def estimate_noise_from_real_attributions(
     real_npz_path: str,
-) -> Tuple[float, str]:
+) -> tuple[float, str]:
     """
     Estimate synergy noise from inter-sample variance of real attribution scores.
 
@@ -103,8 +103,8 @@ def estimate_noise_from_real_attributions(
     metadata = data["metadata"]
 
     # Collect scores keyed by (chrom, position) across samples
-    position_scores: Dict[Tuple, list] = {}
-    for sample_scores, sample_meta in zip(variant_scores, metadata):
+    position_scores: dict[tuple, list] = {}
+    for sample_scores, sample_meta in zip(variant_scores, metadata, strict=False):
         if sample_scores is None or len(sample_scores) == 0:
             continue
         meta = sample_meta if isinstance(sample_meta, dict) else sample_meta.item()
@@ -140,7 +140,7 @@ def estimate_noise_from_real_attributions(
 
 def estimate_noise_from_epistasis_results(
     epistasis_csv_path: str,
-) -> Tuple[float, str]:
+) -> tuple[float, str]:
     """
     Estimate synergy noise directly from observed synergy scores.
 
@@ -169,10 +169,10 @@ def estimate_noise_from_epistasis_results(
 
 
 def estimate_sigma_synergy(
-    real_npz: Optional[str],
-    null_npz: Optional[str],
-    epistasis_csv: Optional[str],
-) -> Tuple[float, str]:
+    real_npz: str | None,
+    null_npz: str | None,
+    epistasis_csv: str | None,
+) -> tuple[float, str]:
     """
     Estimate synergy noise using the best available data source.
 
@@ -302,35 +302,35 @@ def compute_effective_n_from_counts(
     return effective_n
 
 
-def compute_corrected_alpha(
+def compute_alpha_threshold(
     alpha: float,
     n_tests: int,
-    method: str = "bonferroni",
+    method: str = "fdr_bh",
 ) -> float:
     """
-    Compute corrected significance threshold.
+    Compute a per-test significance threshold for power-analysis purposes.
 
-    Parameters
-    ----------
-    alpha : float
-        Family-wise error rate.
-    n_tests : int
-        Number of tests.
-    method : str
-        ``'bonferroni'`` or ``'fdr'``.
+    For 'bonferroni', returns alpha / n_tests (the textbook FWER threshold).
 
-    Returns
-    -------
-    float
-        Corrected per-test alpha.
+    For 'fdr_bh', returns alpha unchanged. The BH procedure controls FDR
+    by adjusting p-values rather than the threshold; the most permissive
+    BH rejection threshold is alpha (achieved when every test is rejected
+    at rank N). Power calculations under FDR control therefore use alpha
+    itself as the planning threshold, which is a conventional choice (see
+    Liu & Hwang 2007 for the analogous treatment in genome-wide power
+    calculations) and is more representative of typical power than the
+    rank-1 BH threshold (which equals Bonferroni).
+
+    Note: this function is for power-analysis MDE calculations only. For
+    actually applying the correction to a vector of computed p-values,
+    use statsmodels.stats.multitest.multipletests directly.
     """
     if n_tests <= 0:
         return alpha
     if method == "bonferroni":
         return alpha / n_tests
-    elif method == "fdr":
-        # Approximate: use the most conservative BH threshold (rank 1)
-        return alpha / n_tests
+    elif method == "fdr_bh":
+        return alpha
     else:
         raise ValueError(f"Unknown correction method: {method}")
 
@@ -366,7 +366,7 @@ def minimum_effective_n_for_effect(
 
 def add_pair_contingency_metrics(
     cooccur_df: pd.DataFrame,
-    total_samples: Optional[int] = None,
+    total_samples: int | None = None,
 ) -> pd.DataFrame:
     """
     Add 2x2 contingency counts and effective sample size to a co-occurrence table.
@@ -435,7 +435,7 @@ def add_pair_contingency_metrics(
 
 def infer_total_samples_from_cooccurrence(
     cooccur_df: pd.DataFrame,
-) -> Optional[int]:
+) -> int | None:
     """Infer the cohort size from expected co-occurrence values."""
     required = {"freq_a", "freq_b", "expected_cooccur"}
     if not required.issubset(cooccur_df.columns):
@@ -495,8 +495,8 @@ def summarise_power_by_maf_bin(
 
 def estimate_common_pair_effective_fraction(
     per_pair_df: pd.DataFrame,
-    total_samples: Optional[int],
-) -> Optional[float]:
+    total_samples: int | None,
+) -> float | None:
     """Estimate the effective-information fraction for common-common pairs."""
     if total_samples is None or total_samples <= 0:
         return None
@@ -519,8 +519,8 @@ def estimate_common_pair_effective_fraction(
 
 def estimate_common_pair_cooccurrence_rate(
     per_pair_df: pd.DataFrame,
-    total_samples: Optional[int],
-) -> Optional[float]:
+    total_samples: int | None,
+) -> float | None:
     """Estimate the joint-carrier fraction for common-common pairs."""
     if total_samples is None or total_samples <= 0:
         return None
@@ -544,7 +544,7 @@ def estimate_common_pair_cooccurrence_rate(
 def summarise_mde_detection_rates(
     mde_values: pd.Series | np.ndarray,
     threshold: float = 0.1,
-) -> Dict[str, float | int | None]:
+) -> dict[str, float | int | None]:
     """
     Summarise detectable-effect rates across all pairs and finite-MDE pairs.
 
@@ -586,7 +586,7 @@ def summarise_mde_detection_rates(
     }
 
 
-def build_summary_metric_definitions() -> Dict[str, str]:
+def build_summary_metric_definitions() -> dict[str, str]:
     """Return human-readable explanations for power summary metrics."""
     return {
         "noise_estimation_method": (
@@ -786,12 +786,25 @@ def parse_args() -> argparse.Namespace:
         help="Family-wise significance level",
     )
     parser.add_argument(
-        "--correction", type=str, default="bonferroni",
-        choices=["bonferroni", "fdr"],
-        help="Multiple-testing correction method",
+        "--correction", type=str, default="fdr_bh",
+        metavar="{bonferroni,fdr_bh}",
+        help="Multiple-testing correction method for MDE planning",
     )
 
-    return parser.parse_args()
+    args = parser.parse_args()
+
+    if args.correction == "fdr":
+        parser.error(
+            "The 'fdr' value is no longer accepted because it was previously "
+            "implemented identically to Bonferroni. Use 'fdr_bh' for the "
+            "correct Benjamini-Hochberg procedure, or 'bonferroni' explicitly."
+        )
+    if args.correction not in {"bonferroni", "fdr_bh"}:
+        parser.error(
+            "--correction must be one of: bonferroni, fdr_bh"
+        )
+
+    return args
 
 
 def main() -> None:
@@ -864,7 +877,7 @@ def main() -> None:
             "No pairs met the all-cells >= 5 threshold. Using uncorrected alpha for "
             "descriptive MDE calculations."
         )
-    alpha_corrected = compute_corrected_alpha(
+    alpha_corrected = compute_alpha_threshold(
         args.alpha, max(n_testable, 1), args.correction,
     )
     print(f"\nSignificance level: alpha={args.alpha}")
