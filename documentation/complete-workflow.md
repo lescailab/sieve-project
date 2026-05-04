@@ -519,6 +519,38 @@ python scripts/generate_sieve_gene_list.py \
 
 This includes only genes whose `fdr_gene` is below 0.05. The gene significance is auto-discovered from `gene_rankings_with_significance.csv` in the same directory as the variant rankings, or from `corrected_gene_rankings.csv` if it contains `fdr_gene` (see `correct_chrx_bias.py`). Use `--gene-significance` to override the auto-discovery path.
 
+**Bootstrap-informed (`delta_rank`) gene list**:
+
+The same script accepts `--score-column delta_rank` when given the
+rank-calibrated variant rankings produced by `bootstrap_null_calibration.py`.
+The aggregation (`max` by default) is then taken over the variant-level
+`delta_rank` column, mirroring the `gene_delta_rank = max(delta_rank)` rule
+used elsewhere in the pipeline.
+
+```bash
+for level in L0 L1 L2 L3; do
+    python scripts/generate_sieve_gene_list.py \
+        --variant-rankings results/${level}_attribution_comparison/corrected/variant_rankings_rank_calibrated.csv \
+        --output validation/sieve_gene_lists/sieve_genes.tsv \
+        --ablation-level ${level} \
+        --score-column delta_rank \
+        --aggregation max
+done
+```
+
+This produces a parallel set of `L0_sieve_genes.tsv` ... `L3_sieve_genes.tsv`
+gene lists ranked by `delta_rank`. Feed these into
+`extract_validation_burden.py` and `test_burden_enrichment.py` exactly as the
+`z_attribution` lists are used. Run the burden enrichment twice — once on each
+gene-list family — and report both as primary and robustness views, applying
+BH-FDR independently within each family across the `{level × top-k ×
+consequence-class}` grid. Do not pool the two families into a single FDR
+correction.
+
+Note: `--fdr-threshold` and `--min-null-threshold` continue to rely on the
+bootstrap empirical p-value, which is floored at `1/(B+1)`. For `delta_rank`
+gene lists, prefer fixed top-k cutoffs over `--fdr-threshold`.
+
 **Output format** (`sieve_genes.tsv`):
 ```
 gene_name    gene_rank    gene_score    n_variants    chromosome

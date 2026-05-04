@@ -545,4 +545,45 @@ python scripts/compare_ablation_rankings.py \
 
 The non-linear classifier validation (`validate_nonlinear_classifier.py`) also supports `--score-column delta_rank`, which resolves automatically to the `gene_delta_rank` column in the gene-stats CSV. The recommended workflow is to run the validation twice with separate output TSVs — one primary run using `--score-column z_attribution` and one robustness run using `--score-column delta_rank` — and apply Benjamini-Hochberg FDR independently within each invocation across the full 16-cell grid. Do not pool the two sets of p-values into a single FDR correction, as that would halve statistical power and obscure whether the robustness finding survives on its own.
 
+#### Epistasis Aggregation Robustness Run Pattern
+
+`aggregate_gene_interactions.py` accepts `--score-column z_attribution` (default,
+preserves continuity) and `--score-column delta_rank` (bootstrap-informed view).
+Run the aggregation twice with separate output directories and compare the
+resulting gene-pair networks for stability of hub genes and top pairs:
+
+```bash
+# Primary view (chrX-corrected z-scores)
+python scripts/aggregate_gene_interactions.py \
+    --preprocessed-data preprocessed_<cohort>.pt \
+    --variant-rankings results/<cohort>/real_experiments/L1/attributions/variant_rankings_rank_calibrated.csv \
+    --gene-rankings results/<cohort>/real_experiments/L1/attributions/gene_rankings_with_significance.csv \
+    --null-rankings results/<cohort>/null_baselines/L1/attributions/variant_rankings_with_significance.csv \
+    --cooccurrence results/<cohort>/epistasis_audit/cooccurrence_per_pair.csv \
+    --output-dir results/<cohort>/gene_interactions_z \
+    --score-column z_attribution \
+    --top-k-genes 50
+
+# Robustness view (bootstrap-informed)
+python scripts/aggregate_gene_interactions.py \
+    --preprocessed-data preprocessed_<cohort>.pt \
+    --variant-rankings results/<cohort>/real_experiments/L1/attributions/variant_rankings_rank_calibrated.csv \
+    --gene-rankings results/<cohort>/real_experiments/L1/attributions/gene_rankings_with_significance.csv \
+    --null-rankings results/<cohort>/null_baselines/L1/attributions/variant_rankings_with_significance.csv \
+    --cooccurrence results/<cohort>/epistasis_audit/cooccurrence_per_pair.csv \
+    --output-dir results/<cohort>/gene_interactions_delta \
+    --score-column delta_rank \
+    --top-k-genes 50 \
+    --allow-nonsignificant-genes
+```
+
+Both runs require a rank-calibrated variant rankings CSV (output of
+`bootstrap_null_calibration.py`) and a gene-stats CSV that carries the
+`gene_delta_rank` column. The `--allow-nonsignificant-genes` flag on the
+`delta_rank` run keeps the per-variant `exceeds_null_*` annotations in the
+output as descriptive metadata but disables the floored bootstrap-p filter so
+that gene selection and pair ranking are driven entirely by `delta_rank`. The
+`z_attribution` run keeps the floored-p filter enabled by default for
+continuity with earlier numbers.
+
 ---
