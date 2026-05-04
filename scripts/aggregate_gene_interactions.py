@@ -760,6 +760,13 @@ def main() -> None:
         real_variant_df,
         desired_score_column=args.score_column,
     )
+    # annotate_with_null_significance always derives null thresholds from
+    # the z_attribution (or mean_attribution) space, regardless of --score-column.
+    # When --score-column delta_rank is used, variant_score is delta_rank and
+    # exceeds_null_* comparisons cross score spaces. This is intentional: the
+    # p-value floor at 1/(B+1) makes these flags a coarse descriptive annotation
+    # rather than a calibrated gate. Use --allow-nonsignificant-genes to disable
+    # gene filtering by these flags and rely on delta_rank ordering instead.
     real_variant_df, significance_metadata = annotate_with_null_significance(
         real_variant_df,
         null_rankings_path=args.null_rankings,

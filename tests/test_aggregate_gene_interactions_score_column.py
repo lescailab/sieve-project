@@ -102,9 +102,15 @@ def _make_gene_rankings(tmp_path: Path, include_gene_delta_rank: bool = True) ->
 def _make_null_rankings(tmp_path: Path) -> Path:
     """Write a minimal null rankings CSV with uniformly low z_attribution scores.
 
-    All real variant scores (z_attribution or delta_rank) exceed these null
-    thresholds, so every gene gets at least one 'significant' variant when
-    annotate_with_null_significance is called.
+    annotate_with_null_significance always derives null thresholds from the
+    z_attribution (or mean_attribution) column of the null file, regardless of
+    which --score-column is active. When --score-column delta_rank is used,
+    exceeds_null_* comparisons therefore cross score spaces; the threshold
+    functions as a coarse descriptive annotation rather than a calibrated gate.
+    The fixture uses very low z_attribution values (-10.0) so that every real
+    variant_score — whether z_attribution or delta_rank — exceeds the threshold,
+    keeping all genes marked as 'significant' and avoiding null-gate interference
+    in tests that focus on delta_rank gene selection.
     """
     rows = [
         {"gene_name": f"NULL_G{i}", "chromosome": "1", "position": i * 100,
@@ -288,7 +294,7 @@ def test_score_column_delta_rank_missing_column_errors_cleanly(
         ],
     )
 
-    with pytest.raises(Exception, match="delta_rank"):
+    with pytest.raises(ValueError, match="delta_rank"):
         interactions.main()
 
 
@@ -318,6 +324,6 @@ def test_score_column_delta_rank_missing_gene_column_errors_cleanly(
         ],
     )
 
-    with pytest.raises(Exception, match="gene_delta_rank") as exc_info:
+    with pytest.raises(ValueError, match="gene_delta_rank") as exc_info:
         interactions.main()
     assert "bootstrap_null_calibration" in str(exc_info.value)
