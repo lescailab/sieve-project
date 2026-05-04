@@ -570,6 +570,8 @@ interpretable hub analysis) with per-pair Benjamini-Hochberg FDR control on
 a one-sided Fisher exact test of carrier-state independence in the direction
 of excess co-occurrence. The `padj` and `reject` columns in
 `gene_pair_interactions.csv` flag pairs that survive the chosen correction.
+The CLI default is now K=100; pass `--top-k-genes 50` explicitly to reproduce
+older default runs.
 
 ##### Choosing `--alternative`
 

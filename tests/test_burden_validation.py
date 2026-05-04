@@ -23,6 +23,7 @@ from scripts.extract_validation_burden import (
 )
 from scripts.generate_sieve_gene_list import generate_gene_list
 from scripts.test_burden_enrichment import (
+    _adjust_empirical_pvalues,
     compute_burden_for_gene_set,
     generate_report,
     logistic_regression_z,
@@ -371,6 +372,44 @@ class TestEnrichmentStatistics:
         )
         assert "Bonferroni" in bonferroni_heading
         assert "Benjamini-Hochberg" not in bonferroni_heading
+
+    def test_burden_enrichment_report_rejects_invalid_correction(self, tmp_path):
+        all_results = {
+            100: {
+                "n_sieve_genes": 100,
+                "n_sieve_genes_found": 100,
+                "observed": {
+                    "mean_cases": 2.0,
+                    "mean_controls": 1.0,
+                    "logistic_z": 2.5,
+                    "logistic_p": 0.01,
+                    "mannwhitney_U": 10.0,
+                    "mannwhitney_p": 0.02,
+                },
+                "permutation": {
+                    "empirical_p": 0.01,
+                    "n_permutations": 1000,
+                    "percentile_rank": 99.0,
+                },
+            },
+        }
+
+        with pytest.raises(ValueError, match="fdr_bh"):
+            generate_report(all_results, tmp_path / "invalid.md", correction="invalid")
+
+    def test_burden_enrichment_adjustment_uses_selected_correction(self):
+        all_results = {
+            100: {"permutation": {"empirical_p": 0.01}},
+            200: {"permutation": {"empirical_p": 0.03}},
+            300: {"permutation": {"empirical_p": 0.20}},
+        }
+
+        fdr = _adjust_empirical_pvalues(all_results, "fdr_bh")
+        bonferroni = _adjust_empirical_pvalues(all_results, "bonferroni")
+
+        assert [k for k, *_ in fdr] == [100, 200, 300]
+        assert [k for k, *_ in bonferroni] == [100, 200, 300]
+        assert fdr[1][2] < bonferroni[1][2]
 
 
 # ---------------------------------------------------------------------------

@@ -19,10 +19,46 @@ import numpy as np
 import pandas as pd
 import yaml
 from scipy import stats
+from statsmodels.stats.multitest import multipletests
 
 from src.data.vcf_parser import load_phenotypes
 
 logger = logging.getLogger(__name__)
+
+CORRECTION_LABELS = {
+    "bonferroni": "Bonferroni",
+    "fdr_bh": "Benjamini-Hochberg FDR",
+}
+
+
+def _validate_correction(correction: str) -> str:
+    """Return the display label for a supported multiple-testing correction."""
+    try:
+        return CORRECTION_LABELS[correction]
+    except KeyError as exc:
+        valid = ", ".join(sorted(CORRECTION_LABELS))
+        raise ValueError(
+            f"Unsupported correction method: {correction!r}. Expected one of: {valid}"
+        ) from exc
+
+
+def _adjust_empirical_pvalues(
+    all_results: dict[int, dict],
+    correction: str,
+    alpha: float = 0.05,
+) -> list[tuple[int, dict, float, bool]]:
+    """Apply the selected correction to empirical p-values across top-K results."""
+    _validate_correction(correction)
+    ordered_results = sorted(all_results.items())
+    if not ordered_results:
+        return []
+
+    pvals = np.array([res["permutation"]["empirical_p"] for _, res in ordered_results])
+    reject, padj, _, _ = multipletests(pvals, alpha=alpha, method=correction)
+    return [
+        (k, res, float(pad), bool(rej))
+        for (k, res), pad, rej in zip(ordered_results, padj, reject, strict=True)
+    ]
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -344,7 +380,7 @@ def generate_report(
     correction: str = "fdr_bh",
 ) -> None:
     """Generate markdown summary report."""
-    from statsmodels.stats.multitest import multipletests
+    method_label = _validate_correction(correction)
 
     lines = [
         f"# Cross-Cohort Burden Validation Report — {cohort_name}",
@@ -372,9 +408,7 @@ def generate_report(
     # Multiple testing
     n_tests = len(all_results)
     if n_tests > 1:
-        pvals = np.array([res["permutation"]["empirical_p"] for _, res in sorted(all_results.items())])
-        reject, padj, _, _ = multipletests(pvals, alpha=0.05, method=correction)
-        method_label = {"bonferroni": "Bonferroni", "fdr_bh": "Benjamini-Hochberg FDR"}[correction]
+        corrected_results = _adjust_empirical_pvalues(all_results, correction)
         lines.extend([
             f"## Multiple Testing Correction ({method_label})",
             "",
@@ -382,9 +416,7 @@ def generate_report(
             f"- Method: {correction}",
             "",
         ])
-        for (k, res), pad, rej in zip(
-            sorted(all_results.items()), padj, reject, strict=False
-        ):
+        for k, res, pad, rej in corrected_results:
             status = "significant" if rej else "not significant"
             lines.append(
                 f"- Top-{k}: empirical p = {res['permutation']['empirical_p']:.4f}, "
@@ -564,26 +596,24 @@ def main(argv: list[str] | None = None) -> None:
                 all_results[k] = result
 
     # Multiple testing correction across all tests
-    all_p_values = []
-    for _k, res in all_results.items():
-        all_p_values.append(res["permutation"]["empirical_p"])
-
-    n_tests = len(all_p_values)
+    corrected_results = _adjust_empirical_pvalues(all_results, args.correction)
+    n_tests = len(corrected_results)
     if n_tests > 0:
-        bonferroni_threshold = 0.05 / n_tests
         summary = {
             "n_tests": n_tests,
-            "bonferroni_threshold": float(bonferroni_threshold),
+            "correction_method": args.correction,
+            "alpha": 0.05,
             "top_k_values": args.top_k,
             "n_permutations": args.n_permutations,
             "seed": args.seed,
             "results": {},
         }
-        for k, res in all_results.items():
+        for k, res, pad, rej in corrected_results:
             emp_p = res["permutation"]["empirical_p"]
             summary["results"][f"top_{k}"] = {
                 "empirical_p": emp_p,
-                "significant_after_bonferroni": emp_p < bonferroni_threshold,
+                "adjusted_p": float(pad),
+                "significant": bool(rej),
                 "logistic_z": res["observed"]["logistic_z"],
                 "logistic_p": res["observed"]["logistic_p"],
             }

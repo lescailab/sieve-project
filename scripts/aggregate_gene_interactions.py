@@ -285,8 +285,8 @@ def _compute_rank_quantiles(scores: dict[str, float]) -> dict[str, float]:
     with non-finite or non-positive scores receive quantile 0.0 (excluded from
     contributing to interaction_score).
 
-    Ties are broken by competition ranking (method='min'), so tied genes share
-    the same quantile.
+    Ties share the best quantile spanned by their tied block, so tied top genes
+    all receive 1.0.
     """
     finite_items = [(g, s) for g, s in scores.items() if math.isfinite(s) and s > 0.0]
     if not finite_items:
@@ -301,7 +301,7 @@ def _compute_rank_quantiles(scores: dict[str, float]) -> dict[str, float]:
         j = i
         while j + 1 < n and genes_sorted[j + 1][1] == genes_sorted[i][1]:
             j += 1
-        rank_one_indexed = i + 1
+        rank_one_indexed = j + 1
         q = rank_one_indexed / n
         for k in range(i, j + 1):
             quantiles[genes_sorted[k][0]] = q
@@ -646,11 +646,13 @@ def compute_gene_pair_cooccurrence(
     gene_to_chrom: dict[str, str],
     gene_rankings_df: pd.DataFrame,
     alternative: str = "greater",
+    min_cooccur_samples: int = 0,
 ) -> pd.DataFrame:
     """Compute co-occurrence statistics for all pairs among the top genes.
 
     Rank quantiles are computed within the supplied top-gene set so the
     interaction score is scale-invariant across --score-column choices.
+    Pairs below min_cooccur_samples are skipped before Fisher testing.
     Per-pair Fisher exact p-values are computed for the carrier contingency table
     using the supplied alternative hypothesis direction.
     """
@@ -684,6 +686,9 @@ def compute_gene_pair_cooccurrence(
         cooccur = samples_a & samples_b
 
         n_cooccur = len(cooccur)
+        if n_cooccur < min_cooccur_samples:
+            continue
+
         n_cooccur_cases = sum(1 for sample_idx in cooccur if sample_labels.get(sample_idx) == 1)
         n_cooccur_controls = n_cooccur - n_cooccur_cases
 
@@ -1057,17 +1062,14 @@ def main() -> None:
             gene_to_chrom=gene_to_chrom,
             gene_rankings_df=gene_rankings_df,
             alternative=args.alternative,
+            min_cooccur_samples=args.min_cooccur_samples,
         )
 
         if cooccurrence_df is not None and not pairs_df.empty:
             pairs_df = enrich_with_variant_cooccurrence(pairs_df, cooccurrence_df)
 
-        before = len(pairs_df)
-        if not pairs_df.empty:
-            pairs_df = pairs_df[pairs_df["n_cooccur"] >= args.min_cooccur_samples].copy()
         logger.info(
-            "Filtered gene pairs: %d -> %d (min_cooccur_samples=%d)",
-            before,
+            "Retained %d gene pairs (min_cooccur_samples=%d)",
             len(pairs_df),
             args.min_cooccur_samples,
         )
