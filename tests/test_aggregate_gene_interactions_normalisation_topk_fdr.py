@@ -41,6 +41,17 @@ def _summary_yaml(out_dir: Path, suffix: str = "") -> dict:
 # ─── Task 1: rank-quantile tests ─────────────────────────────────────────────
 
 
+def test_rank_quantile_tied_maxima_receive_one() -> None:
+    quantiles = interactions._compute_rank_quantiles(
+        {"TOP_A": 10.0, "TOP_B": 10.0, "MID": 5.0, "LOW": 1.0}
+    )
+
+    assert quantiles["TOP_A"] == pytest.approx(1.0)
+    assert quantiles["TOP_B"] == pytest.approx(1.0)
+    assert quantiles["MID"] == pytest.approx(0.5)
+    assert quantiles["LOW"] == pytest.approx(0.25)
+
+
 def test_rank_quantile_invariance_across_score_columns(tmp_path: Path, monkeypatch) -> None:
     """Same gene importance ordering encoded in two score scales produces identical
     top-10 pair rankings by interaction_score."""

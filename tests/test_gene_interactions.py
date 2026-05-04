@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import pandas as pd
 import pytest
 
+import scripts.aggregate_gene_interactions as interactions_mod
 from scripts.aggregate_gene_interactions import (
     _normalise_gene_pair,
     annotate_with_null_significance,
@@ -139,6 +140,34 @@ def test_filtering_by_min_cooccurrence_behaves_as_expected():
         ("GENEA", "GENEB"),
         ("GENEA", "GENEC"),
     }
+
+
+def test_min_cooccur_filter_skips_fisher_for_discarded_pairs(monkeypatch):
+    samples = build_gene_samples()
+    gene_to_samples, sample_labels, gene_to_chrom, total_samples = build_carrier_indices(samples)
+    gene_rankings = pd.DataFrame(
+        {
+            "gene_symbol": ["GENEA", "GENEB", "GENEC"],
+            "gene_score": [4.0, 9.0, 1.0],
+            "gene_rank": [2, 1, 3],
+        }
+    )
+
+    def fail_fisher(*_args, **_kwargs):
+        raise AssertionError("fisher_exact called for a discarded pair")
+
+    monkeypatch.setattr(interactions_mod, "fisher_exact", fail_fisher)
+    pairs_df = compute_gene_pair_cooccurrence(
+        top_genes=["GENEA", "GENEB", "GENEC"],
+        gene_to_samples=gene_to_samples,
+        sample_labels=sample_labels,
+        total_samples=total_samples,
+        gene_to_chrom=gene_to_chrom,
+        gene_rankings_df=gene_rankings,
+        min_cooccur_samples=99,
+    )
+
+    assert pairs_df.empty
 
 
 def test_degree_centrality_counts_unique_partners():

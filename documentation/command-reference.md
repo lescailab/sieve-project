@@ -571,7 +571,7 @@ python scripts/aggregate_gene_interactions.py [OPTIONS]
 | `--cooccurrence` | path | - | Per-pair co-occurrence CSV for variant-level enrichment |
 | `--output-dir` | path | required | Output directory |
 | `--min-cooccur-samples` | int | 5 | Minimum gene-pair co-occurrence |
-| `--top-k-genes` | int list | `100` | Top-K gene set sizes. List supported (e.g. `100 2000`) for stability sweeps. Quadratic in K. |
+| `--top-k-genes` | int list | `100` | Top-K gene set sizes. List supported (e.g. `100 2000`) for stability sweeps. Quadratic in K. The default is now 100; pass `50` explicitly to reproduce older default runs. |
 | `--min-gene-score` | float | 0.0 | Minimum gene score |
 | `--score-column` | str | `z_attribution` | Variant-level score column for ranking and gene scoring. Choices: `z_attribution`, `delta_rank`. Use `delta_rank` with a rank-calibrated input from `bootstrap_null_calibration.py`. |
 | `--significance-threshold` | str | `p_0.05` | Null-derived significance threshold to enforce when available |
