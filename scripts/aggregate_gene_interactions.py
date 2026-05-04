@@ -280,10 +280,11 @@ def _compute_rank_quantiles(scores: dict[str, float]) -> dict[str, float]:
     """
     Map each gene to a rank quantile in (0, 1], computed within the supplied set.
 
-    The gene with the highest finite positive gene_score receives quantile 1.0,
-    the gene with the lowest finite positive score receives quantile 1/N. Genes
-    with non-finite or non-positive scores receive quantile 0.0 (excluded from
-    contributing to interaction_score).
+    The gene with the highest finite positive gene_score receives quantile 1.0.
+    A unique lowest finite positive score receives quantile 1/N; if the minimum
+    is tied, tied genes share the best quantile spanned by that tied block.
+    Genes with non-finite or non-positive scores receive quantile 0.0 (excluded
+    from contributing to interaction_score).
 
     Ties share the best quantile spanned by their tied block, so tied top genes
     all receive 1.0.
