@@ -87,7 +87,7 @@ def test_gene_pair_order_is_normalised():
     assert _normalise_gene_pair("GENEB", "GENEA") == ("GENEA", "GENEB")
 
 
-def test_interaction_score_matches_formula():
+def test_interaction_score_matches_rank_quantile_formula():
     samples = build_gene_samples()
     gene_to_samples, sample_labels, gene_to_chrom, total_samples = build_carrier_indices(samples)
     gene_rankings = pd.DataFrame(
@@ -107,8 +107,12 @@ def test_interaction_score_matches_formula():
         gene_rankings_df=gene_rankings,
     )
 
-    expected = 6.0 * math.log1p(5)
-    assert pairs_df.iloc[0]["interaction_score"] == pytest.approx(expected)
+    expected = math.sqrt(0.5 * 1.0) * math.log1p(5)
+    assert pairs_df.iloc[0]["interaction_score"] == pytest.approx(round(expected, 6))
+    assert pairs_df.iloc[0]["gene_score_a"] == pytest.approx(4.0)
+    assert pairs_df.iloc[0]["gene_score_b"] == pytest.approx(9.0)
+    assert pairs_df.iloc[0]["gene_score_quantile_a"] == pytest.approx(0.5)
+    assert pairs_df.iloc[0]["gene_score_quantile_b"] == pytest.approx(1.0)
 
 
 def test_filtering_by_min_cooccurrence_behaves_as_expected():
@@ -131,7 +135,7 @@ def test_filtering_by_min_cooccurrence_behaves_as_expected():
     )
 
     filtered = pairs_df[pairs_df["n_cooccur"] >= 4]
-    assert set(zip(filtered["gene_a"], filtered["gene_b"])) == {
+    assert set(zip(filtered["gene_a"], filtered["gene_b"], strict=False)) == {
         ("GENEA", "GENEB"),
         ("GENEA", "GENEC"),
     }

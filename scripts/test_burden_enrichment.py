@@ -10,9 +10,9 @@ import argparse
 import logging
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
@@ -99,14 +99,23 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=["total"],
         help="Burden types to test (default: total). Options: total, missense, lof, synonymous",
     )
+    parser.add_argument(
+        "--correction",
+        choices=["bonferroni", "fdr_bh"],
+        default="fdr_bh",
+        help=(
+            "Multiple-testing correction for the multi-top-K summary in the "
+            "report (default fdr_bh)."
+        ),
+    )
     return parser.parse_args(argv)
 
 
 def logistic_regression_z(
     burden: np.ndarray,
     labels: np.ndarray,
-    covariates: Optional[np.ndarray] = None,
-) -> Tuple[float, float]:
+    covariates: np.ndarray | None = None,
+) -> tuple[float, float]:
     """
     Fit logistic regression and return z-statistic and p-value for burden.
 
@@ -164,7 +173,7 @@ def logistic_regression_z(
 def mannwhitney_test(
     burden: np.ndarray,
     labels: np.ndarray,
-) -> Tuple[float, float]:
+) -> tuple[float, float]:
     """
     Mann-Whitney U test comparing burden between cases and controls.
 
@@ -189,7 +198,7 @@ def mannwhitney_test(
 
 def compute_burden_for_gene_set(
     gene_matrix: pd.DataFrame,
-    gene_set: Set[str],
+    gene_set: set[str],
 ) -> np.ndarray:
     """
     Sum burden across columns matching the gene set.
@@ -222,11 +231,11 @@ def compute_burden_for_gene_set(
 def run_enrichment_test(
     gene_matrix: pd.DataFrame,
     labels: np.ndarray,
-    sieve_genes: Set[str],
-    background_genes: List[str],
+    sieve_genes: set[str],
+    background_genes: list[str],
     n_permutations: int = 10000,
     seed: int = 42,
-    covariates: Optional[np.ndarray] = None,
+    covariates: np.ndarray | None = None,
 ) -> dict:
     """
     Run permutation-based enrichment test for a single gene set.
@@ -329,11 +338,14 @@ def plot_null_distribution(
 
 
 def generate_report(
-    all_results: Dict[int, dict],
+    all_results: dict[int, dict],
     output_path: Path,
     cohort_name: str = "validation",
+    correction: str = "fdr_bh",
 ) -> None:
     """Generate markdown summary report."""
+    from statsmodels.stats.multitest import multipletests
+
     lines = [
         f"# Cross-Cohort Burden Validation Report — {cohort_name}",
         "",
@@ -360,19 +372,23 @@ def generate_report(
     # Multiple testing
     n_tests = len(all_results)
     if n_tests > 1:
-        bonferroni = 0.05 / n_tests
+        pvals = np.array([res["permutation"]["empirical_p"] for _, res in sorted(all_results.items())])
+        reject, padj, _, _ = multipletests(pvals, alpha=0.05, method=correction)
+        method_label = {"bonferroni": "Bonferroni", "fdr_bh": "Benjamini-Hochberg FDR"}[correction]
         lines.extend([
-            "## Multiple Testing Correction",
+            f"## Multiple Testing Correction ({method_label})",
             "",
             f"- Number of tests: {n_tests}",
-            f"- Bonferroni threshold: {bonferroni:.4f}",
+            f"- Method: {correction}",
             "",
         ])
-        for k, res in sorted(all_results.items()):
-            sig = res["permutation"]["empirical_p"] < bonferroni
-            status = "significant" if sig else "not significant"
+        for (k, res), pad, rej in zip(
+            sorted(all_results.items()), padj, reject, strict=False
+        ):
+            status = "significant" if rej else "not significant"
             lines.append(
-                f"- Top-{k}: empirical p = {res['permutation']['empirical_p']:.4f} — **{status}**"
+                f"- Top-{k}: empirical p = {res['permutation']['empirical_p']:.4f}, "
+                f"adjusted p = {pad:.4f} — **{status}**"
             )
         lines.append("")
 
@@ -407,7 +423,9 @@ def main(argv: list[str] | None = None) -> None:
 
     if burden_file is not None:
         burden_df = pd.read_csv(burden_file, sep="\t")
-        sample_labels = dict(zip(burden_df["sample_id"], burden_df["phenotype"]))
+        sample_labels = dict(
+            zip(burden_df["sample_id"], burden_df["phenotype"], strict=False)
+        )
     elif args.phenotypes is not None:
         sample_labels = load_phenotypes(args.phenotypes)
     else:
@@ -429,7 +447,7 @@ def main(argv: list[str] | None = None) -> None:
     gene_matrix.columns = [c.upper() for c in gene_matrix.columns]
 
     # Background gene universe — must be restricted to genes actually in the matrix
-    matrix_gene_set: Set[str] = set(gene_matrix.columns)
+    matrix_gene_set: set[str] = set(gene_matrix.columns)
     if args.background_genes and args.background_genes.exists():
         raw_bg = [
             g.strip().upper()
@@ -470,7 +488,7 @@ def main(argv: list[str] | None = None) -> None:
         print(f"  Covariates: {cov_df.shape[1]} columns")
 
     # Run enrichment for each top-k
-    all_results: Dict[int, dict] = {}
+    all_results: dict[int, dict] = {}
 
     for k in args.top_k:
         actual_k = min(k, len(sieve_df))
@@ -547,7 +565,7 @@ def main(argv: list[str] | None = None) -> None:
 
     # Multiple testing correction across all tests
     all_p_values = []
-    for k, res in all_results.items():
+    for _k, res in all_results.items():
         all_p_values.append(res["permutation"]["empirical_p"])
 
     n_tests = len(all_p_values)
@@ -574,7 +592,11 @@ def main(argv: list[str] | None = None) -> None:
             yaml.dump(summary, f, default_flow_style=False, sort_keys=False)
 
     # Generate report
-    generate_report(all_results, args.output_dir / "validation_report.md")
+    generate_report(
+        all_results,
+        args.output_dir / "validation_report.md",
+        correction=args.correction,
+    )
     print(f"\nResults saved to {args.output_dir}")
 
 
