@@ -251,12 +251,22 @@ def _infer_architecture_from_state_dict(
     classifier_hidden_dim = int(state_dict[classifier_first_key].shape[0])
     classifier_input_dim = int(state_dict[classifier_first_key].shape[1])
 
+    # Detect classifier type from state_dict keys
+    attention_pool_key = f"{prefix}classifier.attention_weights.weight"
+    classifier_type = "attention_pool" if attention_pool_key in state_dict else "flatten"
+
     if latent_dim > 0:
-        num_covariates = classifier_input_dim % latent_dim
-        num_genes = (classifier_input_dim - num_covariates) // latent_dim
+        if classifier_type == "attention_pool":
+            # attention_pool: first linear is (latent_dim + num_covariates) → hidden_dim,
+            # so num_genes cannot be inferred from the classifier head.
+            num_covariates = classifier_input_dim - latent_dim
+            num_genes = None
+        else:
+            num_covariates = classifier_input_dim % latent_dim
+            num_genes = (classifier_input_dim - num_covariates) // latent_dim
     else:
         num_covariates = 0
-        num_genes = 0
+        num_genes = None
 
     attention_bias_key = _find_key_with_suffix(
         state_dict, f"{prefix}attention.attention_layers.0.position_bias.weight"
@@ -279,8 +289,9 @@ def _infer_architecture_from_state_dict(
         "hidden_dim": hidden_dim,
         "latent_dim": latent_dim,
         "classifier_hidden_dim": classifier_hidden_dim,
+        "classifier_type": classifier_type,
         "num_covariates": int(num_covariates),
-        "num_genes": int(num_genes),
+        "num_genes": int(num_genes) if num_genes is not None else None,
         "num_heads": num_heads,
         "num_attention_layers": num_attention_layers,
     }
@@ -567,6 +578,7 @@ def main() -> int:
         "hidden_dim",
         "latent_dim",
         "classifier_hidden_dim",
+        "classifier_type",
         "num_covariates",
         "num_heads",
         "num_attention_layers",
