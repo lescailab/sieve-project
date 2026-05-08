@@ -183,8 +183,18 @@ def infer_architecture(state_dict: Dict[str, torch.Tensor]) -> Dict[str, int]:
     classifier_input_dim = state_dict[classifier_first_key].shape[1]
     classifier_hidden_dim = state_dict[classifier_first_key].shape[0]
 
-    num_covariates = classifier_input_dim % latent_dim
-    num_genes = (classifier_input_dim - num_covariates) // latent_dim
+    # Detect classifier type from state_dict keys
+    attention_pool_key = f"{prefix}classifier.attention_weights.weight"
+    classifier_type = "attention_pool" if attention_pool_key in state_dict else "flatten"
+
+    if classifier_type == "attention_pool":
+        # attention_pool: first linear is (latent_dim + num_covariates) → hidden_dim,
+        # so num_genes cannot be inferred from the classifier head.
+        num_covariates = classifier_input_dim - latent_dim
+        num_genes = None
+    else:
+        num_covariates = classifier_input_dim % latent_dim
+        num_genes = (classifier_input_dim - num_covariates) // latent_dim
 
     attention_bias_key = find_key_with_suffix(
         state_dict, f"{prefix}attention.attention_layers.0.position_bias.weight"
@@ -212,6 +222,7 @@ def infer_architecture(state_dict: Dict[str, torch.Tensor]) -> Dict[str, int]:
         "hidden_dim": hidden_dim,
         "latent_dim": latent_dim,
         "classifier_hidden_dim": classifier_hidden_dim,
+        "classifier_type": classifier_type,
         "num_covariates": num_covariates,
         "num_genes": num_genes,
         "num_heads": num_heads,
@@ -295,11 +306,15 @@ def build_layer_table(
         ],
         [
             "Phenotype Classifier",
-            "Flatten + MLP",
+            "Attention Pool + MLP" if arch.get("classifier_type") == "attention_pool" else "Flatten + MLP",
             classifier_input,
             classifier_output,
             f"{classifier_params:,}",
-            f"Hidden dim {arch['classifier_hidden_dim']}",
+            (
+                f"Attention pool over genes (B,G,D)→(B,D), Linear({arch['latent_dim']}→{arch['classifier_hidden_dim']})"
+                if arch.get("classifier_type") == "attention_pool"
+                else f"Hidden dim {arch['classifier_hidden_dim']}"
+            ),
         ],
     ]
 
@@ -359,6 +374,7 @@ def draw_architecture(
     num_heads = arch["num_heads"]
     num_attn = arch["num_attention_layers"]
     num_genes = arch["num_genes"]
+    genes_str = "N" if num_genes is None else f"{num_genes:,}"
     num_pos_buckets = arch["num_position_buckets"]
     cls_hidden = arch["classifier_hidden_dim"]
     num_cov = arch["num_covariates"]
@@ -411,11 +427,11 @@ def draw_architecture(
         "label": "Gene Aggregator",
         "details": (
             f"Scatter-based permutation-invariant pooling\n"
-            f"Groups V variants into {num_genes:,} genes via gene_ids"
+            f"Groups V variants into {genes_str} genes via gene_ids"
         ),
         "color": colors["aggregator"],
         "params": totals["aggregator_params"],
-        "output_shape": f"(B, {num_genes:,}, {latent_dim})",
+        "output_shape": f"(B, {genes_str}, {latent_dim})",
     })
 
     # Optional chunk attention
@@ -425,18 +441,29 @@ def draw_architecture(
             "details": "Learned weighted chunk pooling",
             "color": colors["attention"],
             "params": totals["chunk_attention_params"],
-            "output_shape": f"(B, {num_genes:,}, {latent_dim})",
+            "output_shape": f"(B, {genes_str}, {latent_dim})",
         })
 
     # Phenotype Classifier
-    flat_dim = num_genes * latent_dim + num_cov
-    blocks.append({
-        "label": "Phenotype Classifier",
-        "details": (
+    classifier_type = arch.get("classifier_type", "flatten")
+    if classifier_type == "attention_pool":
+        pool_input_dim = latent_dim + num_cov
+        classifier_details = (
+            f"Attention pool (B,G,{latent_dim}) \u2192 (B,{latent_dim})"
+            + (f"  (+ {num_cov} covariate{'s' if num_cov != 1 else ''} concatenated)" if num_cov > 0 else "")
+            + f"\n\u2192 Linear({pool_input_dim} \u2192 {cls_hidden}) \u2192 ReLU \u2192 Dropout"
+            + f"\n\u2192 Linear({cls_hidden} \u2192 1)"
+        )
+    else:
+        flat_dim = num_genes * latent_dim + num_cov
+        classifier_details = (
             f"Flatten \u2192 Linear({flat_dim:,} \u2192 {cls_hidden}) \u2192 ReLU \u2192 Dropout\n"
             f"\u2192 Linear({cls_hidden} \u2192 1)"
             + (f"  (+ {num_cov} covariate{'s' if num_cov != 1 else ''} concatenated)" if num_cov > 0 else "")
-        ),
+        )
+    blocks.append({
+        "label": "Phenotype Classifier",
+        "details": classifier_details,
         "color": colors["classifier"],
         "params": totals["classifier_params"],
         "output_shape": "(B, 1)",

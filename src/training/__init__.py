@@ -5,7 +5,7 @@ This module provides training loops, loss functions, and cross-validation utilit
 for the SIEVE model.
 
 Key components:
-- loss: Loss functions including attribution regularization
+- loss: Loss functions including embedding sparsity regularisation
 - trainer: Training loop with checkpointing and early stopping
 - validation: Cross-validation utilities
 

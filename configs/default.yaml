@@ -49,6 +49,17 @@ model:
   classifier_hidden_dim: 256
   classifier_dropout: 0.3
 
+  # Classifier head architecture
+  # 'flatten':         (default, backward-compatible) — flattens (B, G, D) → (B, G*D)
+  #                    First linear is num_genes * latent_dim → hidden_dim
+  #                    For G=16089, D=32: ~132M params in the classifier head
+  # 'attention_pool':  attention pools (B, G, D) → (B, D), then linear D → hidden_dim
+  #                    First linear is latent_dim → hidden_dim
+  #                    For D=32: ~8K params in the classifier head
+  # New experiments addressing reviewer concerns about p>>n overparameterisation
+  # should set this to 'attention_pool'.
+  classifier_type: flatten
+
   # Covariates (e.g. sex) concatenated to gene embeddings in classifier
   # Set to 1 when using --sex-map to adjust for sex imbalance
   num_covariates: 0
