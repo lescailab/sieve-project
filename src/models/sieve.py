@@ -19,7 +19,7 @@ from torch import Tensor
 from .encoder import VariantEncoder
 from .attention import MultiLayerAttention
 from .aggregation import EfficientGeneAggregator
-from .classifier import PhenotypeClassifier
+from .classifier import AttentionPoolingClassifier, PhenotypeClassifier
 
 
 class SIEVE(nn.Module):
@@ -95,6 +95,7 @@ class SIEVE(nn.Module):
         max_distance: int = 100000,
         num_covariates: int = 0,
         num_chromosomes: int = 0,
+        classifier_type: str = 'flatten',
     ):
         super().__init__()
 
@@ -103,6 +104,7 @@ class SIEVE(nn.Module):
         self.latent_dim = latent_dim
         self.num_covariates = num_covariates
         self.num_chromosomes = num_chromosomes
+        self.classifier_type = classifier_type
 
         # 1. Variant encoder
         self.variant_encoder = VariantEncoder(
@@ -131,13 +133,27 @@ class SIEVE(nn.Module):
         )
 
         # 4. Phenotype classifier
-        self.classifier = PhenotypeClassifier(
-            num_genes=num_genes,
-            latent_dim=latent_dim,
-            hidden_dim=classifier_hidden_dim,
-            dropout=dropout,
-            num_covariates=num_covariates,
-        )
+        if classifier_type == 'flatten':
+            self.classifier = PhenotypeClassifier(
+                num_genes=num_genes,
+                latent_dim=latent_dim,
+                hidden_dim=classifier_hidden_dim,
+                dropout=dropout,
+                num_covariates=num_covariates,
+            )
+        elif classifier_type == 'attention_pool':
+            self.classifier = AttentionPoolingClassifier(
+                num_genes=num_genes,
+                latent_dim=latent_dim,
+                hidden_dim=classifier_hidden_dim,
+                dropout=dropout,
+                num_covariates=num_covariates,
+            )
+        else:
+            raise ValueError(
+                f"Unknown classifier_type '{classifier_type}'. "
+                "Must be 'flatten' or 'attention_pool'."
+            )
 
     def forward(
         self,
@@ -244,6 +260,7 @@ class SIEVE(nn.Module):
             'input_dim': self.input_dim,
             'num_genes': self.num_genes,
             'latent_dim': self.latent_dim,
+            'classifier_type': self.classifier_type,
             'total_parameters': total_params,
             'trainable_parameters': trainable_params,
             'encoder_params': sum(p.numel() for p in self.variant_encoder.parameters()),
@@ -339,6 +356,7 @@ def create_sieve_model(
         max_distance=config.get('max_distance', 100000),
         num_covariates=config.get('num_covariates', 0),
         num_chromosomes=config.get('num_chromosomes', 0),
+        classifier_type=config.get('classifier_type', 'flatten'),
     )
 
 

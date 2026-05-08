@@ -153,6 +153,15 @@ fi
 # -------------------------------------------------------------------
 # Read hyperparameters from the real experiment's config.yaml
 # -------------------------------------------------------------------
+# Hyperparameters read from real config and passed to null train.py:
+#   Architecture:   level, latent_dim, hidden_dim, num_attention_layers,
+#                   num_heads, chunk_size, chunk_overlap, aggregation_method,
+#                   classifier_type
+#   Training:       lr, lambda_attr, batch_size, class_weighting,
+#                   gradient_accumulation_steps, gradient_clip,
+#                   early_stopping, epochs, seed, genome_build
+#   Covariates:     sex_map, pc_map, num_pcs
+#   Protocol:       cv_folds | val_split
 # Look for config.yaml in the fold directory first, then parent
 REAL_CONFIG=""
 if [ -f "${REAL_EXPERIMENT}/config.yaml" ]; then
@@ -192,6 +201,7 @@ print(f'CFG_NUM_HEADS={c.get(\"num_heads\", 4)}')
 print(f'CFG_CHUNK_SIZE={c.get(\"chunk_size\", 3000)}')
 print(f'CFG_CHUNK_OVERLAP={c.get(\"chunk_overlap\", 0)}')
 print(f'CFG_AGGREGATION={shlex.quote(str(c.get(\"aggregation_method\", \"mean\")))}')
+print(f'CFG_CLASSIFIER_TYPE={shlex.quote(str(c.get(\"classifier_type\", \"flatten\")))}')
 
 # Training parameters
 print(f'CFG_LR={c.get(\"lr\", 0.00001)}')
@@ -250,6 +260,7 @@ echo "  num_attention_layers: $CFG_NUM_LAYERS"
 echo "  num_heads:            $CFG_NUM_HEADS"
 echo "  chunk_size:           $CFG_CHUNK_SIZE"
 echo "  aggregation_method:   $CFG_AGGREGATION"
+echo "  classifier_type:      $CFG_CLASSIFIER_TYPE"
 echo "  lr:                   $CFG_LR"
 echo "  lambda_attr:          $CFG_LAMBDA_ATTR"
 echo "  batch_size:           $CFG_BATCH_SIZE"
@@ -370,6 +381,7 @@ TRAIN_CMD=(
     --chunk-size "$CFG_CHUNK_SIZE"
     --chunk-overlap "$CFG_CHUNK_OVERLAP"
     --aggregation-method "$CFG_AGGREGATION"
+    --classifier-type "$CFG_CLASSIFIER_TYPE"
     --gradient-accumulation-steps "$CFG_GRAD_ACCUM"
     --latent-dim "$CFG_LATENT_DIM"
     --hidden-dim "$CFG_HIDDEN_DIM"

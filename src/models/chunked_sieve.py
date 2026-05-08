@@ -8,7 +8,7 @@ interpretability for explainability analysis.
 Key features:
 - Aggregates gene embeddings across chunks (not logits)
 - Preserves gene embeddings for integrated gradients
-- Supports gene-level attribution regularization
+- Supports gene-level embedding sparsity regularisation
 - Provides chunk-wise attention patterns for epistasis detection
 
 Author: Francesco Lescai
@@ -111,7 +111,7 @@ class ChunkedSIEVEModel(nn.Module):
     forward() : Returns logits and intermediates (including gene embeddings)
     get_gene_embeddings() : Extract aggregated gene embeddings for explainability
     get_attention_patterns() : Extract chunk-wise attention patterns
-    train_step() : Training with support for attribution regularization
+    train_step() : Training with support for embedding sparsity regularisation
 
     Examples
     --------
@@ -345,7 +345,7 @@ class ChunkedSIEVEModel(nn.Module):
         """
         Training step that handles chunk aggregation.
 
-        Supports attribution regularization (lambda_attr > 0) by computing
+        Supports embedding sparsity regularisation (lambda_attr > 0) by computing
         gene-level sparsity on aggregated embeddings.
 
         Parameters
@@ -356,7 +356,7 @@ class ChunkedSIEVEModel(nn.Module):
             Loss function. Supported types:
             - SIEVELoss: Returns dict {'total': scalar, ...} when lambda_attr > 0
             - BCEWithLogitsLoss: Returns scalar tensor
-            Note: For attribution regularization support, loss function must have
+            Note: For embedding sparsity regularisation support, loss function must have
             a 'lambda_attr' attribute that can be checked via hasattr().
             Custom loss functions should follow this interface convention.
         device : torch.device
@@ -442,7 +442,7 @@ class ChunkedSIEVEModel(nn.Module):
                 )
 
         # Forward pass (aggregates chunks automatically)
-        # Get intermediates for attribution regularization if needed
+        # Get intermediates for embedding sparsity regularisation if needed
         need_embeddings = hasattr(criterion, 'lambda_attr') and criterion.lambda_attr > 0
 
         predictions, intermediates = self.forward(
@@ -458,7 +458,7 @@ class ChunkedSIEVEModel(nn.Module):
 
         # Compute loss at sample level
         if need_embeddings and intermediates is not None:
-            # Pass gene embeddings for attribution regularization
+            # Pass gene embeddings for embedding sparsity regularisation
             loss_output = criterion(
                 predictions, sample_labels.float(),
                 gene_embeddings=intermediates['gene_embeddings']

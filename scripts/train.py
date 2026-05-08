@@ -167,6 +167,20 @@ def parse_args():
         ),
     )
 
+    parser.add_argument(
+        '--classifier-type',
+        choices=['flatten', 'attention_pool'],
+        default='flatten',
+        help=(
+            "Classifier head architecture. "
+            "'flatten' (default, backward-compatible): flattens gene embeddings and applies "
+            "Linear(num_genes*latent_dim → hidden_dim). "
+            "'attention_pool': attention-pools gene embeddings to latent_dim before the "
+            "classifier, reducing the first linear to Linear(latent_dim → hidden_dim) "
+            "and addressing p>>n overparameterisation."
+        ),
+    )
+
     return parser.parse_args()
 
 
@@ -189,6 +203,7 @@ def create_model(
     aggregation_method: str = 'mean',
     num_covariates: int = 0,
     num_chromosomes: int = 0,
+    classifier_type: str = 'flatten',
 ) -> ChunkedSIEVEModel:
     """
     Create Chunked SIEVE model for whole-genome processing.
@@ -206,6 +221,7 @@ def create_model(
         hidden_dim=hidden_dim,
         num_covariates=num_covariates,
         num_chromosomes=num_chromosomes,
+        classifier_type=classifier_type,
     )
 
     # Wrap in chunked model for whole-genome coverage
@@ -252,6 +268,7 @@ def save_fold_config(
         'chunk_size': args.chunk_size,
         'chunk_overlap': args.chunk_overlap,
         'aggregation_method': args.aggregation_method,
+        'classifier_type': getattr(args, 'classifier_type', 'flatten'),
         # Training parameters
         'lr': args.lr,
         'lambda_attr': args.lambda_attr,
@@ -678,6 +695,7 @@ def main():
                 aggregation_method=args.aggregation_method,
                 num_covariates=num_covariates,
                 num_chromosomes=dataset.num_chromosomes,
+                classifier_type=args.classifier_type,
             )
 
             # Create fold checkpoint directory
@@ -812,6 +830,7 @@ def main():
             hidden_dim=args.hidden_dim,
             aggregation_method=args.aggregation_method,
             num_covariates=num_covariates,
+            classifier_type=args.classifier_type,
         )
 
         # Resolve class weighting for this split
