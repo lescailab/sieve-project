@@ -16,6 +16,26 @@ if [[ "$(uname -s)" != "Darwin" || "$(uname -m)" != "arm64" ]]; then
     exit 1
 fi
 
+# ── ensure all conda calls use sieve-build's (arm64-native) conda ─────────
+# On multi-conda macOS setups (e.g., x86_64 anaconda + arm64 miniforge), the
+# host PATH may point to a wrong-arch conda. Resolve sieve-build's prefix and
+# put its bin first in PATH so every subsequent `conda` call resolves to one
+# arm64-native conda binary that shares env directories with our build env.
+SIEVE_BUILD_PREFIX="$(conda env list 2>/dev/null | awk '$1=="sieve-build"{print $NF}')"
+if [[ -z "$SIEVE_BUILD_PREFIX" || ! -x "$SIEVE_BUILD_PREFIX/bin/conda" ]]; then
+    echo "ERROR: sieve-build conda env not found. Create it per conda/README.md:"
+    echo "  conda create -n sieve-build -c conda-forge python=3.11 conda>=26 conda-build>=26 anaconda-client"
+    exit 1
+fi
+export PATH="$SIEVE_BUILD_PREFIX/bin:$PATH"
+
+SIEVE_BUILD_ARCH="$(python -c 'import platform; print(platform.machine())')"
+if [[ "$SIEVE_BUILD_ARCH" != "arm64" ]]; then
+    echo "ERROR: sieve-build env is $SIEVE_BUILD_ARCH but this script targets osx-arm64."
+    echo "Recreate sieve-build with an arm64-native conda installation."
+    exit 1
+fi
+
 # ── paths ──────────────────────────────────────────────────────────────────
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 CONDA_DIR="$PROJECT_DIR/conda"
@@ -26,7 +46,13 @@ TEST_OUTPUT="/tmp/sieve_train_mps_test"
 VERSION=$(grep '^{%' "$CONDA_DIR/meta.yaml" | grep 'set version' | sed 's/.*"\(.*\)".*/\1/')
 TEST_ENV="sieve_test_${VERSION}"
 
-CHANNELS="-c pytorch -c nvidia -c bioconda -c conda-forge"
+# On osx-arm64 the pytorch/nvidia channels are not just no-ops: their stale
+# osx-arm64 pytorch builds (e.g. 2.2.2 compiled against NumPy 1.x) outrank
+# conda-forge's newer NumPy 2.x / MPS-enabled builds under strict channel
+# priority and produce an env where `import torch` fails at runtime due to
+# the NumPy ABI mismatch with the recipe's `numpy >=2.0,<3.0` pin. Drop
+# pytorch/nvidia here; conda-forge carries Metal/MPS support natively.
+CHANNELS="-c bioconda -c conda-forge"
 
 echo "============================================================"
 echo "  SIEVE conda package: build → test → upload (osx-arm64)"
@@ -68,17 +94,30 @@ CONDA_SOLVER=libmamba conda create -n "$TEST_ENV" --yes \
     $CHANNELS \
     "sieve=$VERSION"
 
+# Resolve the test env's prefix and invoke its binaries directly in steps 3
+# and 4. `conda run -n <name>` is racy here: conda's env cache may not yet
+# list the freshly-created env in the brief window between `conda create`
+# completing and the next call, and a missed lookup silently falls through
+# to the base env (where torch is absent), producing a confusing
+# `ModuleNotFoundError: No module named 'torch'` even though the env on
+# disk is correct.
+TEST_ENV_PREFIX="$(dirname "$SIEVE_BUILD_PREFIX")/$TEST_ENV"
+if [[ ! -x "$TEST_ENV_PREFIX/bin/python" ]]; then
+    echo "ERROR: test env python not found at $TEST_ENV_PREFIX/bin/python"
+    exit 1
+fi
+
 # ── 3. verify Metal/MPS ───────────────────────────────────────────────────
 echo ""
 echo "[3/5] Verifying torch Metal/MPS..."
-conda run -n "$TEST_ENV" python -c "
+"$TEST_ENV_PREFIX/bin/python" -c "
 import torch, sys
 print(f'  torch version  : {torch.__version__}')
 print(f'  MPS built      : {torch.backends.mps.is_built()}')
 print(f'  MPS available  : {torch.backends.mps.is_available()}')
 if not torch.backends.mps.is_built():
     print('FAIL: torch was built without MPS support.')
-    print('Check channel order: pytorch and nvidia must come before conda-forge.')
+    print('Check channel order: conda-forge must be in the channel list on osx-arm64.')
     sys.exit(1)
 if not torch.backends.mps.is_available():
     print('FAIL: MPS is built into torch but not available at runtime.')
@@ -91,7 +130,7 @@ print('MPS check PASSED')
 echo ""
 echo "[4/5] Running training test on test_data/small (device=mps)..."
 rm -rf "$TEST_OUTPUT"
-conda run -n "$TEST_ENV" sieve-train \
+"$TEST_ENV_PREFIX/bin/sieve-train" \
     --preprocessed-data "$PROJECT_DIR/test_data/small/preprocessed_test.pt" \
     --level L3 \
     --cv 2 \
