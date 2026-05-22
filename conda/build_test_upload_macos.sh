@@ -16,6 +16,29 @@ if [[ "$(uname -s)" != "Darwin" || "$(uname -m)" != "arm64" ]]; then
     exit 1
 fi
 
+# ── resolve sieve-build's (arm64-native) conda binary ────────────────────
+# On multi-conda macOS setups (e.g., x86_64 anaconda + arm64 miniforge), the
+# host's `conda` may resolve to a wrong-arch binary, a shell function
+# sourced from ~/.bash_profile, or a path bash has already hashed — none of
+# which a `PATH` prepend would reliably override. Locate sieve-build once,
+# then invoke conda by absolute path ($CONDA) for every subsequent call so
+# every step uses the same arm64-native conda and shares env directories.
+SIEVE_BUILD_PREFIX="$(conda env list 2>/dev/null | awk '$1=="sieve-build"{print $NF}')"
+if [[ -z "$SIEVE_BUILD_PREFIX" || ! -x "$SIEVE_BUILD_PREFIX/bin/conda" ]]; then
+    echo "ERROR: sieve-build conda env not found. Create it with:"
+    echo "  conda create -n sieve-build -c conda-forge python=3.11 conda>=26 conda-build>=26 anaconda-client"
+    echo "(anaconda-client is required by the upload step at the end of this script.)"
+    exit 1
+fi
+CONDA="$SIEVE_BUILD_PREFIX/bin/conda"
+
+SIEVE_BUILD_ARCH="$("$SIEVE_BUILD_PREFIX/bin/python" -c 'import platform; print(platform.machine())')"
+if [[ "$SIEVE_BUILD_ARCH" != "arm64" ]]; then
+    echo "ERROR: sieve-build env is $SIEVE_BUILD_ARCH but this script targets osx-arm64."
+    echo "Recreate sieve-build with an arm64-native conda installation."
+    exit 1
+fi
+
 # ── paths ──────────────────────────────────────────────────────────────────
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 CONDA_DIR="$PROJECT_DIR/conda"
@@ -26,7 +49,13 @@ TEST_OUTPUT="/tmp/sieve_train_mps_test"
 VERSION=$(grep '^{%' "$CONDA_DIR/meta.yaml" | grep 'set version' | sed 's/.*"\(.*\)".*/\1/')
 TEST_ENV="sieve_test_${VERSION}"
 
-CHANNELS="-c pytorch -c nvidia -c bioconda -c conda-forge"
+# On osx-arm64 the pytorch/nvidia channels are not just no-ops: their stale
+# osx-arm64 pytorch builds (e.g. 2.2.2 compiled against NumPy 1.x) outrank
+# conda-forge's newer NumPy 2.x / MPS-enabled builds under strict channel
+# priority and produce an env where `import torch` fails at runtime due to
+# the NumPy ABI mismatch with the recipe's `numpy >=2.0,<3.0` pin. Drop
+# pytorch/nvidia here; conda-forge carries Metal/MPS support natively.
+CHANNELS="-c bioconda -c conda-forge"
 
 echo "============================================================"
 echo "  SIEVE conda package: build → test → upload (osx-arm64)"
@@ -38,7 +67,7 @@ echo "============================================================"
 # ── 1. build ───────────────────────────────────────────────────────────────
 echo ""
 echo "[1/5] Building package..."
-conda run -n sieve-build \
+"$CONDA" run -n sieve-build \
     env CONDA_SOLVER=libmamba \
     conda build "$CONDA_DIR" \
     $CHANNELS \
@@ -62,23 +91,37 @@ echo "Built: $PACKAGE_PATH"
 # ── 2. create isolated test environment ───────────────────────────────────
 echo ""
 echo "[2/5] Creating test environment: $TEST_ENV..."
-conda env remove -n "$TEST_ENV" --yes 2>/dev/null || true
-CONDA_SOLVER=libmamba conda create -n "$TEST_ENV" --yes \
+"$CONDA" env remove -n "$TEST_ENV" --yes 2>/dev/null || true
+CONDA_SOLVER=libmamba "$CONDA" create -n "$TEST_ENV" --yes \
     -c "file://$CROOT" \
     $CHANNELS \
     "sieve=$VERSION"
 
+# Resolve the test env's prefix by asking conda where it actually put the
+# env (could be $BASE/envs, ~/.conda/envs, or any configured envs_dirs).
+# Steps 3 and 4 then invoke its binaries by absolute path; `conda run -n
+# <name>` is racy here — conda's env cache may not yet list the freshly-
+# created env in the brief window between `conda create` completing and the
+# next call, and a missed lookup silently falls through to the base env
+# (where torch is absent), producing a confusing `ModuleNotFoundError: No
+# module named 'torch'` even though the env on disk is correct.
+TEST_ENV_PREFIX="$("$CONDA" env list 2>/dev/null | awk -v env="$TEST_ENV" '$1==env{print $NF}')"
+if [[ -z "$TEST_ENV_PREFIX" || ! -x "$TEST_ENV_PREFIX/bin/python" ]]; then
+    echo "ERROR: test env python not found (TEST_ENV_PREFIX='$TEST_ENV_PREFIX')"
+    exit 1
+fi
+
 # ── 3. verify Metal/MPS ───────────────────────────────────────────────────
 echo ""
 echo "[3/5] Verifying torch Metal/MPS..."
-conda run -n "$TEST_ENV" python -c "
+"$TEST_ENV_PREFIX/bin/python" -c "
 import torch, sys
 print(f'  torch version  : {torch.__version__}')
 print(f'  MPS built      : {torch.backends.mps.is_built()}')
 print(f'  MPS available  : {torch.backends.mps.is_available()}')
 if not torch.backends.mps.is_built():
     print('FAIL: torch was built without MPS support.')
-    print('Check channel order: pytorch and nvidia must come before conda-forge.')
+    print('Check channel order: conda-forge must be in the channel list on osx-arm64.')
     sys.exit(1)
 if not torch.backends.mps.is_available():
     print('FAIL: MPS is built into torch but not available at runtime.')
@@ -91,7 +134,7 @@ print('MPS check PASSED')
 echo ""
 echo "[4/5] Running training test on test_data/small (device=mps)..."
 rm -rf "$TEST_OUTPUT"
-conda run -n "$TEST_ENV" sieve-train \
+"$TEST_ENV_PREFIX/bin/sieve-train" \
     --preprocessed-data "$PROJECT_DIR/test_data/small/preprocessed_test.pt" \
     --level L3 \
     --cv 2 \
@@ -111,14 +154,14 @@ if [[ -z "${ANACONDA_API_TOKEN:-}" ]]; then
     echo "ERROR: ANACONDA_API_TOKEN is not set. Export it from your shell profile (e.g. ~/.bash_profile, ~/.zprofile, ~/.zshrc) and reopen the shell."
     exit 1
 fi
-conda run -n sieve-build anaconda upload "$PACKAGE_PATH" \
+"$CONDA" run -n sieve-build anaconda upload "$PACKAGE_PATH" \
     --user lescailab \
     --label main
 
 # ── cleanup ────────────────────────────────────────────────────────────────
 echo ""
 echo "Cleaning up test environment and output..."
-conda env remove -n "$TEST_ENV" --yes 2>/dev/null || true
+"$CONDA" env remove -n "$TEST_ENV" --yes 2>/dev/null || true
 rm -rf "$TEST_OUTPUT"
 
 echo ""
