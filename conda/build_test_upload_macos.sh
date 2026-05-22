@@ -4,7 +4,8 @@
 #
 # Requirements:
 #   - sieve-build conda env exists with conda-build installed
-#   - ANACONDA_API_TOKEN is set (sourced from ~/.bash_profile)
+#   - ANACONDA_API_TOKEN is set (exported from your shell profile, e.g.
+#     ~/.bash_profile, ~/.zprofile, or ~/.zshrc depending on your shell)
 #   - Apple Silicon Mac with Metal-capable GPU
 set -euo pipefail
 
@@ -44,14 +45,18 @@ conda run -n sieve-build \
     --no-anaconda-upload \
     --croot "$CROOT"
 
-PACKAGE_PATH=$(ls "$CROOT/osx-arm64/sieve-${VERSION}-"*.conda 2>/dev/null \
-    || ls "$CROOT/osx-arm64/sieve-${VERSION}-"*.tar.bz2 2>/dev/null \
-    | head -1)
+shopt -s nullglob
+PKG_CANDIDATES=(
+    "$CROOT/osx-arm64/sieve-${VERSION}-"*.conda
+    "$CROOT/osx-arm64/sieve-${VERSION}-"*.tar.bz2
+)
+shopt -u nullglob
 
-if [[ -z "$PACKAGE_PATH" ]]; then
+if [[ ${#PKG_CANDIDATES[@]} -eq 0 ]]; then
     echo "ERROR: built package not found under $CROOT/osx-arm64/"
     exit 1
 fi
+PACKAGE_PATH="${PKG_CANDIDATES[0]}"
 echo "Built: $PACKAGE_PATH"
 
 # ── 2. create isolated test environment ───────────────────────────────────
@@ -103,7 +108,7 @@ echo "Training test PASSED"
 echo ""
 echo "[5/5] Uploading to anaconda.org (lescailab, label=main)..."
 if [[ -z "${ANACONDA_API_TOKEN:-}" ]]; then
-    echo "ERROR: ANACONDA_API_TOKEN is not set. Source ~/.bash_profile or export it."
+    echo "ERROR: ANACONDA_API_TOKEN is not set. Export it from your shell profile (e.g. ~/.bash_profile, ~/.zprofile, ~/.zshrc) and reopen the shell."
     exit 1
 fi
 conda run -n sieve-build anaconda upload "$PACKAGE_PATH" \
