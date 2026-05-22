@@ -16,20 +16,23 @@ if [[ "$(uname -s)" != "Darwin" || "$(uname -m)" != "arm64" ]]; then
     exit 1
 fi
 
-# ── ensure all conda calls use sieve-build's (arm64-native) conda ─────────
+# ── resolve sieve-build's (arm64-native) conda binary ────────────────────
 # On multi-conda macOS setups (e.g., x86_64 anaconda + arm64 miniforge), the
-# host PATH may point to a wrong-arch conda. Resolve sieve-build's prefix and
-# put its bin first in PATH so every subsequent `conda` call resolves to one
-# arm64-native conda binary that shares env directories with our build env.
+# host's `conda` may resolve to a wrong-arch binary, a shell function
+# sourced from ~/.bash_profile, or a path bash has already hashed — none of
+# which a `PATH` prepend would reliably override. Locate sieve-build once,
+# then invoke conda by absolute path ($CONDA) for every subsequent call so
+# every step uses the same arm64-native conda and shares env directories.
 SIEVE_BUILD_PREFIX="$(conda env list 2>/dev/null | awk '$1=="sieve-build"{print $NF}')"
 if [[ -z "$SIEVE_BUILD_PREFIX" || ! -x "$SIEVE_BUILD_PREFIX/bin/conda" ]]; then
-    echo "ERROR: sieve-build conda env not found. Create it per conda/README.md:"
+    echo "ERROR: sieve-build conda env not found. Create it with:"
     echo "  conda create -n sieve-build -c conda-forge python=3.11 conda>=26 conda-build>=26 anaconda-client"
+    echo "(anaconda-client is required by the upload step at the end of this script.)"
     exit 1
 fi
-export PATH="$SIEVE_BUILD_PREFIX/bin:$PATH"
+CONDA="$SIEVE_BUILD_PREFIX/bin/conda"
 
-SIEVE_BUILD_ARCH="$(python -c 'import platform; print(platform.machine())')"
+SIEVE_BUILD_ARCH="$("$SIEVE_BUILD_PREFIX/bin/python" -c 'import platform; print(platform.machine())')"
 if [[ "$SIEVE_BUILD_ARCH" != "arm64" ]]; then
     echo "ERROR: sieve-build env is $SIEVE_BUILD_ARCH but this script targets osx-arm64."
     echo "Recreate sieve-build with an arm64-native conda installation."
@@ -64,7 +67,7 @@ echo "============================================================"
 # ── 1. build ───────────────────────────────────────────────────────────────
 echo ""
 echo "[1/5] Building package..."
-conda run -n sieve-build \
+"$CONDA" run -n sieve-build \
     env CONDA_SOLVER=libmamba \
     conda build "$CONDA_DIR" \
     $CHANNELS \
@@ -88,22 +91,23 @@ echo "Built: $PACKAGE_PATH"
 # ── 2. create isolated test environment ───────────────────────────────────
 echo ""
 echo "[2/5] Creating test environment: $TEST_ENV..."
-conda env remove -n "$TEST_ENV" --yes 2>/dev/null || true
-CONDA_SOLVER=libmamba conda create -n "$TEST_ENV" --yes \
+"$CONDA" env remove -n "$TEST_ENV" --yes 2>/dev/null || true
+CONDA_SOLVER=libmamba "$CONDA" create -n "$TEST_ENV" --yes \
     -c "file://$CROOT" \
     $CHANNELS \
     "sieve=$VERSION"
 
-# Resolve the test env's prefix and invoke its binaries directly in steps 3
-# and 4. `conda run -n <name>` is racy here: conda's env cache may not yet
-# list the freshly-created env in the brief window between `conda create`
-# completing and the next call, and a missed lookup silently falls through
-# to the base env (where torch is absent), producing a confusing
-# `ModuleNotFoundError: No module named 'torch'` even though the env on
-# disk is correct.
-TEST_ENV_PREFIX="$(dirname "$SIEVE_BUILD_PREFIX")/$TEST_ENV"
-if [[ ! -x "$TEST_ENV_PREFIX/bin/python" ]]; then
-    echo "ERROR: test env python not found at $TEST_ENV_PREFIX/bin/python"
+# Resolve the test env's prefix by asking conda where it actually put the
+# env (could be $BASE/envs, ~/.conda/envs, or any configured envs_dirs).
+# Steps 3 and 4 then invoke its binaries by absolute path; `conda run -n
+# <name>` is racy here — conda's env cache may not yet list the freshly-
+# created env in the brief window between `conda create` completing and the
+# next call, and a missed lookup silently falls through to the base env
+# (where torch is absent), producing a confusing `ModuleNotFoundError: No
+# module named 'torch'` even though the env on disk is correct.
+TEST_ENV_PREFIX="$("$CONDA" env list 2>/dev/null | awk -v env="$TEST_ENV" '$1==env{print $NF}')"
+if [[ -z "$TEST_ENV_PREFIX" || ! -x "$TEST_ENV_PREFIX/bin/python" ]]; then
+    echo "ERROR: test env python not found (TEST_ENV_PREFIX='$TEST_ENV_PREFIX')"
     exit 1
 fi
 
@@ -150,14 +154,14 @@ if [[ -z "${ANACONDA_API_TOKEN:-}" ]]; then
     echo "ERROR: ANACONDA_API_TOKEN is not set. Export it from your shell profile (e.g. ~/.bash_profile, ~/.zprofile, ~/.zshrc) and reopen the shell."
     exit 1
 fi
-conda run -n sieve-build anaconda upload "$PACKAGE_PATH" \
+"$CONDA" run -n sieve-build anaconda upload "$PACKAGE_PATH" \
     --user lescailab \
     --label main
 
 # ── cleanup ────────────────────────────────────────────────────────────────
 echo ""
 echo "Cleaning up test environment and output..."
-conda env remove -n "$TEST_ENV" --yes 2>/dev/null || true
+"$CONDA" env remove -n "$TEST_ENV" --yes 2>/dev/null || true
 rm -rf "$TEST_OUTPUT"
 
 echo ""
