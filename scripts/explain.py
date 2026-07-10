@@ -41,6 +41,7 @@ Author: Francesco Lescai
 import argparse
 import gc
 import shutil
+import sys
 from collections import Counter
 from pathlib import Path
 import yaml
@@ -48,6 +49,10 @@ import torch
 from torch.utils.data import DataLoader
 import numpy as np
 
+# Add project root to path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from src.co2footprint import run_with_co2_tracking
 from src.data.covariates import attach_pc_covariates_to_samples, load_pc_map
 from src.encoding import (
     ChunkedVariantDataset,
@@ -198,13 +203,8 @@ def load_model_and_config(args):
     return config, checkpoint
 
 
-def main():
-    args = parse_args()
-
-    # Create output directory
-    output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
+def _run_explain(args, output_dir: Path) -> None:
+    """Run the existing explainability workload in its prepared output directory."""
     print("="*60)
     print("SIEVE Explainability Analysis")
     print("="*60)
@@ -823,6 +823,14 @@ def main():
 
     print(f"\nResults saved to {output_dir}")
     print("="*60)
+
+
+def main():
+    """Parse explainability arguments and run the workload with CO2 tracking."""
+    args = parse_args()
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    return run_with_co2_tracking("explain", output_dir, _run_explain, args, output_dir)
 
 
 if __name__ == '__main__':

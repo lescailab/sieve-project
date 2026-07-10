@@ -124,6 +124,7 @@ python scripts/train.py \
 - `config.yaml` - Full configuration for reproducibility
 - `fold_*/config.yaml` - Fold-specific config (CV mode)
 - `fold_*/fold_info.yaml` - Fold split metadata and training summary (CV mode)
+- `co2footprint/emissions.csv` - Appended CodeCarbon measurement for each training invocation
 
 **Expected Results**:
 - Validation AUC > 0.6: Model is learning signal
@@ -158,11 +159,36 @@ python scripts/explain.py \
 - `sieve_variant_rankings.csv` - All variants ranked by attribution
 - `sieve_gene_rankings.csv` - Gene-level aggregated scores
 - `sieve_interactions.csv` - High-attention variant pairs
+- `co2footprint/emissions.csv` - Appended CodeCarbon measurement for each explain invocation
 
 **Interpretation**:
 - **High attribution**: Variant strongly influences model prediction
 - **Consistent across samples**: Variant is important for many individuals
 - **Case-enriched**: Variant has higher attribution in cases than controls
+
+---
+
+#### Compile the analysis footprint
+
+After training and explainability, combine their raw measurements into a
+run-level CSV and a human-readable report:
+
+```bash
+sieve-co2-report \
+    --input experiments/analysis_a \
+    --input results/explainability \
+    --output-dir results/co2_footprint
+```
+
+The report contains per-stage and overall runtime, energy, component energy,
+and CO2-equivalent totals. These are operational estimates for CPU, GPU, and
+RAM rather than lifecycle or whole-facility accounting. Machine tracking can
+include unrelated work on shared hosts; use dedicated allocations when
+comparability matters.
+
+The shared `run_with_co2_tracking` helper in `src/co2footprint.py` is the
+extension point for adding the same one-invocation measurement to other
+compute-heavy commands without changing their scientific implementation.
 
 ---
 

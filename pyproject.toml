@@ -59,6 +59,7 @@ dependencies = [
     # Configuration and logging
     "pyyaml>=6.0",
     "tqdm>=4.65.0",
+    "codecarbon>=3.2.8,<4",
 
     # Data storage
     "pyarrow>=12.0.0",  # Parquet I/O for gene burden matrices
@@ -93,6 +94,7 @@ sieve-infer-sex = "scripts.infer_sex:main"
 sieve-check-sex-balance = "scripts.check_sex_balance:main"
 sieve-train = "scripts.train:main"
 sieve-explain = "scripts.explain:main"
+sieve-co2-report = "scripts.co2_report:main"
 sieve-create-null-baseline = "scripts.create_null_baseline:main"
 sieve-run-null-baseline = "scripts.run_null_baseline:main"
 sieve-compare-attributions = "scripts.compare_attributions:main"

@@ -190,6 +190,20 @@ This produces:
 - `sieve_variant_rankings.csv` - All variants ranked by attribution
 - `sieve_gene_rankings.csv` - Gene-level aggregated scores
 - `sieve_interactions.csv` - High-attention variant pairs
+- `co2footprint/emissions.csv` - Appended CodeCarbon measurement for this explain run
+
+Training also writes `co2footprint/emissions.csv` below its experiment
+directory. Compile the training and explainability measurements:
+
+```bash
+sieve-co2-report \
+    --input experiments/my_model \
+    --input results/explainability \
+    --output-dir results/co2_footprint
+```
+
+The command produces a normalized `co2_footprint_runs.csv` and a consolidated
+`co2_footprint_report.md`.
 
 ### 5. Null Baseline Analysis (Statistical Validation)
 

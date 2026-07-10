@@ -9,3 +9,6 @@ dependencies:
   - lescailab::sieve
   - pytorch::pytorch>=2.0.0
   - pytorch::pytorch-cuda>=11.8
+  - pip
+  - pip:
+      - "codecarbon>=3.2.8,<4"

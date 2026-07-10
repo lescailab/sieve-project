@@ -36,6 +36,7 @@ requirements:
     - threadpoolctl >=3.0.0
     - statsmodels >=0.14.0
     - pyarrow >=12.0.0
+    - pip
 
 test:
   imports:
@@ -47,6 +48,7 @@ test:
     - sieve-check-sex-balance --help
     - sieve-train --help
     - sieve-explain --help
+    - sieve-co2-report --help
     - sieve-create-null-baseline --help
     - sieve-run-null-baseline --help
     - sieve-compare-attributions --help

@@ -198,6 +198,43 @@ python scripts/explain.py \
 
 ---
 
+### co2_report.py
+
+Training and explainability automatically append one machine-level CodeCarbon
+measurement to `<output-dir>/co2footprint/emissions.csv`. Training places this
+directory below the resolved experiment directory.
+
+```bash
+sieve-co2-report \
+    --input experiments/analysis_a \
+    --input results/explainability \
+    --output-dir results/co2_footprint
+```
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--input` | file or directory | required | Emissions CSV or directory recursively containing `co2footprint/emissions.csv`; repeatable |
+| `--output-dir` | path | required | Destination for the normalized CSV and Markdown report |
+
+**Outputs**:
+
+- `co2_footprint_runs.csv` — normalized per-run energy, emissions, hardware,
+  location, tracking mode, and source fields
+- `co2_footprint_report.md` — overall and per-stage totals, individual runs,
+  measurement environments, and interpretation caveats
+
+Repeated runs append raw measurements. The report compiler deduplicates rows by
+CodeCarbon run ID when input paths overlap.
+
+CodeCarbon estimates operational CPU, NVIDIA GPU, and RAM usage. Machine-level
+tracking can include unrelated activity on shared hosts, so dedicated compute
+allocations give cleaner estimates. If RAPL or `powermetrics` access is
+unavailable, CodeCarbon may use fallback estimates. Measurements stay in local
+files and are not uploaded to the CodeCarbon API; automatic location resolution
+may still perform a network lookup.
+
+---
+
 ### create_null_baseline.py
 
 ```bash

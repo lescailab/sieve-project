@@ -10,6 +10,7 @@ This page describes how to run the SIEVE pipeline when installed as a conda pack
 conda create -n sieve python=3.10
 conda activate sieve
 conda install -c <your-channel> sieve
+python -m pip install "codecarbon>=3.2.8,<4"
 ```
 
 ### Option B: Build and install locally from this repository
@@ -22,6 +23,7 @@ CONDA_SOLVER=libmamba conda build conda \
     --no-anaconda-upload \
     --croot /tmp/sieve-conda-bld
 conda install -n sieve -c file:///tmp/sieve-conda-bld sieve
+conda run -n sieve python -m pip install "codecarbon>=3.2.8,<4"
 ```
 
 Notes:
@@ -29,6 +31,9 @@ Notes:
 - Channel order matters and must be exactly `-c pytorch -c nvidia -c bioconda -c conda-forge` on every platform, including `osx-arm64`. The pytorch and nvidia channels stay in the list even on Apple Silicon — they are no-ops there but keep the recipe identical across platforms and let bioconda packages (`cyvcf2`, `pysam`) resolve correctly.
 - `CONDA_SOLVER=libmamba` is required. The classic solver in conda 26 fails to inject the `__osx`/`__unix`/`__conda`/`__archspec` virtual packages and aborts with `ResolvePackageNotFound`.
 - Replace `osx-arm64` with `linux-64` or `linux-aarch64` in the install path on those platforms.
+- CodeCarbon's current releases are distributed through PyPI; the conda-forge
+  package is obsolete. Install CodeCarbon with pip inside the activated SIEVE
+  environment as shown above.
 
 ## Verify commands are available
 
@@ -36,6 +41,7 @@ Notes:
 sieve-preprocess --help
 sieve-train --help
 sieve-explain --help
+sieve-co2-report --help
 ```
 
 ## CLI commands exposed by the package
@@ -47,6 +53,7 @@ sieve-explain --help
 | Data preprocessing | `sieve-preprocess` |
 | Model training | `sieve-train` |
 | Explainability | `sieve-explain` |
+| CO2 footprint report | `sieve-co2-report` |
 | Null data creation | `sieve-create-null-baseline` |
 | Full null baseline wrapper | `sieve-run-null-baseline` |
 | Real vs null comparison | `sieve-compare-attributions` |
@@ -96,6 +103,23 @@ sieve-explain \
     --output-dir results/explainability \
     --device cuda
 ```
+
+Training and explainability automatically append one CodeCarbon record below
+their output directories:
+
+- `experiments/my_model/co2footprint/emissions.csv`
+- `results/explainability/co2footprint/emissions.csv`
+
+Compile both stages into one report:
+
+```bash
+sieve-co2-report \
+    --input experiments/my_model \
+    --input results/explainability \
+    --output-dir results/co2_footprint
+```
+
+This produces `co2_footprint_runs.csv` and `co2_footprint_report.md`.
 
 ### 5. Run null baseline
 

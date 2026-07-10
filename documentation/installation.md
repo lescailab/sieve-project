@@ -26,6 +26,7 @@ conda activate sieve
 
 ```bash
 conda install -c lescailab -c pytorch -c nvidia -c bioconda -c conda-forge sieve
+python -m pip install "codecarbon>=3.2.8,<4"
 ```
 
 The channel order matters: `lescailab` must appear first so that the SIEVE package
@@ -39,6 +40,8 @@ sieve --help
 ```
 
 All `sieve-*` commands exposed by the package should be available immediately.
+CodeCarbon is installed from PyPI because its current releases are not
+maintained as conda packages.
 
 ---
 
@@ -94,6 +97,7 @@ Core packages installed by either route:
 - **scikit-learn** (metrics, preprocessing)
 - **matplotlib** (visualisation)
 - **PyYAML** (configuration)
+- **CodeCarbon** (operational energy and CO2-equivalent estimates)
 
 See `pyproject.toml` for the complete list.
 
@@ -121,4 +125,3 @@ package. A complete command-based walkthrough is in:
 - `conda/USAGE.md`
 
 ---
-
