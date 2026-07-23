@@ -51,7 +51,7 @@ fail the build.
 """
 
 HEADING_RE = re.compile(r"^(#{1,6})(\s+)(.*)$")
-FENCE_RE = re.compile(r"^(\s*)(`{3,}|~{3,})")
+FENCE_RE = re.compile(r"^(\s*)(`{3,}|~{3,})(.*)$")
 
 
 class _TolerantLoader(yaml.SafeLoader):
@@ -108,8 +108,12 @@ def demote_headings(text: str) -> str:
     """Demote every Markdown heading in ``text`` by one level.
 
     Headings inside fenced code blocks are left alone, so that shell comments
-    such as ``# 1. Install`` survive intact. Level-6 headings cannot be demoted
-    further and are returned unchanged.
+    such as ``# 1. Install`` survive intact. Fence tracking follows CommonMark:
+    a block opened with N or more backticks (or tildes) is closed only by a
+    run of the same character that is at least as long and carries no info
+    string, so a page may nest a three-backtick example inside a four-backtick
+    fence. Level-6 headings cannot be demoted further and are returned
+    unchanged.
 
     Parameters
     ----------
@@ -128,10 +132,14 @@ def demote_headings(text: str) -> str:
     for line in lines:
         fence_match = FENCE_RE.match(line)
         if fence_match:
-            marker = fence_match.group(2)
+            marker, info = fence_match.group(2), fence_match.group(3)
             if fence is None:
-                fence = marker[0] * 3
-            elif marker.startswith(fence):
+                fence = marker
+            elif (
+                marker[0] == fence[0]
+                and len(marker) >= len(fence)
+                and not info.strip()
+            ):
                 fence = None
             out.append(line)
             continue
