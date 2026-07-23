@@ -161,7 +161,7 @@ def _require_mean_attribution(df: pd.DataFrame, label: str) -> None:
 def _filter_sex_chroms(df: pd.DataFrame, genome_build_name: str) -> pd.DataFrame:
     """Remove sex-chromosome variants from *df* and return the filtered copy."""
     if 'chromosome' not in df.columns:
-        print("  WARNING: 'chromosome' column not found — cannot filter sex chromosomes")
+        print("  WARNING: 'chromosome' column not found: cannot filter sex chromosomes")
         return df
     build = get_genome_build(genome_build_name)
     mask = ~df['chromosome'].apply(lambda c: is_sex_chrom(str(c), build))

@@ -196,7 +196,7 @@ This produces:
 To establish statistical significance:
 
 ```bash
-# Option 1: Use the complete pipeline wrapper (preferred — cohort-centric layout)
+# Option 1: Use the complete pipeline wrapper (preferred, cohort-centric layout)
 PROJECT_DIR=/path/to/project \
 LEVEL=L3 \
 bash scripts/run_null_baseline_analysis.sh

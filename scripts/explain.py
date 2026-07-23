@@ -317,7 +317,7 @@ def main():
     # Detect covariate requirements from loaded model
     ig_num_covariates = getattr(ig_model, 'num_covariates', 0)
     if ig_num_covariates > 0:
-        print(f"  Model uses {ig_num_covariates} covariate(s) — covariates will be propagated through IG")
+        print(f"  Model uses {ig_num_covariates} covariate(s), which will be propagated through IG")
     if dataset.num_covariates not in (0, ig_num_covariates):
         raise ValueError(
             "Covariate tensor width in the dataset does not match the loaded model "

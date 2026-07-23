@@ -7,10 +7,17 @@ Two rules are checked:
 2. **British English.** American spellings of the ``-ize``/``-ise`` and
    ``-or``/``-our`` families are rejected in prose.
 
-Identifiers, keyword arguments and library-imposed spellings are out of scope:
-only Markdown prose, Python comments and Python docstrings are inspected. In
-Python files the checker skips code lines entirely, so a call to
-``sklearn``'s ``normalize`` or a variable named ``optimizer`` does not trip it.
+The two rules have deliberately different scope.
+
+The spelling rule applies to prose only: Markdown outside fenced code blocks,
+plus Python comments and docstrings, with inline code spans and Markdown link
+targets blanked first. Identifiers, keyword arguments and library-imposed
+spellings are therefore out of scope, so a call to ``sklearn``'s ``normalize``
+or a variable named ``optimizer`` does not trip it.
+
+The em-dash rule applies to whole files. An em dash is never valid Python or
+shell syntax, so one inside a fenced code block or a string literal is prose:
+a shell comment in an example, or a message printed to the user.
 
 Usage
 -----
@@ -30,7 +37,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
-EM_DASH = "—"
+EM_DASH = "\u2014"  # written as an escape so this file does not trip its own rule
 
 # American spellings rejected in prose, mapped to the British form to suggest.
 AMERICAN_SPELLINGS = {
@@ -175,11 +182,17 @@ def check_file(path: Path) -> list[str]:
         rel: Path | str = path.relative_to(ROOT)
     except ValueError:  # a path passed explicitly from outside the repository
         rel = path
-    for number, line in prose_lines(path):
+
+    # The em-dash rule applies to the whole file, not just prose: an em dash is
+    # never valid shell or Python syntax, so one inside a fenced code block is a
+    # comment, and comments are prose.
+    for number, line in enumerate(path.read_text(encoding="utf-8").split("\n"), 1):
         if EM_DASH in line:
             problems.append(
                 f"{rel}:{number}: em dash. Use a hyphen, comma, colon or parentheses."
             )
+
+    for number, line in prose_lines(path):
         for match in SPELLING_RE.finditer(line):
             word = match.group(1)
             suggestion = _match_case(word, AMERICAN_SPELLINGS[word.lower()])

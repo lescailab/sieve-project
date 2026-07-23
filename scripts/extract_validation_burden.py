@@ -89,7 +89,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--from-variant-rankings",
         action="store_true",
         default=False,
-        help="Input is a variant rankings CSV — aggregate to gene level internally",
+        help="Input is a variant rankings CSV; aggregate to gene level internally",
     )
     parser.add_argument(
         "--compute-full-gene-matrix",

@@ -423,7 +423,7 @@ def main():
         gene_sig_df = pd.read_csv(gene_sig_path)
         print(f"\nLoaded gene significance from {gene_sig_path}")
     elif gene_sig_path is not None:
-        print(f"\nGene significance file not found at {gene_sig_path} — "
+        print(f"\nGene significance file not found at {gene_sig_path}: "
               "corrected gene rankings will not include empirical_p_gene / fdr_gene")
 
     # Gene rankings
