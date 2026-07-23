@@ -1575,12 +1575,13 @@ python scripts/train.py \
 - `--chunk-size 2000`: Cap variants per forward pass (prevents OOM)
 
 **Memory Usage**:
-| Configuration | GPU Memory | Works On |
-|--------------|------------|----------|
-| batch=32, chunk=5000 | ~40 GB | A100 80GB |
-| batch=8, chunk=3000 | ~12 GB | A100 40GB |
-| batch=2, chunk=3000 | ~7 GB | T4/RTX5000 |
-| batch=2, chunk=2000 | ~5 GB | Most GPUs |
+
+Across three cohorts spanning 1,968 to 3,420 samples, peak GPU memory held at a
+plateau of roughly 18 GB under the chunked configuration. Because chunking bounds
+the resident working set by `chunk_size` rather than by the number of variants a
+sample carries, peak memory does not grow with cohort size: lower
+`--chunk-size` and `--batch-size` if you need to fit a smaller card, and raise
+them to use a larger one.
 
 ---
 
@@ -4396,6 +4397,40 @@ where $p_{11}$ is the original prediction, $p_{10}$ removes variant $j$,
 $p_{01}$ removes variant $i$, and $p_{00}$ removes both. A non-zero
 $\Delta_{ij}$ means the joint model effect is not additive under this
 counterfactual perturbation.
+
+### 11. Model Complexity and Scalability
+
+The selected configuration is:
+
+| Parameter | Value |
+|-----------|-------|
+| Learning rate | 1e-5 |
+| `lambda_attr` | 0.1 |
+| `latent_dim` | 32 |
+| `hidden_dim` | 64 |
+| Attention layers | 1 |
+| Attention heads | 4 |
+| Classifier head | flatten |
+| Flatten input dimension | 16,089 genes x 32 + 1 sex covariate = 514,849 |
+
+Two points are worth stating explicitly, because both have been misread.
+
+`latent_dim` is the model-wide working dimension. It is the output width of the
+variant encoder, and it carries through attention, gene aggregation and the
+classifier input.
+
+`hidden_dim` controls only the intermediate layer inside the variant-encoder
+multilayer perceptron, that is the width between $\mathrm{Linear}_1$ and
+$\mathrm{Linear}_2$ in section 4. It does not set the attention width.
+
+#### Memory
+
+Across three cohorts spanning 1,968 to 3,420 samples, peak GPU memory held at a
+plateau of roughly 18 GB under the chunked configuration, which processes a
+selectable number of variants at a time. The plateau is a consequence of
+chunking: the resident working set is bounded by `chunk_size` rather than by the
+number of variants a sample carries, so peak memory does not grow with cohort
+size.
 
 ## Appendix B: Experimental Protocol
 
