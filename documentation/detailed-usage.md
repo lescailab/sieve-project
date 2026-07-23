@@ -275,12 +275,17 @@ python scripts/train.py \
 - `--chunk-size 2000`: Cap variants per forward pass (prevents OOM)
 
 **Memory Usage**:
-| Configuration | GPU Memory | Works On |
-|--------------|------------|----------|
-| batch=32, chunk=5000 | ~40 GB | A100 80GB |
-| batch=8, chunk=3000 | ~12 GB | A100 40GB |
-| batch=2, chunk=3000 | ~7 GB | T4/RTX5000 |
-| batch=2, chunk=2000 | ~5 GB | Most GPUs |
+
+Peak GPU memory is set by `--chunk-size` and `--batch-size`, not by how many
+samples the cohort contains. Holding those two flags fixed, peak memory held at
+a plateau of roughly 18 GB across three cohorts spanning 1,968 to 3,420 samples,
+because chunking bounds the resident working set by `chunk_size` rather than by
+the number of variants a sample carries.
+
+So size the run with those two flags: lower either to fit a smaller card, raise
+either to use a larger one. Measure once on your own hardware at the settings
+you intend to use, since the 18 GB figure is specific to the configuration it
+was measured at.
 
 ---
 
