@@ -383,7 +383,7 @@ def generate_report(
     method_label = _validate_correction(correction)
 
     lines = [
-        f"# Cross-Cohort Burden Validation Report — {cohort_name}",
+        f"# Cross-Cohort Burden Validation Report, {cohort_name}",
         "",
         "## Summary",
         "",
@@ -478,7 +478,7 @@ def main(argv: list[str] | None = None) -> None:
     # Normalise matrix gene names for matching
     gene_matrix.columns = [c.upper() for c in gene_matrix.columns]
 
-    # Background gene universe — must be restricted to genes actually in the matrix
+    # Background gene universe, must be restricted to genes actually in the matrix
     matrix_gene_set: set[str] = set(gene_matrix.columns)
     if args.background_genes and args.background_genes.exists():
         raw_bg = [

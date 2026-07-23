@@ -4,13 +4,13 @@ Post-hoc attribution correction for chrX ploidy bias.
 
 Takes a significance-annotated rankings file and produces corrected rankings
 with chrX/chrY bias removed via per-chromosome z-score normalisation.  All
-existing columns — including ``empirical_p_variant`` and ``fdr_variant`` from
-the null comparison — are preserved in the output.
+existing columns, including ``empirical_p_variant`` and ``fdr_variant`` from
+the null comparison, are preserved in the output.
 
 Run this script on the significance-annotated file
 (``variant_rankings_with_significance.csv`` from ``compare_attributions.py``)
 to add chrX-corrected rankings while preserving significance columns.  Do not
-run on null rankings — the null comparison must operate on raw
+run on null rankings, the null comparison must operate on raw
 ``mean_attribution`` values and must precede this correction step.
 
 Usage:

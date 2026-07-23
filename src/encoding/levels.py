@@ -156,7 +156,7 @@ def encode_functional_scores(
     """
     Encode SIFT and PolyPhen scores.
 
-    Both scores are normalized to [0, 1] where higher = more deleterious.
+    Both scores are normalised to [0, 1] where higher = more deleterious.
     Missing values are imputed with neutral value (default 0.5).
 
     Parameters
@@ -185,7 +185,7 @@ def encode_functional_scores(
     sift_raw = variant.annotations.get('sift')
     polyphen_raw = variant.annotations.get('polyphen')
 
-    # Normalize (SIFT is inverted, PolyPhen stays same)
+    # Normalise (SIFT is inverted, PolyPhen stays same)
     if sift_raw is not None:
         sift = normalize_sift_score(sift_raw)
     else:

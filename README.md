@@ -3,11 +3,11 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-**SIEVE** is a deep learning framework for discovering disease-associated genetic variants from exome sequencing data. Unlike existing methods that rely heavily on pre-computed functional annotations, SIEVE tests whether deep learning can discover variants from genotype patterns alone—enabling identification of associations that prior knowledge may miss.
+**SIEVE** is a deep learning framework for discovering disease-associated genetic variants from exome sequencing data. Unlike existing methods that rely heavily on pre-computed functional annotations, SIEVE tests whether deep learning can discover variants from genotype patterns alone, enabling identification of associations that prior knowledge may miss.
 
 ## Scientific Motivation
 
-Genome-wide association studies (GWAS) and existing deep learning methods for variant discovery share a common limitation: they either ignore prior biological knowledge entirely (standard GWAS) or depend heavily on it (methods like DeepRVAT that use 34 functional annotations). Neither approach directly tests whether machine learning can discover genuinely novel associations—patterns in case-control data that existing annotations don't capture.
+Genome-wide association studies (GWAS) and existing deep learning methods for variant discovery share a common limitation: they either ignore prior biological knowledge entirely (standard GWAS) or depend heavily on it (methods like DeepRVAT that use 34 functional annotations). Neither approach directly tests whether machine learning can discover genuinely novel associations: patterns in case-control data that existing annotations don't capture.
 
 SIEVE addresses three scientific questions:
 
@@ -31,8 +31,8 @@ SIEVE encodes variants at four operational annotation levels, L0 to L3, with dim
 
 By comparing variant rankings across levels, we identify:
 
-- *L0-specific variants*: Associations found without any annotations—potential novel discoveries
-- *L3-specific variants*: Associations that depend on current functional annotation context—validating that annotations add value
+- *L0-specific variants*: Associations found without any annotations: potential novel discoveries
+- *L3-specific variants*: Associations that depend on current functional annotation context, validating that annotations add value
 
 ### 2. Position-Aware Self-Attention
 
@@ -44,7 +44,7 @@ Standard approaches treat variants as unordered sets (permutation-invariant). SI
 
 Attention is dense over the set of variants a sample carries; the sparsity is a property of the input representation, which materialises only alternate-allele sites, not of the attention pattern. Cost is therefore quadratic in the number of variants per sample rather than in the number of genomic positions. This enables learning that nearby variants (compound heterozygosity) or specific distance patterns matter, while avoiding the computational burden of dense tensors.
 
-### 3. Embedding-Sparsity-Regularized Training
+### 3. Embedding-Sparsity-Regularised Training
 
 Instead of training purely for classification and explaining afterward, SIEVE incorporates interpretability into the loss function:
 
@@ -364,8 +364,9 @@ Within the co-occurrence audit, `n_pairs_gte5_cooccur` only means at least 5 joi
 
 ```text
 sieve-project/
-├── USER_GUIDE.md          # Comprehensive user documentation
+├── USER_GUIDE.md          # Generated from documentation/; do not edit by hand
 ├── README.md              # This file
+├── documentation/         # Hand-authored MkDocs source, the docs source of truth
 ├── src/
 │   ├── data/              # VCF parsing and dataset construction
 │   ├── encoding/          # Multi-level feature encoding
@@ -383,7 +384,11 @@ sieve-project/
 │   ├── run_null_baseline_analysis.sh  # Full null baseline pipeline
 │   ├── ablation_compare.py            # Performance across levels
 │   ├── compare_ablation_rankings.py   # Ranking overlap across levels
-│   └── plot_ablation_comparison.py    # Multi-panel ablation figure
+│   ├── plot_ablation_comparison.py    # Multi-panel ablation figure
+│   ├── assemble_user_guide.py         # Builds USER_GUIDE.md from documentation/
+│   └── sync_command_table.py          # Syncs the installed-command table
+├── utilities/
+│   └── demos/             # Print-driven walkthrough scripts (not pytest tests)
 └── tests/                 # Unit tests
 ```
 
@@ -478,8 +483,8 @@ We welcome contributions! Key areas for improvement:
 
 - Additional annotation levels or feature encodings
 - Alternative aggregation methods (beyond max pooling)
-- Visualization improvements
-- Performance optimization
+- Visualisation improvements
+- Performance optimisation
 
 Please open an issue to discuss major changes before submitting PRs.
 

@@ -65,7 +65,7 @@ anaconda upload \
     --label main
 ```
 
-**Important:** use only `--label main`. Do **not** pass `--channel` — on
+**Important:** use only `--label main`. Do **not** pass `--channel`, on
 anaconda.org `--channel` is an alias for `--label` and will create unwanted
 extra labels.
 

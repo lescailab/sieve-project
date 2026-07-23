@@ -311,7 +311,7 @@ This wrapper is configured through environment variables.
 |---------|----------|-------------|
 | `PROJECT_DIR` | Yes | Cohort project root directory (e.g. `/path/to/project`) |
 | `LEVEL` | Yes | Annotation level to run (e.g. `L3`) |
-| `NULL_DATA` | No | Pre-existing permuted `.pt` file — skips Step 1 if set |
+| `NULL_DATA` | No | Pre-existing permuted `.pt` file; skips Step 1 if set |
 | `DEVICE` | No | `cuda` or `cpu` (default: `cuda`) |
 | `PYTHON` | No | Python interpreter path override |
 | `EXCLUDE_SEX_CHROMS` | No | Set to `1` to pass `--exclude-sex-chroms` to the comparison step |
@@ -758,7 +758,7 @@ Parses a validation VCF and computes per-sample burden counts within SIEVE gene 
 | `--from-variant-rankings` | flag | False | Input is a variant rankings CSV (aggregate internally) |
 | `--compute-full-gene-matrix` | flag | False | Build full gene-level burden matrix for permutation testing |
 
-> **Tip — multi-level validation in a single VCF pass**: The full gene matrix records
+> **Tip: multi-level validation in a single VCF pass**: The full gene matrix records
 > burden for *every* gene in the VCF, regardless of which `--sieve-genes` file you
 > provide. When comparing ablation levels (L0–L3), run `extract_validation_burden.py`
 > **once** with `--compute-full-gene-matrix` and any gene list, then call
@@ -776,7 +776,7 @@ Parses a validation VCF and computes per-sample burden counts within SIEVE gene 
 >     --consequence-stratify \
 >     --compute-full-gene-matrix
 >
-> # Test enrichment per level (fast — reads parquet, no VCF)
+> # Test enrichment per level (fast, reads parquet, no VCF)
 > for level in L0 L1 L2 L3; do
 >     python scripts/test_burden_enrichment.py \
 >         --burden-dir validation/cohort_b \
@@ -852,8 +852,8 @@ Tests whether SIEVE gene sets carry non-linear discriminative information by tra
 | `--burden-matrix` | path | required | Gene-burden matrix parquet file |
 | `--phenotypes` | path | required | Phenotype TSV (sample_id, phenotype: 1=ctrl, 2=case) |
 | `--output-tsv` | path | required | Summary TSV path |
-| `--top-k` | str | — | Comma-separated top-k values, e.g. `100,500,1000,2000`. Mutually exclusive with `--fdr-threshold`. |
-| `--fdr-threshold` | float | — | FDR cutoff for gene selection (e.g. `0.05`). Gene set size determined per level. Mutually exclusive with `--top-k`. |
+| `--top-k` | str | - | Comma-separated top-k values, e.g. `100,500,1000,2000`. Mutually exclusive with `--fdr-threshold`. |
+| `--fdr-threshold` | float | - | FDR cutoff for gene selection (e.g. `0.05`). Gene set size determined per level. Mutually exclusive with `--top-k`. |
 | `--classifiers` | str | required | Comma-separated classifier list from `rf,lr` |
 | `--levels` | str | `L0,L1,L2,L3` | Comma-separated annotation levels |
 | `--n-permutations` | int | `1000` | Number of random gene set permutations |

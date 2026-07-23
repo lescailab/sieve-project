@@ -67,21 +67,21 @@ tabix -p vcf variants_vep.vcf.gz
 ##### Required VEP Flags Explained
 
 SIEVE relies on specific CSQ sub-fields at **hardcoded positions** in VEP's
-default field order. **Do not use a custom `--fields` argument** — the default
+default field order. **Do not use a custom `--fields` argument**: the default
 VEP output order is expected.
 
 | Flag | CSQ index | Why SIEVE needs it |
 |------|-----------|-------------------|
-| `--vcf` | — | Output must remain VCF format with CSQ in the INFO field |
-| `--compress_output bgzip` | — | SIEVE expects `.vcf.gz` input; tabix index also required |
-| `--symbol` | 3 | Gene symbol — used for gene-level aggregation |
-| `--canonical` | 24 | Marks canonical transcript — used to select the representative annotation per variant |
-| `--sift b` | 36 | SIFT prediction + score (e.g. `deleterious(0.01)`) — required for L3/L4 annotation levels |
-| `--polyphen b` | 37 | PolyPhen prediction + score (e.g. `probably_damaging(0.999)`) — required for L3/L4 annotation levels |
-| `--assembly` | — | Must match your reference build (GRCh37 or GRCh38) |
-| `--offline --cache` | — | Use local cache; no internet required at runtime |
-| `--fork N` | — | Optional; parallelise for speed |
-| `--no_stats` | — | Optional; skip HTML stats report for faster runs |
+| `--vcf` | - | Output must remain VCF format with CSQ in the INFO field |
+| `--compress_output bgzip` | - | SIEVE expects `.vcf.gz` input; tabix index also required |
+| `--symbol` | 3 | Gene symbol, used for gene-level aggregation |
+| `--canonical` | 24 | Marks canonical transcript, used to select the representative annotation per variant |
+| `--sift b` | 36 | SIFT prediction + score (e.g. `deleterious(0.01)`), required for L3/L4 annotation levels |
+| `--polyphen b` | 37 | PolyPhen prediction + score (e.g. `probably_damaging(0.999)`), required for L3/L4 annotation levels |
+| `--assembly` | - | Must match your reference build (GRCh37 or GRCh38) |
+| `--offline --cache` | - | Use local cache; no internet required at runtime |
+| `--fork N` | - | Optional; parallelise for speed |
+| `--no_stats` | - | Optional; skip HTML stats report for faster runs |
 
 The `b` option for `--sift` and `--polyphen` outputs both the prediction label
 and the numeric score in `prediction(score)` format, which SIEVE's parser
@@ -163,7 +163,7 @@ python scripts/check_sex_balance.py \
     --output-dir results/sex_balance
 ```
 
-If a significant imbalance is detected, consider sex-stratified analysis or adding sex as a covariate in downstream modeling.
+If a significant imbalance is detected, consider sex-stratified analysis or adding sex as a covariate in downstream modelling.
 
 #### 3) Preprocess with ploidy-aware encoding
 
@@ -289,7 +289,7 @@ was measured at.
 
 ---
 
-### Embedding-Sparsity-Regularized Training
+### Embedding-Sparsity-Regularised Training
 
 #### Theory
 
@@ -553,7 +553,7 @@ python scripts/compare_ablation_rankings.py \
 
 #### Non-Linear Classifier Robustness Run Pattern
 
-The non-linear classifier validation (`validate_nonlinear_classifier.py`) also supports `--score-column delta_rank`, which resolves automatically to the `gene_delta_rank` column in the gene-stats CSV. The recommended workflow is to run the validation twice with separate output TSVs — one primary run using `--score-column delta_rank` and one visualisation-view run using `--score-column z_attribution` — and apply Benjamini-Hochberg FDR independently within each invocation across the full 16-cell grid. Do not pool the two sets of p-values into a single FDR correction, as that would halve statistical power and obscure whether the robustness finding survives on its own.
+The non-linear classifier validation (`validate_nonlinear_classifier.py`) also supports `--score-column delta_rank`, which resolves automatically to the `gene_delta_rank` column in the gene-stats CSV. The recommended workflow is to run the validation twice with separate output TSVs (one primary run using `--score-column delta_rank`, one visualisation-view run using `--score-column z_attribution`) and apply Benjamini-Hochberg FDR independently within each invocation across the full 16-cell grid. Do not pool the two sets of p-values into a single FDR correction, as that would halve statistical power and obscure whether the robustness finding survives on its own.
 
 #### Top-K Stability Sweep, Per-Pair FDR, and Direction of the Fisher Test
 
