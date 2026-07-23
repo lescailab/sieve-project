@@ -276,12 +276,16 @@ python scripts/train.py \
 
 **Memory Usage**:
 
-Across three cohorts spanning 1,968 to 3,420 samples, peak GPU memory held at a
-plateau of roughly 18 GB under the chunked configuration. Because chunking bounds
-the resident working set by `chunk_size` rather than by the number of variants a
-sample carries, peak memory does not grow with cohort size: lower
-`--chunk-size` and `--batch-size` if you need to fit a smaller card, and raise
-them to use a larger one.
+Peak GPU memory is set by `--chunk-size` and `--batch-size`, not by how many
+samples the cohort contains. Holding those two flags fixed, peak memory held at
+a plateau of roughly 18 GB across three cohorts spanning 1,968 to 3,420 samples,
+because chunking bounds the resident working set by `chunk_size` rather than by
+the number of variants a sample carries.
+
+So size the run with those two flags: lower either to fit a smaller card, raise
+either to use a larger one. Measure once on your own hardware at the settings
+you intend to use, since the 18 GB figure is specific to the configuration it
+was measured at.
 
 ---
 

@@ -1576,12 +1576,16 @@ python scripts/train.py \
 
 **Memory Usage**:
 
-Across three cohorts spanning 1,968 to 3,420 samples, peak GPU memory held at a
-plateau of roughly 18 GB under the chunked configuration. Because chunking bounds
-the resident working set by `chunk_size` rather than by the number of variants a
-sample carries, peak memory does not grow with cohort size: lower
-`--chunk-size` and `--batch-size` if you need to fit a smaller card, and raise
-them to use a larger one.
+Peak GPU memory is set by `--chunk-size` and `--batch-size`, not by how many
+samples the cohort contains. Holding those two flags fixed, peak memory held at
+a plateau of roughly 18 GB across three cohorts spanning 1,968 to 3,420 samples,
+because chunking bounds the resident working set by `chunk_size` rather than by
+the number of variants a sample carries.
+
+So size the run with those two flags: lower either to fit a smaller card, raise
+either to use a larger one. Measure once on your own hardware at the settings
+you intend to use, since the 18 GB figure is specific to the configuration it
+was measured at.
 
 ---
 
@@ -4413,24 +4417,30 @@ The selected configuration is:
 | Classifier head | flatten |
 | Flatten input dimension | 16,089 genes x 32 + 1 sex covariate = 514,849 |
 
-Two points are worth stating explicitly, because both have been misread.
+Two points about the dimensions are worth stating explicitly, since both have
+been misread.
 
 `latent_dim` is the model-wide working dimension. It is the output width of the
 variant encoder, and it carries through attention, gene aggregation and the
 classifier input.
 
 `hidden_dim` controls only the intermediate layer inside the variant-encoder
-multilayer perceptron, that is the width between $\mathrm{Linear}_1$ and
-$\mathrm{Linear}_2$ in section 4. It does not set the attention width.
+multilayer perceptron (the width between $\mathrm{Linear}_1$ and
+$\mathrm{Linear}_2$ in section 4). It does not set the attention width.
 
 #### Memory
 
-Across three cohorts spanning 1,968 to 3,420 samples, peak GPU memory held at a
-plateau of roughly 18 GB under the chunked configuration, which processes a
-selectable number of variants at a time. The plateau is a consequence of
-chunking: the resident working set is bounded by `chunk_size` rather than by the
-number of variants a sample carries, so peak memory does not grow with cohort
-size.
+Across three cohorts spanning 1,968 to 3,420 samples, and holding `chunk_size`
+and `batch_size` fixed, peak GPU memory held at a plateau of roughly 18 GB under
+the chunked configuration, which processes a selectable number of variants at a
+time.
+
+The plateau holds across cohort size, not across settings. Chunking bounds the
+resident working set by `chunk_size` rather than by the number of variants a
+sample carries, so adding samples does not raise the peak. Raising
+`--chunk-size` or `--batch-size` does raise it, and lowering either lowers it,
+so those two flags are what to change when fitting the run to a particular
+card.
 
 ## Appendix B: Experimental Protocol
 
