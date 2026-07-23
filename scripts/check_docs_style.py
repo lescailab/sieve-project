@@ -81,7 +81,7 @@ EXCLUDED = {
 EXCLUDED_PREFIXES = ("site/", ".venv/", "conda-build/", "utilities/demos/")
 
 FENCE_RE = re.compile(r"^(\s*)(`{3,}|~{3,})(.*)$")
-INLINE_CODE_RE = re.compile(r"`[^`]*`")
+INLINE_CODE_RE = re.compile(r"``[^`]+``|`[^`]*`")
 MD_LINK_TARGET_RE = re.compile(r"\]\([^)]*\)")
 
 
@@ -103,9 +103,23 @@ def tracked_files() -> list[Path]:
 
 
 def _strip_code_spans(line: str) -> str:
-    """Blank out inline code spans and link targets so identifiers are ignored."""
-    line = INLINE_CODE_RE.sub("``", line)
+    """Blank out inline code spans and link targets so identifiers are ignored.
+
+    Covers both Markdown ``` `code` ``` and the RST ``` ``code`` ``` form used
+    in this project's docstrings, so that naming a library function such as
+    ``normalize`` in prose does not trip the spelling rule.
+    """
+    line = INLINE_CODE_RE.sub("`code`", line)
     return MD_LINK_TARGET_RE.sub("]()", line)
+
+
+def _match_case(source: str, replacement: str) -> str:
+    """Return ``replacement`` cased to match ``source``."""
+    if source.isupper():
+        return replacement.upper()
+    if source[:1].isupper():
+        return replacement[:1].upper() + replacement[1:]
+    return replacement
 
 
 def prose_lines(path: Path) -> list[tuple[int, str]]:
@@ -138,26 +152,29 @@ def prose_lines(path: Path) -> list[tuple[int, str]]:
     for number, line in enumerate(lines, start=1):
         stripped = line.strip()
         if in_docstring:
-            result.append((number, line))
+            result.append((number, _strip_code_spans(line)))
             if in_docstring in line:
                 in_docstring = None
             continue
         for quote in ('"""', "'''"):
             if stripped.startswith(quote) or f"= {quote}" in stripped:
-                result.append((number, line))
+                result.append((number, _strip_code_spans(line)))
                 if stripped.count(quote) == 1:
                     in_docstring = quote
                 break
         else:
             if "#" in line:
-                result.append((number, line[line.index("#") :]))
+                result.append((number, _strip_code_spans(line[line.index("#") :])))
     return result
 
 
 def check_file(path: Path) -> list[str]:
     """Return a list of ``path:line: message`` violations for one file."""
     problems = []
-    rel = path.relative_to(ROOT)
+    try:
+        rel: Path | str = path.relative_to(ROOT)
+    except ValueError:  # a path passed explicitly from outside the repository
+        rel = path
     for number, line in prose_lines(path):
         if EM_DASH in line:
             problems.append(
@@ -165,7 +182,7 @@ def check_file(path: Path) -> list[str]:
             )
         for match in SPELLING_RE.finditer(line):
             word = match.group(1)
-            suggestion = AMERICAN_SPELLINGS[word.lower()]
+            suggestion = _match_case(word, AMERICAN_SPELLINGS[word.lower()])
             problems.append(
                 f"{rel}:{number}: American spelling '{word}'. Use '{suggestion}'."
             )
