@@ -77,7 +77,7 @@ def main() -> None:
               "cannot standardise or compute shape statistics.")
         sys.exit(1)
 
-    suffix = f' — {args.title_suffix}' if args.title_suffix else ''
+    suffix = f' - {args.title_suffix}' if args.title_suffix else ''
 
     fig, axes = plt.subplots(1, 2, figsize=(14, 5.5))
 

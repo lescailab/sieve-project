@@ -600,7 +600,7 @@ done
 **Step 5c: Compare null-contrasted variant attribution rankings across levels**:
 ```bash
 # Collect chrX-corrected significance files into one directory with level prefixes.
-# Use corrected_variant_rankings.csv — it contains significance + chrX-corrected z-scores.
+# Use corrected_variant_rankings.csv: it contains significance + chrX-corrected z-scores.
 mkdir -p results/ablation/rankings
 for LEVEL in L0 L1 L2 L3; do
     cp /path/to/project/real_experiments/${LEVEL}/attributions/corrected/corrected_variant_rankings.csv \
@@ -3328,7 +3328,7 @@ python scripts/validate_nonlinear_classifier.py \
     --n-cores 8 \
     --seed 42
 
-# --- Step 4b: Alternative — FDR-threshold gene selection ---
+# --- Step 4b: Alternative, FDR-threshold gene selection ---
 # Uses only genes with fdr_gene < 0.05 (gene set size determined per level)
 python scripts/validate_nonlinear_classifier.py \
     --real-rankings-dir results/ablation/rankings \

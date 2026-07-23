@@ -740,7 +740,7 @@ def resolve_observed_gene_sets_by_fdr(
 
         if top_k == 0:
             print(
-                f"  {level}: no genes pass fdr < {fdr_threshold} — skipping"
+                f"  {level}: no genes pass fdr < {fdr_threshold}, skipping"
             )
             skipped_levels.append(level)
             continue
@@ -748,7 +748,7 @@ def resolve_observed_gene_sets_by_fdr(
         if k_effective == 0:
             print(
                 f"  {level}: {top_k} genes pass fdr < {fdr_threshold} but "
-                f"none matched the burden matrix — skipping"
+                f"none matched the burden matrix, skipping"
             )
             skipped_levels.append(level)
             continue
