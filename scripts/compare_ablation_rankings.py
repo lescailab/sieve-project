@@ -79,7 +79,7 @@ def dump_yaml(value: Any, path: pathlib.Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# CSV loading — flexible column matching
+# CSV loading, flexible column matching
 # ---------------------------------------------------------------------------
 
 # Primary SIEVE columns produced by src/explain/variant_ranking.py and the

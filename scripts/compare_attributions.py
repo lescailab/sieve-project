@@ -10,7 +10,7 @@ P-values Should Never Be Zero") and applies Benjamini–Hochberg FDR correction.
 
 Order of operations
 -------------------
-The null comparison must operate on **raw** ``mean_attribution`` values — not on
+The null comparison must operate on **raw** ``mean_attribution`` values, not on
 chrX-corrected z-scores.  Both models (real and null) saw the same input data
 with the same chrX inflation; the only difference is the labels.  The raw
 attribution magnitude IS the signal, and the chrX inflation cancels in the
@@ -308,7 +308,7 @@ def main() -> None:
         null_df = _filter_sex_chroms(null_df, args.genome_build)
 
     # ------------------------------------------------------------------
-    # Distributional sanity check (stdout only — not written to any file)
+    # Distributional sanity check (stdout only, not written to any file)
     # ------------------------------------------------------------------
     real_attr = real_df['mean_attribution'].dropna().values
     null_attr = null_df['mean_attribution'].dropna().values

@@ -233,7 +233,7 @@ class PositionAwareSparseAttention(nn.Module):
             construction time.
             (2) cross-chromosome pairs are routed to the dedicated relative-
             position bias bucket. Cross-chromosome attention itself is **not**
-            masked — only the position-bias prior changes.
+            masked, only the position-bias prior changes.
 
         Returns
         -------

@@ -246,14 +246,24 @@ pip install -e .
 ##### Step 3: Verify installation
 
 ```bash
-# Run test suite
-python test_vcf_parser.py
-python test_encoding_pipeline.py
-python test_model_architecture.py
-python test_training_pipeline.py
+# Run the test suite
+pytest tests/
 ```
 
-All tests should complete without errors. You can also run `pytest` for a more detailed test report.
+All tests should complete without errors.
+
+For a narrated walkthrough of each stage, `utilities/demos/` holds print-driven
+scripts that exercise the pipeline component by component:
+
+```bash
+python utilities/demos/test_vcf_parser.py
+python utilities/demos/test_encoding_pipeline.py
+python utilities/demos/test_model_architecture.py
+python utilities/demos/test_training_pipeline.py
+```
+
+These are demonstrations rather than assertions: they print what each stage
+produces, so they are useful for checking an install end to end.
 
 ---
 
@@ -283,7 +293,7 @@ conda install -c bioconda ensembl-vep
 vep_install -a cf -s homo_sapiens -y GRCh37 -c /path/to/vep_cache
 ```
 
-See [Detailed Usage — How to Annotate Your VCF](#how-to-annotate-your-vcf-with-ensembl-vep)
+See [Detailed Usage, How to Annotate Your VCF](#how-to-annotate-your-vcf-with-ensembl-vep)
 for the full VEP command and required flags.
 
 #### Conda Package Workflow
@@ -498,7 +508,7 @@ bash scripts/run_null_baseline_analysis.sh
 
 The wrapper reads hyperparameters directly from the real run `config.yaml` (including `--sex-map` when used) so the null model is trained under matched settings.
 
-**Manual Steps** (for reference — the wrapper above covers all of these automatically):
+**Manual Steps** (for reference: the wrapper above covers all of these automatically):
 ```bash
 # 1. Create permuted dataset
 sieve-create-null-baseline \
@@ -538,19 +548,19 @@ sieve-correct-chrx-bias \
 
 ##### Order of operations
 
-**The null comparison must operate on raw `mean_attribution` values — not on chrX-corrected z-scores.** Both models (real and null) saw the same input data with the same chrX inflation; the only difference is the labels. The raw attribution magnitude IS the signal. Applying per-chromosome z-scoring to both sides before comparison destroys the absolute signal difference because each chromosome is independently centred at zero — reducing the comparison to a within-chromosome shape test that is too weak for polygenic traits with individually small effects.
+**The null comparison must operate on raw `mean_attribution` values, not on chrX-corrected z-scores.** Both models (real and null) saw the same input data with the same chrX inflation; the only difference is the labels. The raw attribution magnitude IS the signal. Applying per-chromosome z-scoring to both sides before comparison destroys the absolute signal difference because each chromosome is independently centred at zero, reducing the comparison to a within-chromosome shape test that is too weak for polygenic traits with individually small effects.
 
 ChrX correction (`correct_chrx_bias.py`) is a separate ranking adjustment applied to the **real** model's output only, for cross-chromosome comparability in visualisation and ablation comparison. It should be run AFTER the null comparison.
 
-**Why this is safe for chrX**: The chrX inflation affects both real and null equally (it comes from the input data, not the labels). A chrX variant will only get a low empirical p-value if its real attribution is genuinely higher than what the null model produces — the inflation cancels out in the comparison.
+**Why this is safe for chrX**: The chrX inflation affects both real and null equally (it comes from the input data, not the labels). A chrX variant will only get a low empirical p-value if its real attribution is genuinely higher than what the null model produces: the inflation cancels out in the comparison.
 
 **Outputs from `compare_attributions.py`**:
-- `variant_rankings_with_significance.csv` — raw real rankings plus `empirical_p_variant` and `fdr_variant` columns
-- `gene_rankings_with_significance.csv` — gene-level rankings plus `empirical_p_gene` and `fdr_gene` columns
-- `significance_summary.yaml` — counts of variants and genes passing FDR thresholds 0.05, 0.01, 0.001
+- `variant_rankings_with_significance.csv`: raw real rankings plus `empirical_p_variant` and `fdr_variant` columns
+- `gene_rankings_with_significance.csv`: gene-level rankings plus `empirical_p_gene` and `fdr_gene` columns
+- `significance_summary.yaml`: counts of variants and genes passing FDR thresholds 0.05, 0.01, 0.001
 
 **Expected Results**:
-- Null model AUC ≈ 0.50 (chance level — confirms permutation worked)
+- Null model AUC ≈ 0.50 (chance level, confirms permutation worked)
 - Variants with `fdr_variant < 0.05`: number depends on signal strength; expect non-zero for well-powered cohorts
 - Genes with `fdr_gene < 0.05`: candidates for manuscript-level biological claims
 
@@ -619,11 +629,11 @@ sieve-plot-ablation-comparison \
 ```
 
 **Outputs**:
-- `ablation_summary.tsv` / `.yaml` — AUC, accuracy, loss per level, best level
-- `ablation_jaccard_matrix.tsv` — pairwise Jaccard similarity at each top-k
-- `level_specific_variants.tsv` — variants uniquely important at one level
-- `ablation_ranking_comparison.yaml` — structured comparison summary
-- `ablation_comparison.png` / `.pdf` — multi-panel publication figure
+- `ablation_summary.tsv` / `.yaml`: AUC, accuracy, loss per level, best level
+- `ablation_jaccard_matrix.tsv`: pairwise Jaccard similarity at each top-k
+- `level_specific_variants.tsv`: variants uniquely important at one level
+- `ablation_ranking_comparison.yaml`: structured comparison summary
+- `ablation_comparison.png` / `.pdf`: multi-panel publication figure
 
 **Interpretation**:
 - **High Jaccard (>0.7)** between L0 and L3 → annotations are redundant, model discovers the same variants from genotype alone
@@ -873,7 +883,7 @@ NEXN         3            2.98          2             1
 
 **Purpose**: Parse the validation cohort VCF and count non-reference alleles per sample within the SIEVE gene sets. This is a single-pass VCF scan that produces per-sample burden counts and optionally a full gene-level burden matrix for fast permutation testing.
 
-**Command** (recommended — with full matrix for permutation testing):
+**Command** (recommended: with full matrix for permutation testing):
 ```bash
 sieve-extract-burden \
     --vcf /path/to/validation_cohort.vcf.gz \
@@ -891,7 +901,7 @@ sieve-extract-burden \
 1. Loads phenotypes (1=control, 2=case PLINK convention, same as SIEVE)
 2. Selects the top 50, 100, and 200 genes from the SIEVE gene list
 3. Iterates through the validation VCF using `cyvcf2`, reusing the same CSQ parsing, canonical transcript selection, and contig harmonisation as the main SIEVE pipeline
-4. For each variant in a target gene, sums genotype dosages (0/1/2) per sample — a homozygous alt counts as 2
+4. For each variant in a target gene, sums genotype dosages (0/1/2) per sample, so a homozygous alt counts as 2
 5. With `--consequence-stratify`: separately counts missense, LoF, synonymous, and other variants
 6. With `--compute-full-gene-matrix`: builds a complete (samples × all genes) burden matrix stored as Parquet, enabling fast permutation testing in Step 8c without re-parsing the VCF
 
@@ -899,20 +909,20 @@ sieve-extract-burden \
 
 | Flag | When to use |
 |------|-------------|
-| `--consequence-stratify` | Always recommended — enables testing whether enrichment is driven by functional variants |
-| `--compute-full-gene-matrix` | Required for Step 8c — builds the matrix that makes 10,000 permutations feasible |
+| `--consequence-stratify` | Always recommended: enables testing whether enrichment is driven by functional variants |
+| `--compute-full-gene-matrix` | Required for Step 8c: builds the matrix that makes 10,000 permutations feasible |
 | `--include-sex-chroms` | Only if your gene list includes sex chromosome genes |
 | `--from-variant-rankings` | If passing the raw `corrected_variant_rankings.csv` instead of a pre-generated gene list |
 
-> **Tip — multi-level validation in a single VCF pass**: The full gene matrix records
+> **Tip: multi-level validation in a single VCF pass**: The full gene matrix records
 > burden for *every* gene in the VCF, regardless of which `--sieve-genes` file you
 > provide. When comparing ablation levels (L0–L3), you only need to parse the VCF
 > **once** with `--compute-full-gene-matrix`, then run `test_burden_enrichment.py`
-> separately per level with the corresponding gene list — each enrichment run reads
+> separately per level with the corresponding gene list, so each enrichment run reads
 > the parquet matrix without touching the VCF:
 >
 > ```bash
-> # Parse VCF once (use any gene list — the matrix is gene-list agnostic)
+> # Parse VCF once (use any gene list, the matrix is gene-list agnostic)
 > sieve-extract-burden \
 >     --vcf /path/to/validation_cohort.vcf.gz \
 >     --phenotypes /path/to/validation_phenotypes.tsv \
@@ -922,7 +932,7 @@ sieve-extract-burden \
 >     --consequence-stratify \
 >     --compute-full-gene-matrix
 >
-> # Test enrichment per level (fast — reads parquet, no VCF)
+> # Test enrichment per level (fast, reads parquet, no VCF)
 > for level in L0 L1 L2 L3; do
 >     sieve-test-burden-enrichment \
 >         --burden-dir validation/cohort_b \
@@ -951,7 +961,7 @@ validation/cohort_b/
 ```
 
 **Check the summary YAML** before proceeding to Step 8c:
-- `n_sieve_genes_found_in_vcf` should be close to the total — if many genes are missing, the validation VCF may use different gene symbol conventions or have limited exome coverage
+- `n_sieve_genes_found_in_vcf` should be close to the total. If many genes are missing, the validation VCF may use different gene symbol conventions or have limited exome coverage
 - `missing_genes` lists the specific SIEVE genes not found, which helps diagnose gene name mismatches between VEP versions
 - `mean_burden_cases` vs `mean_burden_controls` gives a quick preview of whether there is a difference (but this is not yet tested for significance)
 
@@ -975,12 +985,12 @@ sieve-extract-burden \
 
 **How it works**:
 1. Loads the pre-computed gene burden matrix from Step 8b
-2. Computes a logistic regression z-statistic (phenotype ~ burden) for the SIEVE gene set — this is the **observed test statistic**
+2. Computes a logistic regression z-statistic (phenotype ~ burden) for the SIEVE gene set: this is the **observed test statistic**
 3. Draws 10,000 random gene sets of size *k* from all genes in the validation exome
-4. Computes the same z-statistic for each random set — this is the **null distribution**
+4. Computes the same z-statistic for each random set: this is the **null distribution**
 5. Reports an **empirical p-value**: the fraction of random sets with a z-statistic at least as extreme as the observed one
 
-Because the full gene matrix was pre-computed in Step 8b, each permutation is a fast column-slice + sum operation — the VCF is never re-parsed.
+Because the full gene matrix was pre-computed in Step 8b, each permutation is a fast column-slice + sum operation, the VCF is never re-parsed.
 
 **Command**:
 ```bash
@@ -1048,9 +1058,9 @@ The key metric in each `enrichment_topK{k}.yaml` is the **empirical p-value** un
 The `cross_cohort_validation_summary.yaml` applies Bonferroni correction across all tests (multiple top-k thresholds and consequence types). A result that survives Bonferroni correction is robust.
 
 **Additional diagnostics**:
-- If enrichment is significant for **missense/LoF** but not **synonymous**, this suggests SIEVE genes harbour functional exonic variation — not just more variants by chance of gene length
+- If enrichment is significant for **missense/LoF** but not **synonymous**, this suggests SIEVE genes harbour functional exonic variation, not just more variants by chance of gene length
 - If enrichment is significant at **top-50** but not **top-200**, the signal is concentrated in the highest-ranked genes
-- The `enrichment_plot_topK{k}.png` shows the null distribution with the observed value marked — the further right the red line, the stronger the evidence
+- The `enrichment_plot_topK{k}.png` shows the null distribution with the observed value marked; the further right the red line, the stronger the evidence
 
 **Per-ablation-level testing** (tests whether different annotation levels replicate differently):
 ```bash
@@ -1071,11 +1081,11 @@ If L1-specific genes replicate in the cohort_b cohort but L0-specific ones do no
 
 ###### Step 8d: Non-Linear Classifier Validation
 
-**Purpose**: Test whether the SIEVE gene set carries *non-linear* discriminative signal — combinatorial patterns across genes that a scalar burden sum would destroy.
+**Purpose**: Test whether the SIEVE gene set carries *non-linear* discriminative signal, combinatorial patterns across genes that a scalar burden sum would destroy.
 
 **Why this step?** The scalar burden test (Step 8c) asks whether SIEVE genes have more total exonic variation in cases. But SIEVE's core claim is that the **pattern** of variation across genes matters, not just the total count. A random forest trained on per-gene burden counts preserves this multi-gene structure.
 
-> **Pipeline branching note**: The gene list produced by Step 8a (`generate_sieve_gene_list.py`) feeds into the burden extraction path (Steps 8b–8c) only. This step reads the gene ranking CSV files directly from each level's results directory and performs its own gene selection internally — the TSV gene lists from Step 8a are not an input here.
+> **Pipeline branching note**: The gene list produced by Step 8a (`generate_sieve_gene_list.py`) feeds into the burden extraction path (Steps 8b–8c) only. This step reads the gene ranking CSV files directly from each level's results directory and performs its own gene selection internally: the TSV gene lists from Step 8a are not an input here.
 
 **Setting up the rankings directory**: `--real-rankings-dir` expects one subdirectory per annotation level, each containing a gene rankings CSV. If your results follow the standard layout (`real_experiments/${LEVEL}/attributions/`), use symlinks:
 
@@ -1089,7 +1099,7 @@ done
 
 The script auto-detects `gene_rankings_with_significance.csv` in each level subdirectory.
 
-**Command — fixed top-k** (all levels at once):
+**Command, fixed top-k** (all levels at once):
 ```bash
 sieve-validate-nonlinear-classifier \
     --real-rankings-dir ablation/significance_rankings \
@@ -1103,7 +1113,7 @@ sieve-validate-nonlinear-classifier \
     --seed 42
 ```
 
-**Command — FDR-threshold** (gene set size determined per level):
+**Command, FDR-threshold** (gene set size determined per level):
 ```bash
 sieve-validate-nonlinear-classifier \
     --real-rankings-dir ablation/significance_rankings \
@@ -1386,21 +1396,21 @@ tabix -p vcf variants_vep.vcf.gz
 ###### Required VEP Flags Explained
 
 SIEVE relies on specific CSQ sub-fields at **hardcoded positions** in VEP's
-default field order. **Do not use a custom `--fields` argument** — the default
+default field order. **Do not use a custom `--fields` argument**: the default
 VEP output order is expected.
 
 | Flag | CSQ index | Why SIEVE needs it |
 |------|-----------|-------------------|
-| `--vcf` | — | Output must remain VCF format with CSQ in the INFO field |
-| `--compress_output bgzip` | — | SIEVE expects `.vcf.gz` input; tabix index also required |
-| `--symbol` | 3 | Gene symbol — used for gene-level aggregation |
-| `--canonical` | 24 | Marks canonical transcript — used to select the representative annotation per variant |
-| `--sift b` | 36 | SIFT prediction + score (e.g. `deleterious(0.01)`) — required for L3/L4 annotation levels |
-| `--polyphen b` | 37 | PolyPhen prediction + score (e.g. `probably_damaging(0.999)`) — required for L3/L4 annotation levels |
-| `--assembly` | — | Must match your reference build (GRCh37 or GRCh38) |
-| `--offline --cache` | — | Use local cache; no internet required at runtime |
-| `--fork N` | — | Optional; parallelise for speed |
-| `--no_stats` | — | Optional; skip HTML stats report for faster runs |
+| `--vcf` | - | Output must remain VCF format with CSQ in the INFO field |
+| `--compress_output bgzip` | - | SIEVE expects `.vcf.gz` input; tabix index also required |
+| `--symbol` | 3 | Gene symbol, used for gene-level aggregation |
+| `--canonical` | 24 | Marks canonical transcript, used to select the representative annotation per variant |
+| `--sift b` | 36 | SIFT prediction + score (e.g. `deleterious(0.01)`), required for L3/L4 annotation levels |
+| `--polyphen b` | 37 | PolyPhen prediction + score (e.g. `probably_damaging(0.999)`), required for L3/L4 annotation levels |
+| `--assembly` | - | Must match your reference build (GRCh37 or GRCh38) |
+| `--offline --cache` | - | Use local cache; no internet required at runtime |
+| `--fork N` | - | Optional; parallelise for speed |
+| `--no_stats` | - | Optional; skip HTML stats report for faster runs |
 
 The `b` option for `--sift` and `--polyphen` outputs both the prediction label
 and the numeric score in `prediction(score)` format, which SIEVE's parser
@@ -1482,7 +1492,7 @@ python scripts/check_sex_balance.py \
     --output-dir results/sex_balance
 ```
 
-If a significant imbalance is detected, consider sex-stratified analysis or adding sex as a covariate in downstream modeling.
+If a significant imbalance is detected, consider sex-stratified analysis or adding sex as a covariate in downstream modelling.
 
 ##### 3) Preprocess with ploidy-aware encoding
 
@@ -1608,7 +1618,7 @@ was measured at.
 
 ---
 
-#### Embedding-Sparsity-Regularized Training
+#### Embedding-Sparsity-Regularised Training
 
 ##### Theory
 
@@ -1872,7 +1882,7 @@ python scripts/compare_ablation_rankings.py \
 
 ##### Non-Linear Classifier Robustness Run Pattern
 
-The non-linear classifier validation (`validate_nonlinear_classifier.py`) also supports `--score-column delta_rank`, which resolves automatically to the `gene_delta_rank` column in the gene-stats CSV. The recommended workflow is to run the validation twice with separate output TSVs — one primary run using `--score-column delta_rank` and one visualisation-view run using `--score-column z_attribution` — and apply Benjamini-Hochberg FDR independently within each invocation across the full 16-cell grid. Do not pool the two sets of p-values into a single FDR correction, as that would halve statistical power and obscure whether the robustness finding survives on its own.
+The non-linear classifier validation (`validate_nonlinear_classifier.py`) also supports `--score-column delta_rank`, which resolves automatically to the `gene_delta_rank` column in the gene-stats CSV. The recommended workflow is to run the validation twice with separate output TSVs (one primary run using `--score-column delta_rank`, one visualisation-view run using `--score-column z_attribution`) and apply Benjamini-Hochberg FDR independently within each invocation across the full 16-cell grid. Do not pool the two sets of p-values into a single FDR correction, as that would halve statistical power and obscure whether the robustness finding survives on its own.
 
 ##### Top-K Stability Sweep, Per-Pair FDR, and Direction of the Fisher Test
 
@@ -2317,7 +2327,7 @@ This wrapper is configured through environment variables.
 |---------|----------|-------------|
 | `PROJECT_DIR` | Yes | Cohort project root directory (e.g. `/path/to/project`) |
 | `LEVEL` | Yes | Annotation level to run (e.g. `L3`) |
-| `NULL_DATA` | No | Pre-existing permuted `.pt` file — skips Step 1 if set |
+| `NULL_DATA` | No | Pre-existing permuted `.pt` file; skips Step 1 if set |
 | `DEVICE` | No | `cuda` or `cpu` (default: `cuda`) |
 | `PYTHON` | No | Python interpreter path override |
 | `EXCLUDE_SEX_CHROMS` | No | Set to `1` to pass `--exclude-sex-chroms` to the comparison step |
@@ -2764,7 +2774,7 @@ Parses a validation VCF and computes per-sample burden counts within SIEVE gene 
 | `--from-variant-rankings` | flag | False | Input is a variant rankings CSV (aggregate internally) |
 | `--compute-full-gene-matrix` | flag | False | Build full gene-level burden matrix for permutation testing |
 
-> **Tip — multi-level validation in a single VCF pass**: The full gene matrix records
+> **Tip: multi-level validation in a single VCF pass**: The full gene matrix records
 > burden for *every* gene in the VCF, regardless of which `--sieve-genes` file you
 > provide. When comparing ablation levels (L0–L3), run `extract_validation_burden.py`
 > **once** with `--compute-full-gene-matrix` and any gene list, then call
@@ -2782,7 +2792,7 @@ Parses a validation VCF and computes per-sample burden counts within SIEVE gene 
 >     --consequence-stratify \
 >     --compute-full-gene-matrix
 >
-> # Test enrichment per level (fast — reads parquet, no VCF)
+> # Test enrichment per level (fast, reads parquet, no VCF)
 > for level in L0 L1 L2 L3; do
 >     python scripts/test_burden_enrichment.py \
 >         --burden-dir validation/cohort_b \
@@ -2858,8 +2868,8 @@ Tests whether SIEVE gene sets carry non-linear discriminative information by tra
 | `--burden-matrix` | path | required | Gene-burden matrix parquet file |
 | `--phenotypes` | path | required | Phenotype TSV (sample_id, phenotype: 1=ctrl, 2=case) |
 | `--output-tsv` | path | required | Summary TSV path |
-| `--top-k` | str | — | Comma-separated top-k values, e.g. `100,500,1000,2000`. Mutually exclusive with `--fdr-threshold`. |
-| `--fdr-threshold` | float | — | FDR cutoff for gene selection (e.g. `0.05`). Gene set size determined per level. Mutually exclusive with `--top-k`. |
+| `--top-k` | str | - | Comma-separated top-k values, e.g. `100,500,1000,2000`. Mutually exclusive with `--fdr-threshold`. |
+| `--fdr-threshold` | float | - | FDR cutoff for gene selection (e.g. `0.05`). Gene set size determined per level. Mutually exclusive with `--top-k`. |
 | `--classifiers` | str | required | Comma-separated classifier list from `rf,lr` |
 | `--levels` | str | `L0,L1,L2,L3` | Comma-separated annotation levels |
 | `--n-permutations` | int | `1000` | Number of random gene set permutations |
@@ -3001,7 +3011,7 @@ Before running non-linear classifier validation, you need:
 
 #### Motivation
 
-The scalar burden test showed that SIEVE gene sets do not necessarily carry more total exonic variation in cases than controls. But SIEVE's claim is not that its genes have more variants — it is that the **pattern** of variation across genes jointly discriminates cases from controls. A burden count destroys this pattern; a non-linear classifier preserves it.
+The scalar burden test showed that SIEVE gene sets do not necessarily carry more total exonic variation in cases than controls. But SIEVE's claim is not that its genes have more variants; it is that the **pattern** of variation across genes jointly discriminates cases from controls. A burden count destroys this pattern; a non-linear classifier preserves it.
 
 The validation question is:
 
@@ -3078,7 +3088,7 @@ python scripts/validate_nonlinear_classifier.py \
     --n-cores 8
 ```
 
-**Why include logistic regression?** As a linear baseline. If the random forest significantly outperforms logistic regression on SIEVE genes, that is evidence of non-linear signal — directly supporting SIEVE's core claim that multi-gene combinatorial patterns carry disease information. If logistic regression performs equally well, the signal is linear (which could have been captured by a PRS approach).
+**Why include logistic regression?** As a linear baseline. If the random forest significantly outperforms logistic regression on SIEVE genes, that is evidence of non-linear signal, directly supporting SIEVE's core claim that multi-gene combinatorial patterns carry disease information. If logistic regression performs equally well, the signal is linear (which could have been captured by a PRS approach).
 
 #### Score Column Selection
 
@@ -3113,7 +3123,7 @@ python scripts/validate_nonlinear_classifier.py \
 `--fdr-threshold` and `--top-k` are **mutually exclusive**. When `--fdr-threshold` is used:
 
 - Each annotation level independently determines its gene set as the set of genes with `fdr_gene < threshold`.
-- Different levels may produce different gene set sizes — this is scientifically meaningful, as it reflects how many genes are statistically significant at each annotation level.
+- Different levels may produce different gene set sizes, this is scientifically meaningful, as it reflects how many genes are statistically significant at each annotation level.
 - The summary TSV includes a `fdr_threshold` column to distinguish these results from fixed top-k runs.
 - If no genes pass the threshold at a given level, that level is skipped with a warning.
 
@@ -3196,7 +3206,7 @@ linear_baseline:
 
 1. **Significant FDR**: The SIEVE gene set outperforms the shared random-gene null after correction across the full grid. This supports transfer of the discovery signal to the validation cohort.
 
-2. **RF > LR gap**: If the random forest outperforms logistic regression on the SIEVE gene set, the signal has non-linear structure — combinations of gene burdens matter, not just their sum. This directly supports SIEVE's model design.
+2. **RF > LR gap**: If the random forest outperforms logistic regression on the SIEVE gene set, the signal has non-linear structure, combinations of gene burdens matter, not just their sum. This directly supports SIEVE's model design.
 
 3. **Level consistency**: If multiple ablation levels show signal, the discovery is robust. If only L0 (genotype-only) shows signal, the discovery survives at the ablation floor and is carried by genome structure alone. If only L3 shows signal, it may depend on functional annotations.
 
@@ -3451,7 +3461,7 @@ The script adds:
 - `corrected_rank`: rank based on `z_attribution`
 - `is_sex_chrom`: flags chrX/chrY variants
 
-All existing columns — including `empirical_p_variant` and `fdr_variant` — are preserved unchanged. By default, the corrected rankings exclude sex chromosomes. Use `--include-sex-chroms` if you want to keep them in the output (they remain flagged).
+All existing columns, including `empirical_p_variant` and `fdr_variant`, are preserved unchanged. By default, the corrected rankings exclude sex chromosomes. Use `--include-sex-chroms` if you want to keep them in the output (they remain flagged).
 
 ##### Choosing a ranking metric
 
@@ -3579,9 +3589,9 @@ Each row represents a pairwise comparison at a given top-k:
 | `union` | Size of the union |
 
 **How to read it**:
-- **Jaccard > 0.7**: Very similar rankings — the two levels discover largely the same variants
-- **Jaccard 0.3-0.7**: Moderate overlap — some shared discoveries, some unique to each level
-- **Jaccard < 0.3**: Different rankings — annotation level fundamentally changes which variants are prioritised
+- **Jaccard > 0.7**: Very similar rankings, the two levels discover largely the same variants
+- **Jaccard 0.3-0.7**: Moderate overlap, some shared discoveries, some unique to each level
+- **Jaccard < 0.3**: Different rankings, annotation level fundamentally changes which variants are prioritised
 
 **Scientific significance**:
 - Agreement between the L0 and L3 rankings measures how much of the ranking is stable under annotation ablation: a high L0-vs-L3 Jaccard means the ordering is carried largely by genome structure rather than by the supplied annotations
@@ -3601,9 +3611,9 @@ Variants ranked in the top-100 at one level but outside the top-500 at all other
 | `score_at_specific_level` | Attribution score at the specific level |
 
 **How to use these**:
-- **L0-specific variants**: Discovered from genotype patterns alone — potentially novel mechanisms invisible to annotation-based methods. Priority candidates for experimental follow-up.
-- **L3-specific variants**: Only discovered when SIFT/PolyPhen are provided — may reflect annotation-dependent signal (known pathogenicity) rather than novel discovery.
-- **L1-specific variants**: Position carries information not captured by genotype alone — may indicate positional clustering or regulatory elements.
+- **L0-specific variants**: Discovered from genotype patterns alone, potentially novel mechanisms invisible to annotation-based methods. Priority candidates for experimental follow-up.
+- **L3-specific variants**: Only discovered when SIFT/PolyPhen are provided, may reflect annotation-dependent signal (known pathogenicity) rather than novel discovery.
+- **L1-specific variants**: Position carries information not captured by genotype alone, may indicate positional clustering or regulatory elements.
 
 If you rank the same ablation inputs by `delta_rank`, interpret positive `delta_rank` as bootstrap-null-corrected promotion: the real model ranks that variant better than the null ensemble does. Comparing the `level_specific_variants.tsv` list from the `z_attribution` run against the `delta_rank` run shows which level-specific discoveries are robust across both views and which ones only appear under one ranking scheme.
 
@@ -3647,7 +3657,7 @@ The non-linear classifier validation tests whether the **pattern** of variation 
 |---------------------|----------|----------------|
 | Significant (p < 0.05) | RF >> LR | Non-linear multi-gene signal transfers to validation cohort |
 | Significant (p < 0.05) | RF ≈ LR | Linear signal transfers (could be captured by PRS) |
-| Not significant | — | Signal does not transfer at this level/top-k |
+| Not significant | - | Signal does not transfer at this level/top-k |
 
 ##### Heatmap (`nonlinear_validation_heatmap.png`)
 
@@ -3877,7 +3887,7 @@ chr2 2
    - Solution: If extreme (<10% minority), consider class weights
 
 3. **Encoding issues**
-   - Check: Run `python test_encoding_pipeline.py`
+   - Check: Run `python utilities/demos/test_encoding_pipeline.py`
    - Solution: Verify features have non-zero variance
 
 4. **Wrong learning rate**
@@ -4806,7 +4816,7 @@ This appendix lists key methodological references that motivate recent pipeline 
 
 #### Attention mechanisms
 
-- **Scaled dot-product attention** for modeling interactions:
+- **Scaled dot-product attention** for modelling interactions:
   Vaswani A, et al. (2017). *Attention Is All You Need.* **NeurIPS**.
 
 #### Epistasis detection

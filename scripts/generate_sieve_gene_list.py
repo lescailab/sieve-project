@@ -214,7 +214,7 @@ def generate_gene_list(
         .rename(columns={gene_col: "gene_name"})
     )
 
-    # Rank by score (descending — highest score = rank 1)
+    # Rank by score (descending, highest score = rank 1)
     gene_df = gene_df.sort_values("gene_score", ascending=False).reset_index(drop=True)
     gene_df["gene_rank"] = range(1, len(gene_df) + 1)
 
@@ -251,7 +251,7 @@ def generate_gene_list(
         gene_df = gene_df.sort_values("gene_score", ascending=False).reset_index(drop=True)
         gene_df["gene_rank"] = range(1, len(gene_df) + 1)
 
-    # Reorder columns — include fdr_gene if present
+    # Reorder columns, include fdr_gene if present
     output_cols = ["gene_name", "gene_rank", "gene_score", "n_variants", "chromosome"]
     if "fdr_gene" in gene_df.columns:
         output_cols.append("fdr_gene")

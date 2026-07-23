@@ -5,8 +5,8 @@ Plot real vs null mean_attribution distributions.
 Consumes two raw rankings files (sieve_variant_rankings.csv from real and null
 explainability runs) and writes a two-panel PNG:
 
-  Panel 1 — overlaid histograms of mean_attribution (real = blue, null = grey)
-  Panel 2 — standardised shape comparison with KDE overlay and shape statistics
+  Panel 1, overlaid histograms of mean_attribution (real = blue, null = grey)
+  Panel 2, standardised shape comparison with KDE overlay and shape statistics
 
 Usage:
     python scripts/plot_null_comparison.py \

@@ -107,7 +107,7 @@ The script adds:
 - `corrected_rank`: rank based on `z_attribution`
 - `is_sex_chrom`: flags chrX/chrY variants
 
-All existing columns — including `empirical_p_variant` and `fdr_variant` — are preserved unchanged. By default, the corrected rankings exclude sex chromosomes. Use `--include-sex-chroms` if you want to keep them in the output (they remain flagged).
+All existing columns, including `empirical_p_variant` and `fdr_variant`, are preserved unchanged. By default, the corrected rankings exclude sex chromosomes. Use `--include-sex-chroms` if you want to keep them in the output (they remain flagged).
 
 #### Choosing a ranking metric
 
@@ -235,9 +235,9 @@ Each row represents a pairwise comparison at a given top-k:
 | `union` | Size of the union |
 
 **How to read it**:
-- **Jaccard > 0.7**: Very similar rankings — the two levels discover largely the same variants
-- **Jaccard 0.3-0.7**: Moderate overlap — some shared discoveries, some unique to each level
-- **Jaccard < 0.3**: Different rankings — annotation level fundamentally changes which variants are prioritised
+- **Jaccard > 0.7**: Very similar rankings, the two levels discover largely the same variants
+- **Jaccard 0.3-0.7**: Moderate overlap, some shared discoveries, some unique to each level
+- **Jaccard < 0.3**: Different rankings, annotation level fundamentally changes which variants are prioritised
 
 **Scientific significance**:
 - Agreement between the L0 and L3 rankings measures how much of the ranking is stable under annotation ablation: a high L0-vs-L3 Jaccard means the ordering is carried largely by genome structure rather than by the supplied annotations
@@ -257,9 +257,9 @@ Variants ranked in the top-100 at one level but outside the top-500 at all other
 | `score_at_specific_level` | Attribution score at the specific level |
 
 **How to use these**:
-- **L0-specific variants**: Discovered from genotype patterns alone — potentially novel mechanisms invisible to annotation-based methods. Priority candidates for experimental follow-up.
-- **L3-specific variants**: Only discovered when SIFT/PolyPhen are provided — may reflect annotation-dependent signal (known pathogenicity) rather than novel discovery.
-- **L1-specific variants**: Position carries information not captured by genotype alone — may indicate positional clustering or regulatory elements.
+- **L0-specific variants**: Discovered from genotype patterns alone, potentially novel mechanisms invisible to annotation-based methods. Priority candidates for experimental follow-up.
+- **L3-specific variants**: Only discovered when SIFT/PolyPhen are provided, may reflect annotation-dependent signal (known pathogenicity) rather than novel discovery.
+- **L1-specific variants**: Position carries information not captured by genotype alone, may indicate positional clustering or regulatory elements.
 
 If you rank the same ablation inputs by `delta_rank`, interpret positive `delta_rank` as bootstrap-null-corrected promotion: the real model ranks that variant better than the null ensemble does. Comparing the `level_specific_variants.tsv` list from the `z_attribution` run against the `delta_rank` run shows which level-specific discoveries are robust across both views and which ones only appear under one ranking scheme.
 
@@ -303,7 +303,7 @@ The non-linear classifier validation tests whether the **pattern** of variation 
 |---------------------|----------|----------------|
 | Significant (p < 0.05) | RF >> LR | Non-linear multi-gene signal transfers to validation cohort |
 | Significant (p < 0.05) | RF ≈ LR | Linear signal transfers (could be captured by PRS) |
-| Not significant | — | Signal does not transfer at this level/top-k |
+| Not significant | - | Signal does not transfer at this level/top-k |
 
 #### Heatmap (`nonlinear_validation_heatmap.png`)
 

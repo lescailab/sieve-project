@@ -132,7 +132,7 @@ chr2 2
    - Solution: If extreme (<10% minority), consider class weights
 
 3. **Encoding issues**
-   - Check: Run `python test_encoding_pipeline.py`
+   - Check: Run `python utilities/demos/test_encoding_pipeline.py`
    - Solution: Verify features have non-zero variance
 
 4. **Wrong learning rate**

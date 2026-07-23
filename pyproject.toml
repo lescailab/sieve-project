@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sieve"
-version = "1.2.0"
+dynamic = ["version"]
 description = "Sparse Interpretable Exome Variant Explainer - Deep learning for genetic variant discovery"
 readme = "README.md"
 license = {text = "MIT"}
@@ -120,6 +120,9 @@ Homepage = "https://github.com/lescailab/dl-exome-img"
 Documentation = "https://github.com/lescailab/dl-exome-img#readme"
 Repository = "https://github.com/lescailab/dl-exome-img"
 Issues = "https://github.com/lescailab/dl-exome-img/issues"
+
+[tool.setuptools.dynamic]
+version = {attr = "src.__version__"}
 
 [tool.setuptools.packages.find]
 where = ["."]

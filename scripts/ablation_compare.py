@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Summarize ablation performance across annotation levels.
+Summarise ablation performance across annotation levels.
 
 Collects model metrics (AUC, accuracy, loss) from training run directories
 and ranks annotation levels by predictive performance. Supports both the
@@ -353,7 +353,7 @@ def main() -> int:
         try:
             config_data = load_yaml(config_yaml)
         except FileNotFoundError:
-            # Config is optional — infer level from directory name
+            # Config is optional, infer level from directory name
             config_data = {}
 
         flat_results = flatten_dict(results_data)

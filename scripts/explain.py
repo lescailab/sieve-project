@@ -7,13 +7,13 @@ attention patterns to discover disease-associated variants and epistatic
 interactions.
 
 Usage:
-    # Basic usage - analyze best model from experiment
+    # Basic usage - analyse best model from experiment
     python scripts/explain.py \
         --experiment-dir outputs/L3_attr_medium \
         --preprocessed-data data/preprocessed.pt \
         --output-dir results/explainability
 
-    # Analyze specific fold
+    # Analyse specific fold
     python scripts/explain.py \
         --checkpoint outputs/L3_attr_medium/fold_0/best_model.pt \
         --config outputs/L3_attr_medium/config.yaml \
@@ -276,7 +276,7 @@ def main():
     if 'input_dim' not in config:
         config['input_dim'] = get_feature_dimension(annotation_level)
     # The chromosome embedding / cross-chromosome bias bucket are sized from
-    # the dataset, not stored in the original config — surface it here so the
+    # the dataset, not stored in the original config, surface it here so the
     # constructed model matches the checkpoint's tensor shapes.
     config['num_chromosomes'] = dataset.num_chromosomes
 
@@ -626,7 +626,7 @@ def main():
         else:
             print("  ⚠️ WARNING: No chromosome column in variant rankings!")
 
-        # Rank genes — primary (max) and two alternatives
+        # Rank genes, primary (max) and two alternatives
         gene_rankings = ranker.rank_genes(
             variant_rankings=variant_rankings,
             aggregation='max'

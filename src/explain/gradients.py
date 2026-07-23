@@ -121,7 +121,7 @@ class IntegratedGradientsExplainer:
         if baseline is None:
             baseline = torch.zeros_like(variant_features)
 
-        # Build additional_forward_args — covariates and chrom_ids always
+        # Build additional_forward_args, covariates and chrom_ids always
         # included so the wrapper signature stays stable; None is passed when
         # unused.
         additional = (positions, gene_ids, mask, covariates, chrom_ids)

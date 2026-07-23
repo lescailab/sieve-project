@@ -232,7 +232,7 @@ class EfficientGeneAggregator(nn.Module):
         device = variant_embeddings.device
 
         # Apply mask. For max aggregation, padded slots must NOT compete in the
-        # element-wise max — a padded zero would beat real negative embedding
+        # element-wise max, a padded zero would beat real negative embedding
         # coordinates for whichever gene id pads carry (gene 0 by default), and
         # that gene's embedding would be silently clipped to >= 0. Setting
         # padded positions to -inf makes them lose every max comparison while

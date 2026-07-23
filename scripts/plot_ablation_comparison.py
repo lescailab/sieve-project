@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
-Visualize ablation comparison results.
+Visualise ablation comparison results.
 
 Creates a multi-panel publication-quality figure from the outputs of
 ``compare_ablation_rankings.py`` and ``ablation_compare.py``:
 
-1. Jaccard heatmap — pairwise overlap at a selected top-k
-2. Jaccard by top-k — how overlap evolves with increasing k
-3. Level-specific variant counts — variants uniquely important per level
-4. AUC comparison — model performance across annotation levels (optional)
+1. Jaccard heatmap, pairwise overlap at a selected top-k
+2. Jaccard by top-k, how overlap evolves with increasing k
+3. Level-specific variant counts, variants uniquely important per level
+4. AUC comparison, model performance across annotation levels (optional)
 
 Usage:
     python scripts/plot_ablation_comparison.py \\
