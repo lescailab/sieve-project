@@ -206,7 +206,7 @@ levels:
 ```
 
 **Interpretation**:
-- **L0 AUC > 0.6**: Genotype patterns alone carry disease signal (annotation-free discovery is feasible)
+- **L0 AUC > 0.6**: Genotype patterns alone carry disease signal. L0 is the ablation floor of the protocol, so this tells you how much of the model's discrimination survives when every supplied annotation is removed.
 - **L2 ≈ L3**: Consequence class is sufficient; SIFT/PolyPhen add little beyond consequence type
 - **L3 > L0 by >0.1 AUC**: Annotations provide substantial additional signal
 - **L3 ≈ L0**: Annotations do not help, model discovers signal from genotype structure alone
@@ -230,7 +230,7 @@ Each row represents a pairwise comparison at a given top-k:
 - **Jaccard < 0.3**: Different rankings — annotation level fundamentally changes which variants are prioritised
 
 **Scientific significance**:
-- High L0-vs-L3 Jaccard indicates the model can discover the same variants without annotations (supports annotation-free discovery)
+- Agreement between the L0 and L3 rankings measures how much of the ranking is stable under annotation ablation: a high L0-vs-L3 Jaccard means the ordering is carried largely by genome structure rather than by the supplied annotations
 - Low L0-vs-L3 Jaccard suggests annotations drive different discoveries (may indicate circular logic if annotations encode known associations)
 
 #### Level-Specific Variants (`level_specific_variants.tsv`)
@@ -261,7 +261,7 @@ The figure produced by `plot_ablation_comparison.py` contains four panels:
 
 2. **Jaccard by Top-k** (top-right): Line plot showing how overlap evolves as you consider more variants. If lines rise steeply, the top-ranked variants differ but broader rankings converge.
 
-3. **Level-Specific Counts** (bottom-left): Bar chart of how many uniquely important variants each level discovers. Large L0 bars support annotation-free discovery.
+3. **Level-Specific Counts** (bottom-left): Bar chart of how many uniquely important variants each level discovers. Large L0 bars mean a substantial part of the ranking is set at the ablation floor, before any annotation is supplied.
 
 4. **AUC Comparison** (bottom-right): Model performance per level with error bars. The best level is highlighted. The red dashed line marks random performance (AUC=0.5).
 

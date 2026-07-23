@@ -101,7 +101,23 @@ $$
 \tilde{h}_v = h_v + e_{\mathrm{chrom}(v)}
 $$
 
-## 5. Position-Aware Sparse Attention
+## 5. Position-Aware Self-Attention
+
+Attention is computed among the variant-present positions within each sample and
+is dense over that set. Cost is quadratic in the number of variants a sample
+carries, not in the number of genomic positions, which is what makes the
+computation tractable. Attention scores carry a learnable relative-position bias
+indexed by T5-style logarithmic distance buckets: small within-chromosome
+distances receive near-exact buckets, larger distances are logarithmically
+compressed up to a maximum of 100,000 bases, and a dedicated bucket indexes
+cross-chromosome pairs. Cross-chromosome attention is not masked; the separate
+bucket prevents coordinate differences between chromosomes from being read as
+within-chromosome distances.
+
+The sparsity in SIEVE is therefore a property of the input representation, which
+materialises only the alternate-allele sites each individual carries, and not a
+property of the attention pattern: there is no fixed sparsity mask, no block
+structure, and no local window.
 
 For each attention layer:
 
@@ -208,7 +224,9 @@ $$
 
 The public result key is still named `attribution_sparsity` for backward
 compatibility, but the implemented regulariser is not gradient entropy and does
-not compute Integrated Gradients during training.
+not compute Integrated Gradients during training. Integrated gradients are
+computed only in the explain step, on the best-validation-area-under-the-curve
+checkpoint, never during training.
 
 For non-chunked batches, the sparsity term is the mean normalised sum of
 variant embedding L2 norms:

@@ -1,12 +1,13 @@
 """
-Position-aware sparse attention for SIEVE.
+Position-aware self-attention for SIEVE.
 
-This module implements the core innovation: position-aware sparse attention
-that processes only variant-present positions (not all genomic positions)
-while preserving spatial relationships through relative position bias.
+This module implements position-aware dense self-attention over the sparse
+variant set: attention runs over the variant-present positions of a sample
+(not all genomic positions) while preserving spatial relationships through
+relative position bias.
 
 Key features:
-- Multi-head attention over sparse variant positions
+- Multi-head attention over the observed variant positions
 - Relative position bias with logarithmic bucketing
 - Proper masking for variable-length sequences
 - Numerically stable implementation
@@ -25,11 +26,18 @@ from src.encoding import relative_position_bucket
 
 class PositionAwareSparseAttention(nn.Module):
     """
-    Position-aware sparse attention over variant positions.
+    Position-aware self-attention over variant positions.
 
-    This is the core innovation of SIEVE. Unlike DeepRVAT (which uses
-    permutation-invariant deep sets), this attention mechanism preserves
-    genomic position information through learnable relative position bias.
+    The name is retained from an earlier design and is kept stable for
+    compatibility. Attention here is dense over the set of variants a sample
+    carries; the sparsity is a property of the input representation, which
+    materialises only alternate-allele sites, not of the attention pattern.
+    Cost is therefore quadratic in the number of variants per sample rather
+    than in the number of genomic positions.
+
+    Unlike DeepRVAT (which uses permutation-invariant deep sets), this
+    attention mechanism preserves genomic position information through a
+    learnable relative position bias.
 
     The attention computation includes:
     1. Standard multi-head attention (Q, K, V)
@@ -203,7 +211,7 @@ class PositionAwareSparseAttention(nn.Module):
         chrom_ids: Optional[Tensor] = None,
     ) -> Tuple[Tensor, Optional[Tensor]]:
         """
-        Apply position-aware sparse attention.
+        Apply position-aware self-attention.
 
         Parameters
         ----------

@@ -216,7 +216,7 @@ The annotation ablation protocol tests whether deep learning can discover varian
 - Good balance of information and interpretability
 - Comparable to existing methods
 
-**Use L0** to test annotation-free discovery:
+**Use L0** as the ablation floor of the protocol:
 - If L0 performs well (AUC > 0.6), genotype patterns alone carry signal
 - Variants unique to L0 may represent novel mechanisms
 

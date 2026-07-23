@@ -1,16 +1,20 @@
 """
 Annotation level encodings for SIEVE ablation experiments.
 
-This module implements five annotation levels (L0-L4) to systematically test
-whether deep learning can discover disease-associated variants without relying
-on functional annotation scores.
+This module implements the annotation-ablation protocol, which quantifies how
+much of a variant ranking is carried by genome structure and how much by the
+supplied functional annotation scores.
+
+There are four operational annotation levels, L0 to L3, with dimensions 1, 65,
+69 and 71 respectively. A fifth enumerator, L4, exists as a compatibility
+placeholder and is currently identical to L3.
 
 Annotation Levels:
-- L0: Genotype dosage only (annotation-free baseline)
+- L0: Genotype dosage only (ablation floor)
 - L1: L0 + genomic position (test positional signal)
 - L2: L1 + consequence class (minimal VEP)
 - L3: L2 + SIFT + PolyPhen (standard functional scores)
-- L4: L3 + additional annotations (full annotation)
+- L4: compatibility placeholder, currently identical to L3
 
 Author: Francesco Lescai
 """
@@ -34,7 +38,7 @@ class AnnotationLevel(Enum):
     - L1: + Position (test spatial signal)
     - L2: + Consequence (minimal VEP)
     - L3: + SIFT/PolyPhen (functional scores)
-    - L4: + Additional features (comprehensive)
+    - L4: compatibility placeholder, currently identical to L3
     """
 
     L0 = "L0"
@@ -199,8 +203,9 @@ def encode_variant_L0(variant: VariantRecord) -> np.ndarray:
     """
     Encode variant at Level 0: genotype only.
 
-    This is the annotation-free baseline that tests whether the model
-    can learn from genotype patterns alone without any functional annotations.
+    This is the ablation floor of the protocol: it measures what the model
+    learns from genotype patterns alone, with every functional annotation
+    removed.
 
     Parameters
     ----------
@@ -485,16 +490,16 @@ def get_level_description(level: AnnotationLevel) -> str:
     Examples
     --------
     >>> get_level_description(AnnotationLevel.L0)
-    'L0: Genotype only (annotation-free baseline)'
+    'L0: Genotype only (ablation floor)'
     >>> get_level_description(AnnotationLevel.L3)
     'L3: Genotype + Position + Consequence + SIFT + PolyPhen'
     """
     descriptions = {
-        AnnotationLevel.L0: "L0: Genotype only (annotation-free baseline)",
+        AnnotationLevel.L0: "L0: Genotype only (ablation floor)",
         AnnotationLevel.L1: "L1: Genotype + Position",
         AnnotationLevel.L2: "L2: Genotype + Position + Consequence",
         AnnotationLevel.L3: "L3: Genotype + Position + Consequence + SIFT + PolyPhen",
-        AnnotationLevel.L4: "L4: Full annotations (currently same as L3)",
+        AnnotationLevel.L4: "L4: Compatibility placeholder (currently identical to L3)",
     }
     return descriptions[level]
 
