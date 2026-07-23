@@ -416,16 +416,18 @@ python scripts/ablation_compare.py \
     --out-summary-tsv results/ablation/ablation_summary.tsv \
     --out-summary-yaml results/ablation/ablation_summary.yaml
 
-# Compare attribution rankings (use chrX-corrected files, which contain z_attribution)
-mkdir -p results/ablation/rankings
+# Compare attribution rankings, ranked by the primary metric delta_rank.
+# delta_rank lives in the rank-calibrated CSVs from bootstrap_null_calibration.py,
+# not in the chrX-corrected files, so collect those.
+mkdir -p results/ablation/rank_calibrated_rankings
 for LEVEL in L0 L1 L2 L3; do
-    cp results/null_baseline_${LEVEL}/results/attribution_comparison/corrected/corrected_variant_rankings.csv \
-       results/ablation/rankings/${LEVEL}_sieve_variant_rankings.csv
+    cp results/null_baseline_${LEVEL}/results/attribution_comparison/variant_rankings_rank_calibrated.csv \
+       results/ablation/rank_calibrated_rankings/${LEVEL}_sieve_variant_rankings.csv
 done
 
 python scripts/compare_ablation_rankings.py \
-    --ranking-dir results/ablation/rankings \
-    --score-column z_attribution \
+    --ranking-dir results/ablation/rank_calibrated_rankings \
+    --score-column delta_rank \
     --out-comparison results/ablation/ablation_ranking_comparison.yaml \
     --out-jaccard results/ablation/ablation_jaccard_matrix.tsv \
     --out-level-specific results/ablation/level_specific_variants.tsv
@@ -443,13 +445,13 @@ python scripts/plot_ablation_comparison.py \
 If your ranking files are not in a single directory with level prefixes, you can specify them individually:
 
 ```bash
-# Use chrX-corrected files, which contain z_attribution
+# Rank by delta_rank, the primary ranking metric, using the rank-calibrated CSVs
 python scripts/compare_ablation_rankings.py \
-    --rankings L0:results/null_baseline_L0/results/attribution_comparison/corrected/corrected_variant_rankings.csv \
-               L1:results/null_baseline_L1/results/attribution_comparison/corrected/corrected_variant_rankings.csv \
-               L2:results/null_baseline_L2/results/attribution_comparison/corrected/corrected_variant_rankings.csv \
-               L3:results/null_baseline_L3/results/attribution_comparison/corrected/corrected_variant_rankings.csv \
-    --score-column z_attribution \
+    --rankings L0:results/null_baseline_L0/results/attribution_comparison/variant_rankings_rank_calibrated.csv \
+               L1:results/null_baseline_L1/results/attribution_comparison/variant_rankings_rank_calibrated.csv \
+               L2:results/null_baseline_L2/results/attribution_comparison/variant_rankings_rank_calibrated.csv \
+               L3:results/null_baseline_L3/results/attribution_comparison/variant_rankings_rank_calibrated.csv \
+    --score-column delta_rank \
     --out-comparison results/ablation/ablation_ranking_comparison.yaml \
     --out-jaccard results/ablation/ablation_jaccard_matrix.tsv \
     --out-level-specific results/ablation/level_specific_variants.tsv
@@ -466,10 +468,13 @@ Tighter thresholds (e.g., `--high-rank-threshold 50 --low-rank-threshold 200`) p
 
 #### Using Null-Contrasted Significance Rankings
 
-The recommended ablation comparison uses the chrX-corrected files (`corrected_variant_rankings.csv`,
-produced by `correct_chrx_bias.py`), which contain `z_attribution`. The `variant_rankings_with_significance.csv`
-files from `run_null_baseline_analysis.sh` do not contain `z_attribution` and should be ranked by
-`empirical_p_variant` if used directly (see KNOWN_LIMITATIONS.md for the resolution-floor caveat).
+Rank the ablation comparison by `delta_rank`, the primary ranking metric, using the
+rank-calibrated files from `bootstrap_null_calibration.py`. The chrX-corrected files
+(`corrected_variant_rankings.csv`, produced by `correct_chrx_bias.py`) carry `z_attribution`,
+which is a per-chromosome visualisation score. The `variant_rankings_with_significance.csv`
+files from `run_null_baseline_analysis.sh` carry neither and would have to be ranked by
+`empirical_p_variant`, which is bounded below by `1/(N_null + 1)` and pins most real variants
+at that floor when the model is informative, making top-K selection a draw from a tied set.
 
 ```bash
 # 1. Copy chrX-corrected significance files into a comparison directory
@@ -514,24 +519,15 @@ python scripts/bootstrap_null_calibration.py \
 
 #### Bootstrap-Calibrated Ablation Workflow
 
-The bootstrap-calibrated file carries both the chrX-corrected `z_attribution` view and the bootstrap-informed `delta_rank` view. Run `compare_ablation_rankings.py` twice:
+The bootstrap-calibrated file carries both the `delta_rank` ranking metric and the `z_attribution` visualisation score. Run `compare_ablation_rankings.py` twice:
 
-- `--score-column z_attribution`: preserves continuity with the existing chrX-corrected workflow and manuscript numbers
-- `--score-column delta_rank`: adds a scale-free view that incorporates the null contribution explicitly
+- `--score-column delta_rank`: the primary ranking view, scale-free and stable across annotation levels
+- `--score-column z_attribution`: the per-chromosome visualisation view, retained for continuity with Manhattan plots and earlier runs
 
 Concordance between the two Jaccard matrices strengthens the level-specific-discovery claim. Divergence is also informative: it tells you which discoveries depend mostly on the real-signal ordering versus the bootstrap-null contrast.
 
 ```bash
-# View 1: chrX-corrected continuity
-python scripts/compare_ablation_rankings.py \
-    --ranking-dir results/ablation/rank_calibrated_rankings \
-    --score-column z_attribution \
-    --top-k 100,500,1000,2000 \
-    --out-comparison results/ablation/z_ablation_comparison.yaml \
-    --out-jaccard results/ablation/z_ablation_jaccard.tsv \
-    --out-level-specific results/ablation/z_level_specific_variants.tsv
-
-# View 2: bootstrap-informed
+# View 1: primary ranking
 python scripts/compare_ablation_rankings.py \
     --ranking-dir results/ablation/rank_calibrated_rankings \
     --score-column delta_rank \
@@ -539,11 +535,20 @@ python scripts/compare_ablation_rankings.py \
     --out-comparison results/ablation/delta_ablation_comparison.yaml \
     --out-jaccard results/ablation/delta_ablation_jaccard.tsv \
     --out-level-specific results/ablation/delta_level_specific_variants.tsv
+
+# View 2: per-chromosome visualisation
+python scripts/compare_ablation_rankings.py \
+    --ranking-dir results/ablation/rank_calibrated_rankings \
+    --score-column z_attribution \
+    --top-k 100,500,1000,2000 \
+    --out-comparison results/ablation/z_ablation_comparison.yaml \
+    --out-jaccard results/ablation/z_ablation_jaccard.tsv \
+    --out-level-specific results/ablation/z_level_specific_variants.tsv
 ```
 
 #### Non-Linear Classifier Robustness Run Pattern
 
-The non-linear classifier validation (`validate_nonlinear_classifier.py`) also supports `--score-column delta_rank`, which resolves automatically to the `gene_delta_rank` column in the gene-stats CSV. The recommended workflow is to run the validation twice with separate output TSVs — one primary run using `--score-column z_attribution` and one robustness run using `--score-column delta_rank` — and apply Benjamini-Hochberg FDR independently within each invocation across the full 16-cell grid. Do not pool the two sets of p-values into a single FDR correction, as that would halve statistical power and obscure whether the robustness finding survives on its own.
+The non-linear classifier validation (`validate_nonlinear_classifier.py`) also supports `--score-column delta_rank`, which resolves automatically to the `gene_delta_rank` column in the gene-stats CSV. The recommended workflow is to run the validation twice with separate output TSVs — one primary run using `--score-column delta_rank` and one visualisation-view run using `--score-column z_attribution` — and apply Benjamini-Hochberg FDR independently within each invocation across the full 16-cell grid. Do not pool the two sets of p-values into a single FDR correction, as that would halve statistical power and obscure whether the robustness finding survives on its own.
 
 #### Top-K Stability Sweep, Per-Pair FDR, and Direction of the Fisher Test
 

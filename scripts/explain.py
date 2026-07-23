@@ -31,9 +31,8 @@ Notes:
     Attribution magnitudes (mean_attribution, score) are model-specific and
     not directly comparable across annotation levels or model architectures.
     For cross-level ablation comparison use rank-based metrics (Jaccard on
-    top-K sets) rather than raw score differences. See KNOWN_LIMITATIONS.md
-    for details on the empirical p-value resolution floor and cross-level
-    scale incomparability.
+    top-K sets) rather than raw score differences, and rank by delta_rank,
+    which is scale-free and stable across annotation levels.
 
 Author: Francesco Lescai
 """

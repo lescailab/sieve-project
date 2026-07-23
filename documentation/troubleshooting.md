@@ -262,12 +262,12 @@ If the wall-clock time scales poorly with `--n-jobs`, confirm the script is capp
 3. Apply post-hoc correction (`correct_chrx_bias.py`)
 
 **Note**: `correct_chrx_bias.py` excludes sex chromosomes by default; use `--include-sex-chroms` if you need chrX/chrY retained.
-4. Re-run ablation comparison on the null-contrasted significance rankings:
+4. Re-run the ablation comparison ranked by `delta_rank`, the primary ranking metric, which holds the chromosome X share of the top-ranked set at 3 to 8 per cent:
    ```bash
    python scripts/compare_ablation_rankings.py \
-       --ranking-dir results/ablation/significance_rankings \
-       --score-column empirical_p_variant \
-       --out-comparison significance_ablation_ranking_comparison.yaml
+       --ranking-dir results/ablation/rank_calibrated_rankings \
+       --score-column delta_rank \
+       --out-comparison delta_ablation_ranking_comparison.yaml
    ```
 
 #### Ablation comparison with `--score-column delta_rank` gives Jaccard values of `1.0` across all level pairs

@@ -109,7 +109,17 @@ The script adds:
 
 All existing columns — including `empirical_p_variant` and `fdr_variant` — are preserved unchanged. By default, the corrected rankings exclude sex chromosomes. Use `--include-sex-chroms` if you want to keep them in the output (they remain flagged).
 
-For ablation comparison, use the chrX-corrected files `corrected_variant_rankings.csv` from `corrected/` and rank variants with `--score-column z_attribution` for the continuity view. If you have also run `bootstrap_null_calibration.py`, use the resulting rank-calibrated files with `--score-column delta_rank` for the bootstrap-informed view. `z_attribution` and `delta_rank` answer related but distinct questions: the former preserves the chrX-corrected ordering, while the latter measures promotion relative to the bootstrap-null ensemble.
+#### Choosing a ranking metric
+
+Rank variants by `delta_rank`. It is defined as `median_null_rank - real_rank`, so it is scale-free, it is stable across annotation levels, and it holds the chromosome X share of the top-ranked set at 3 to 8 per cent. It is the primary ranking metric, and it is what you should pass to `--score-column` for cross-level comparison, gene-list generation and validation.
+
+`z_attribution` is a per-chromosome z-score. Z-scoring within each chromosome removes the between-chromosome component of the signal, which flattens genome-wide differences; it is retained as a visualisation score for Manhattan plots and for continuity with earlier runs, not as a ranking metric.
+
+Do not rank by a naive magnitude-based empirical p-value when comparing models. Real and null attributions sit on different scales: the real model learns signal and its attribution distribution shifts upward, while the null sits at an area under the curve near 0.50. A p-value computed by comparing raw magnitudes across that scale gap is therefore not a valid cross-model comparison.
+
+The `argparse` defaults still name `z_attribution`, so that prior runs reproduce exactly. Pass `--score-column delta_rank` explicitly.
+
+For ablation comparison, run `bootstrap_null_calibration.py` first, then rank the resulting rank-calibrated files with `--score-column delta_rank`. If you also want the `z_attribution` view for figures, rerun with separate output paths rather than pooling the two.
 
 #### Gene Rankings
 
