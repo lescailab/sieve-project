@@ -77,7 +77,7 @@ Installing SIEVE puts 24 `sieve-*` commands on your `PATH`. Those are the
 primary form and are used throughout this guide. Every one of them is
 equivalent to running its script directly, so contributors working from a
 checkout can substitute `python scripts/<name>.py` anywhere a `sieve-*`
-command appears. See the [Command Reference](command-reference.md) for the
+command appears. See the [Command Reference](#command-reference) for the
 full mapping.
 
 ```bash
@@ -283,7 +283,7 @@ conda install -c bioconda ensembl-vep
 vep_install -a cf -s homo_sapiens -y GRCh37 -c /path/to/vep_cache
 ```
 
-See [Detailed Usage — How to Annotate Your VCF](detailed-usage.md#how-to-annotate-your-vcf-with-ensembl-vep)
+See [Detailed Usage — How to Annotate Your VCF](#how-to-annotate-your-vcf-with-ensembl-vep)
 for the full VEP command and required flags.
 
 #### Conda Package Workflow
@@ -301,7 +301,7 @@ Commands below are given in their installed form, the `sieve-*` console
 commands that `pip install sieve` puts on your `PATH`. Each is equivalent to
 running its script directly, so if you are working from a checkout you can
 substitute `python scripts/<name>.py` anywhere a `sieve-*` command appears.
-The [Command Reference](command-reference.md) lists the full mapping.
+The [Command Reference](#command-reference) lists the full mapping.
 
 Shell wrappers such as `run_null_baseline_analysis.sh` have no installed
 command and are always invoked from a checkout.
@@ -1140,7 +1140,7 @@ validation/cohort_b/nonlinear_validation/
     └── feature_matrix_L{0..3}_topK{k}.csv      # Feature matrix per (level, top_k); one file per combination, phenotype column uses 0=control 1=case
 ```
 
-**Interpreting the results**: see the [Validation](validation.md) chapter for detailed guidance.
+**Interpreting the results**: see the [Validation](#validation) chapter for detailed guidance.
 
 !!! tip "Start with quick exploration"
     Use `--n-permutations 200` for a fast initial run. Once you identify the most promising level/top-k combinations, re-run with `--n-permutations 1000` for publication-quality results.
@@ -2850,7 +2850,7 @@ python scripts/test_burden_enrichment.py \
 python scripts/validate_nonlinear_classifier.py [OPTIONS]
 ```
 
-Tests whether SIEVE gene sets carry non-linear discriminative information by training a random forest (and optionally logistic regression) on the per-gene burden vector and comparing performance against a permutation null from size-matched random gene sets. See [Validation](validation.md) for detailed usage and interpretation.
+Tests whether SIEVE gene sets carry non-linear discriminative information by training a random forest (and optionally logistic regression) on the per-gene burden vector and comparing performance against a permutation null from size-matched random gene sets. See [Validation](#validation) for detailed usage and interpretation.
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
@@ -2991,8 +2991,8 @@ The scalar burden test collapses the k-dimensional gene vector into a single sum
 
 Before running non-linear classifier validation, you need:
 
-1. **Gene-burden matrix** from `extract_validation_burden.py --compute-full-gene-matrix` (see [Complete Workflow, Step 8b](complete-workflow.md))
-2. **SIEVE gene lists** from `generate_sieve_gene_list.py` (see [Complete Workflow, Step 8a](complete-workflow.md))
+1. **Gene-burden matrix** from `extract_validation_burden.py --compute-full-gene-matrix` (see [Complete Workflow, Step 8b](#complete-workflow))
+2. **SIEVE gene lists** from `generate_sieve_gene_list.py` (see [Complete Workflow, Step 8a](#complete-workflow))
 3. **Phenotype file** in standard SIEVE format (`sample_id<TAB>phenotype`, 1=control, 2=case)
 
 ---
@@ -3623,7 +3623,7 @@ The figure produced by `plot_ablation_comparison.py` contains four panels:
 
 #### Non-Linear Classifier Validation Results
 
-The non-linear classifier validation tests whether the **pattern** of variation across SIEVE genes jointly discriminates cases from controls, beyond what a scalar burden sum can capture. See the [Validation](validation.md) chapter for full usage details.
+The non-linear classifier validation tests whether the **pattern** of variation across SIEVE genes jointly discriminates cases from controls, beyond what a scalar burden sum can capture. See the [Validation](#validation) chapter for full usage details.
 
 ##### Summary Table (`nonlinear_validation_summary.tsv`)
 
@@ -3779,7 +3779,7 @@ python scripts/train.py \
 annotation format (e.g. SnpEff `ANN` field).
 
 **Solution**: Run VEP before preprocessing. See the
-[Detailed Usage](detailed-usage.md#how-to-annotate-your-vcf-with-ensembl-vep)
+[Detailed Usage](#how-to-annotate-your-vcf-with-ensembl-vep)
 page for the full command and required flags. The minimal command is:
 
 ```bash
