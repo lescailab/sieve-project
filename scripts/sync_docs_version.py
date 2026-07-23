@@ -122,12 +122,18 @@ def _ignoring_date(text: str) -> str:
 
 
 def splice(text: str, block: str) -> str:
-    """Replace the marker-delimited block in ``text`` with ``block``."""
+    """Replace the marker-delimited block in ``text`` with ``block``.
+
+    The closing marker is searched for *after* the opening one, so a stray
+    earlier occurrence cannot pair with it and swallow the document.
+    """
     start = text.find(BEGIN)
-    end = text.find(END)
-    if start == -1 or end == -1:
+    if start == -1:
+        raise SystemExit(f"Opening marker not found in {INDEX.name}: {BEGIN}")
+    end = text.find(END, start + len(BEGIN))
+    if end == -1:
         raise SystemExit(
-            f"Markers not found in {INDEX.name}. Expected {BEGIN} and {END}."
+            f"Closing marker not found after the opening one in {INDEX.name}: {END}"
         )
     return text[:start] + block + text[end + len(END) :]
 
@@ -151,8 +157,10 @@ def main(argv: list[str] | None = None) -> int:
         # The date is stamped at build time, so only the version is enforced.
         if _ignoring_date(current) != _ignoring_date(updated):
             print(
-                f"The version shown in {INDEX.relative_to(ROOT)} does not match "
-                f"src/__init__.py ({version}).\n"
+                f"The generated version block in {INDEX.relative_to(ROOT)} is out "
+                f"of date. It should state version {version}, from "
+                "src/__init__.py; any other edit inside the markers is also "
+                "reported here, since the block is generated in full.\n"
                 "Run: python scripts/sync_docs_version.py",
                 file=sys.stderr,
             )

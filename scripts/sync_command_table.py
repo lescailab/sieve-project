@@ -102,12 +102,19 @@ def build_block(entry_points: dict[str, str]) -> str:
 
 
 def splice(text: str, block: str) -> str:
-    """Replace the marker-delimited block in ``text`` with ``block``."""
+    """Replace the marker-delimited block in ``text`` with ``block``.
+
+    The closing marker is searched for *after* the opening one, so a stray
+    earlier occurrence cannot pair with it and swallow the document.
+    """
     start = text.find(BEGIN)
-    end = text.find(END)
-    if start == -1 or end == -1:
+    if start == -1:
+        raise SystemExit(f"Opening marker not found in {REFERENCE.name}: {BEGIN}")
+    end = text.find(END, start + len(BEGIN))
+    if end == -1:
         raise SystemExit(
-            f"Markers not found in {REFERENCE.name}. Expected {BEGIN} and {END}."
+            f"Closing marker not found after the opening one in "
+            f"{REFERENCE.name}: {END}"
         )
     return text[:start] + block + text[end + len(END) :]
 
