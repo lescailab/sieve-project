@@ -24,8 +24,9 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 import yaml
 
@@ -35,7 +36,7 @@ OUTPUT = ROOT / "USER_GUIDE.md"
 
 GUIDE_TITLE = "SIEVE User Guide"
 
-BANNER = f"""<!--
+BANNER = """<!--
 This file is GENERATED. Do not edit it by hand.
 
 Source of truth: the documentation/ directory (rendered at
@@ -51,6 +52,9 @@ fail the build.
 """
 
 HEADING_RE = re.compile(r"^(#{1,6})(\s+)(.*)$")
+# Stamped at build time by scripts/sync_docs_version.py, so it is excluded from
+# the drift comparison: it legitimately differs between commits.
+DATE_LINE_RE = re.compile(r"^\*\*Last updated\*\*: \d{4}-\d{2}-\d{2}$", re.MULTILINE)
 FENCE_RE = re.compile(r"^(\s*)(`{3,}|~{3,})(.*)$")
 
 
@@ -295,6 +299,11 @@ def assemble(pages: list[Path] | None = None) -> str:
     return "\n".join(parts).rstrip("\n") + "\n"
 
 
+def _ignoring_date(text: str) -> str:
+    """Blank the build-time date line so two renderings compare without it."""
+    return DATE_LINE_RE.sub("**Last updated**: DATE", text)
+
+
 def main(argv: list[str] | None = None) -> int:
     """Entry point for the assembler."""
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
@@ -309,7 +318,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.check:
         current = OUTPUT.read_text(encoding="utf-8") if OUTPUT.exists() else ""
-        if current != content:
+        if _ignoring_date(current) != _ignoring_date(content):
             print(
                 f"{OUTPUT.name} is out of date with documentation/.\n"
                 "Run: python scripts/assemble_user_guide.py",

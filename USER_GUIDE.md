@@ -32,10 +32,13 @@ fail the build.
 - [Appendix B: Experimental Protocol](#appendix-b-experimental-protocol)
 - [Appendix C: Method References](#appendix-c-method-references)
 
-**Version**: 1.2.0
-**Last Updated**: 2026-04-29
-**For**: SIEVE v1.2.0+
+<!-- BEGIN GENERATED VERSION -->
 
+**Version**: 1.3.0
+
+**Last updated**: 2026-07-23
+
+<!-- END GENERATED VERSION -->
 
 ## Introduction
 
@@ -4185,17 +4188,6 @@ If you use SIEVE in your research, please cite:
 ## License
 
 MIT License - See LICENSE file for details.
-
----
-
-**Last Updated**: 2026-02-06
-**Document Version**: 1.1
-**SIEVE Version**: 0.1.0+
-
-
----
-
-## Appendices
 
 ## Appendix A: Model Architecture Details
 

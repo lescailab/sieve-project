@@ -1,9 +1,12 @@
 # SIEVE User Guide
 
-**Version**: 1.2.0
-**Last Updated**: 2026-04-29
-**For**: SIEVE v1.2.0+
+<!-- BEGIN GENERATED VERSION -->
 
+**Version**: 1.3.0
+
+**Last updated**: 2026-07-23
+
+<!-- END GENERATED VERSION -->
 
 ## Introduction
 

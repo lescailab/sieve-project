@@ -11,6 +11,8 @@ on:
       - mkdocs.yml
       - requirements-docs.txt
       - scripts/assemble_user_guide.py
+      - scripts/sync_docs_version.py
+      - src/__init__.py
       - .github/workflows/deploy-docs.yml
   workflow_dispatch:
 
@@ -43,6 +45,12 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements-docs.txt
+
+      # Stamps the version and the date of the commit being deployed. Done here
+      # rather than at commit time so the published page always reflects HEAD;
+      # the working-tree edit is never committed back.
+      - name: Stamp version and commit date
+        run: python scripts/sync_docs_version.py
 
       - name: Build MkDocs site
         run: mkdocs build --clean
