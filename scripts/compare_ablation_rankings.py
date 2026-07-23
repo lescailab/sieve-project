@@ -4,28 +4,33 @@ Compare null-contrasted variant rankings across annotation levels L0-L3.
 
 After running the per-level null baseline workflow, this script compares the
 resulting significance-annotated variant rankings to quantify how much the
-discovered variants depend on the annotation information provided. By default
-it ranks variants by ``z_attribution`` from
-``corrected_variant_rankings.csv`` (produced by ``correct_chrx_bias.py``).
-Higher z-scores are treated as better ranks automatically. Key analyses:
+discovered variants depend on the annotation information provided. Key
+analyses:
 
 1. Jaccard similarity matrices at multiple top-k thresholds
 2. Level-specific variant discovery (high rank at one level, low at others)
 
 Note on score column choice
 ---------------------------
-``z_attribution`` is the recommended column for cross-level comparison
-because it is comparable across chromosomes (per-chromosome z-normalised)
-and is not subject to the resolution-floor problem of empirical p-values
-(see KNOWN_LIMITATIONS.md).  ``empirical_p_variant`` is bounded below by
-1/(N_null + 1), which pins most real variants at the floor when the model
-is informative, making top-K selection a random draw from a tied set.
+``delta_rank`` is the recommended column for cross-level comparison. It is
+scale-free, stable across annotation levels, and is the primary variant
+ranking metric.
+
+``z_attribution`` is a per-chromosome z-score. Z-scoring within each
+chromosome removes the between-chromosome component of the signal, which
+flattens genome-wide differences and makes the column unsuitable for
+cross-level ranking comparison. It is retained as a visualisation score for
+Manhattan plots and for continuity with earlier runs.
+
+``empirical_p_variant`` is bounded below by 1/(N_null + 1), which pins most
+real variants at the floor when the model is informative, making top-K
+selection a random draw from a tied set.
 
 Usage:
     # From a directory with L{0..3}_sieve_variant_rankings.csv files
     python scripts/compare_ablation_rankings.py \\
         --ranking-dir results/ablation \\
-        --score-column z_attribution \\
+        --score-column delta_rank \\
         --out-comparison ablation_ranking_comparison.yaml
 
     # With explicit per-level paths (using chrX-corrected files which contain z_attribution)
@@ -549,11 +554,12 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default="z_attribution",
         help=(
-            "Column name to use for ranking variants. "
-            "Defaults to z_attribution (per-chromosome z-normalised attribution "
-            "from correct_chrx_bias.py), which is recommended for cross-level "
-            "comparison because it is not subject to the empirical p-value "
-            "resolution floor (see KNOWN_LIMITATIONS.md). "
+            "Column name to use for ranking variants. delta_rank is the "
+            "recommended choice: it is scale-free, stable across annotation "
+            "levels, and is the primary ranking metric. z_attribution is a "
+            "per-chromosome z-score, which flattens genome-wide signal and is "
+            "retained as a visualisation score for Manhattan plots and for "
+            "continuity with earlier runs. "
             "Columns such as empirical_p_variant, fdr_variant, and corrected_rank "
             "are ranked ascending automatically; attribution-like scores are "
             "ranked descending."
@@ -594,8 +600,7 @@ def main() -> int:
             "Warning: empirical_p_variant may be at the resolution floor for "
             "high-information annotation levels (median p pinned to 1/(N+1)), "
             "making top-K selection a draw from a tied set. "
-            "Consider z_attribution for cross-level comparison "
-            "(see KNOWN_LIMITATIONS.md).",
+            "Consider delta_rank for cross-level comparison.",
             file=sys.stderr,
         )
 

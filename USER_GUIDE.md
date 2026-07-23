@@ -760,14 +760,14 @@ Running SIEVE on the validation cohorts would validate that the pipeline works, 
 **Command**:
 ```bash
 python scripts/generate_sieve_gene_list.py \
-    --variant-rankings results/attribution_comparison/corrected/corrected_variant_rankings.csv \
+    --variant-rankings results/attribution_comparison/variant_rankings_rank_calibrated.csv \
     --output validation/sieve_gene_lists/sieve_genes.tsv \
-    --score-column z_attribution \
+    --score-column delta_rank \
     --exclude-sex-chroms \
     --aggregation max
 ```
 
-This takes the chrX-corrected variant rankings and produces a ranked gene list where each gene's score is the maximum `z_attribution` across its variants. Sex chromosome genes are excluded by default (consistent with the corrected rankings).
+This takes the rank-calibrated variant rankings and produces a ranked gene list where each gene's score is the maximum `delta_rank` across its variants. `delta_rank` is the primary ranking metric. Sex chromosome genes are excluded by default.
 
 **To generate per-ablation-level gene lists** (for testing whether different annotation levels replicate differently):
 ```bash
@@ -776,7 +776,7 @@ for level in L0 L1 L2 L3; do
         --variant-rankings results/${level}_attribution_comparison/corrected/corrected_variant_rankings.csv \
         --output validation/sieve_gene_lists/sieve_genes.tsv \
         --ablation-level ${level} \
-        --score-column z_attribution \
+        --score-column delta_rank \
         --aggregation max
 done
 ```
@@ -799,38 +799,39 @@ This retains only genes containing at least one variant exceeding the null model
 python scripts/generate_sieve_gene_list.py \
     --variant-rankings results/attribution_comparison/corrected/corrected_variant_rankings.csv \
     --output validation/sieve_gene_lists/sieve_genes_fdr05.tsv \
-    --score-column z_attribution \
+    --score-column delta_rank \
     --fdr-threshold 0.05 \
     --aggregation max
 ```
 
 This includes only genes whose `fdr_gene` is below 0.05. The gene significance is auto-discovered from `gene_rankings_with_significance.csv` in the same directory as the variant rankings, or from `corrected_gene_rankings.csv` if it contains `fdr_gene` (see `correct_chrx_bias.py`). Use `--gene-significance` to override the auto-discovery path.
 
-**Bootstrap-informed (`delta_rank`) gene list**:
+**`z_attribution` visualisation gene list**:
 
-The same script accepts `--score-column delta_rank` when given the
-rank-calibrated variant rankings produced by `bootstrap_null_calibration.py`.
-The aggregation (`max` by default) is then taken over the variant-level
-`delta_rank` column, mirroring the `gene_delta_rank = max(delta_rank)` rule
-used elsewhere in the pipeline.
+The same script accepts `--score-column z_attribution` when given the
+chrX-corrected variant rankings produced by `correct_chrx_bias.py`. This is
+the per-chromosome visualisation view, retained for continuity with Manhattan
+plots and earlier runs; per-chromosome z-scoring flattens genome-wide signal,
+so do not use it as the primary ranking.
 
 ```bash
 for level in L0 L1 L2 L3; do
     python scripts/generate_sieve_gene_list.py \
-        --variant-rankings results/${level}_attribution_comparison/corrected/variant_rankings_rank_calibrated.csv \
+        --variant-rankings results/${level}_attribution_comparison/corrected/corrected_variant_rankings.csv \
         --output validation/sieve_gene_lists/sieve_genes.tsv \
         --ablation-level ${level} \
-        --score-column delta_rank \
+        --score-column z_attribution \
         --aggregation max
 done
 ```
 
 This produces a parallel set of `L0_sieve_genes.tsv` ... `L3_sieve_genes.tsv`
-gene lists ranked by `delta_rank`. Feed these into
+gene lists ranked by `z_attribution`. Feed these into
 `extract_validation_burden.py` and `test_burden_enrichment.py` exactly as the
-`z_attribution` lists are used. Run the burden enrichment twice — once on each
-gene-list family — and report both as primary and robustness views, applying
-BH-FDR independently within each family across the `{level × top-k ×
+`delta_rank` lists are used. Run the burden enrichment twice, once on each
+gene-list family, and report the `delta_rank` family as primary and the
+`z_attribution` family as the visualisation view, applying BH-FDR
+independently within each family across the `{level × top-k ×
 consequence-class}` grid. Do not pool the two families into a single FDR
 correction.
 
@@ -1174,9 +1175,9 @@ Putting it all together for two validation cohorts:
 ```bash
 # --- Gene list from discovery cohort ---
 python scripts/generate_sieve_gene_list.py \
-    --variant-rankings results/attribution_comparison/corrected/corrected_variant_rankings.csv \
+    --variant-rankings results/attribution_comparison/variant_rankings_rank_calibrated.csv \
     --output validation/sieve_gene_lists/sieve_genes.tsv \
-    --score-column z_attribution \
+    --score-column delta_rank \
     --aggregation max
 
 # --- Cohort B ---
@@ -1715,7 +1716,7 @@ python scripts/ablation_compare.py \
     --out-summary-tsv results/ablation/ablation_summary.tsv \
     --out-summary-yaml results/ablation/ablation_summary.yaml
 
-# Compare attribution rankings (use chrX-corrected files, which contain z_attribution)
+# Compare attribution rankings, ranked by the primary metric delta_rank
 mkdir -p results/ablation/rankings
 for LEVEL in L0 L1 L2 L3; do
     cp results/null_baseline_${LEVEL}/results/attribution_comparison/corrected/corrected_variant_rankings.csv \
@@ -1724,7 +1725,7 @@ done
 
 python scripts/compare_ablation_rankings.py \
     --ranking-dir results/ablation/rankings \
-    --score-column z_attribution \
+    --score-column delta_rank \
     --out-comparison results/ablation/ablation_ranking_comparison.yaml \
     --out-jaccard results/ablation/ablation_jaccard_matrix.tsv \
     --out-level-specific results/ablation/level_specific_variants.tsv
@@ -1742,13 +1743,13 @@ python scripts/plot_ablation_comparison.py \
 If your ranking files are not in a single directory with level prefixes, you can specify them individually:
 
 ```bash
-# Use chrX-corrected files, which contain z_attribution
+# Rank by delta_rank, the primary ranking metric
 python scripts/compare_ablation_rankings.py \
     --rankings L0:results/null_baseline_L0/results/attribution_comparison/corrected/corrected_variant_rankings.csv \
                L1:results/null_baseline_L1/results/attribution_comparison/corrected/corrected_variant_rankings.csv \
                L2:results/null_baseline_L2/results/attribution_comparison/corrected/corrected_variant_rankings.csv \
                L3:results/null_baseline_L3/results/attribution_comparison/corrected/corrected_variant_rankings.csv \
-    --score-column z_attribution \
+    --score-column delta_rank \
     --out-comparison results/ablation/ablation_ranking_comparison.yaml \
     --out-jaccard results/ablation/ablation_jaccard_matrix.tsv \
     --out-level-specific results/ablation/level_specific_variants.tsv
@@ -1765,10 +1766,13 @@ Tighter thresholds (e.g., `--high-rank-threshold 50 --low-rank-threshold 200`) p
 
 ##### Using Null-Contrasted Significance Rankings
 
-The recommended ablation comparison uses the chrX-corrected files (`corrected_variant_rankings.csv`,
-produced by `correct_chrx_bias.py`), which contain `z_attribution`. The `variant_rankings_with_significance.csv`
-files from `run_null_baseline_analysis.sh` do not contain `z_attribution` and should be ranked by
-`empirical_p_variant` if used directly (see KNOWN_LIMITATIONS.md for the resolution-floor caveat).
+Rank the ablation comparison by `delta_rank`, the primary ranking metric, using the
+rank-calibrated files from `bootstrap_null_calibration.py`. The chrX-corrected files
+(`corrected_variant_rankings.csv`, produced by `correct_chrx_bias.py`) carry `z_attribution`,
+which is a per-chromosome visualisation score. The `variant_rankings_with_significance.csv`
+files from `run_null_baseline_analysis.sh` carry neither and would have to be ranked by
+`empirical_p_variant`, which is bounded below by `1/(N_null + 1)` and pins most real variants
+at that floor when the model is informative, making top-K selection a draw from a tied set.
 
 ```bash
 # 1. Copy chrX-corrected significance files into a comparison directory
@@ -1813,24 +1817,15 @@ python scripts/bootstrap_null_calibration.py \
 
 ##### Bootstrap-Calibrated Ablation Workflow
 
-The bootstrap-calibrated file carries both the chrX-corrected `z_attribution` view and the bootstrap-informed `delta_rank` view. Run `compare_ablation_rankings.py` twice:
+The bootstrap-calibrated file carries both the `delta_rank` ranking metric and the `z_attribution` visualisation score. Run `compare_ablation_rankings.py` twice:
 
-- `--score-column z_attribution`: preserves continuity with the existing chrX-corrected workflow and manuscript numbers
-- `--score-column delta_rank`: adds a scale-free view that incorporates the null contribution explicitly
+- `--score-column delta_rank`: the primary ranking view, scale-free and stable across annotation levels
+- `--score-column z_attribution`: the per-chromosome visualisation view, retained for continuity with Manhattan plots and earlier runs
 
 Concordance between the two Jaccard matrices strengthens the level-specific-discovery claim. Divergence is also informative: it tells you which discoveries depend mostly on the real-signal ordering versus the bootstrap-null contrast.
 
 ```bash
-# View 1: chrX-corrected continuity
-python scripts/compare_ablation_rankings.py \
-    --ranking-dir results/ablation/rank_calibrated_rankings \
-    --score-column z_attribution \
-    --top-k 100,500,1000,2000 \
-    --out-comparison results/ablation/z_ablation_comparison.yaml \
-    --out-jaccard results/ablation/z_ablation_jaccard.tsv \
-    --out-level-specific results/ablation/z_level_specific_variants.tsv
-
-# View 2: bootstrap-informed
+# View 1: primary ranking
 python scripts/compare_ablation_rankings.py \
     --ranking-dir results/ablation/rank_calibrated_rankings \
     --score-column delta_rank \
@@ -1838,11 +1833,20 @@ python scripts/compare_ablation_rankings.py \
     --out-comparison results/ablation/delta_ablation_comparison.yaml \
     --out-jaccard results/ablation/delta_ablation_jaccard.tsv \
     --out-level-specific results/ablation/delta_level_specific_variants.tsv
+
+# View 2: per-chromosome visualisation
+python scripts/compare_ablation_rankings.py \
+    --ranking-dir results/ablation/rank_calibrated_rankings \
+    --score-column z_attribution \
+    --top-k 100,500,1000,2000 \
+    --out-comparison results/ablation/z_ablation_comparison.yaml \
+    --out-jaccard results/ablation/z_ablation_jaccard.tsv \
+    --out-level-specific results/ablation/z_level_specific_variants.tsv
 ```
 
 ##### Non-Linear Classifier Robustness Run Pattern
 
-The non-linear classifier validation (`validate_nonlinear_classifier.py`) also supports `--score-column delta_rank`, which resolves automatically to the `gene_delta_rank` column in the gene-stats CSV. The recommended workflow is to run the validation twice with separate output TSVs — one primary run using `--score-column z_attribution` and one robustness run using `--score-column delta_rank` — and apply Benjamini-Hochberg FDR independently within each invocation across the full 16-cell grid. Do not pool the two sets of p-values into a single FDR correction, as that would halve statistical power and obscure whether the robustness finding survives on its own.
+The non-linear classifier validation (`validate_nonlinear_classifier.py`) also supports `--score-column delta_rank`, which resolves automatically to the `gene_delta_rank` column in the gene-stats CSV. The recommended workflow is to run the validation twice with separate output TSVs — one primary run using `--score-column delta_rank` and one visualisation-view run using `--score-column z_attribution` — and apply Benjamini-Hochberg FDR independently within each invocation across the full 16-cell grid. Do not pool the two sets of p-values into a single FDR correction, as that would halve statistical power and obscure whether the robustness finding survives on its own.
 
 ##### Top-K Stability Sweep, Per-Pair FDR, and Direction of the Fisher Test
 
@@ -2415,21 +2419,22 @@ Compares variant attribution rankings across annotation levels. Computes pairwis
 | `--out-comparison` | path | `ablation_ranking_comparison.yaml` | Output YAML summary |
 | `--out-jaccard` | path | `ablation_jaccard_matrix.tsv` | Output Jaccard matrix TSV |
 | `--out-level-specific` | path | `level_specific_variants.tsv` | Output level-specific variants TSV |
-| `--score-column` | str | `z_attribution` | Column to rank variants by. Recommended choices are `z_attribution` for the chrX-corrected continuity view and `delta_rank` for the bootstrap-informed null-calibrated view. P/FDR-like columns and true rank columns are ranked ascending automatically; `delta_rank` is ranked descending. |
+| `--score-column` | str | `z_attribution` | Column to rank variants by. **Use `delta_rank`**: it is the primary ranking metric, scale-free and stable across annotation levels. `z_attribution` is a per-chromosome z-score retained as a visualisation score for Manhattan plots and for continuity with earlier runs; per-chromosome z-scoring flattens genome-wide signal, so it is not suitable for cross-level ranking comparison. P/FDR-like columns and true rank columns are ranked ascending automatically; `delta_rank` is ranked descending. The default is unchanged for reproducibility of prior runs, so pass `--score-column delta_rank` explicitly. |
 
 **Example**:
 ```bash
 python scripts/compare_ablation_rankings.py \
     --ranking-dir results/ablation/rankings \
-    --score-column z_attribution \
+    --score-column delta_rank \
     --top-k 50,100,200,500 \
     --out-comparison results/ablation/ablation_ranking_comparison.yaml \
     --out-jaccard results/ablation/ablation_jaccard_matrix.tsv \
     --out-level-specific results/ablation/level_specific_variants.tsv
 ```
 
-For the two-run `z_attribution` plus `delta_rank` workflow, see
-`USER_GUIDE.md` under **Bootstrap-calibrated ablation comparison**.
+To additionally produce the `z_attribution` visualisation view, rerun with
+`--score-column z_attribution` and separate output paths. For the two-run
+workflow, see **Bootstrap-calibrated ablation comparison** under Detailed Usage.
 
 ---
 
@@ -2549,7 +2554,7 @@ python scripts/aggregate_gene_interactions.py [OPTIONS]
 | `--min-cooccur-samples` | int | 5 | Minimum gene-pair co-occurrence |
 | `--top-k-genes` | int list | `100` | Top-K gene set sizes. List supported (e.g. `100 2000`) for stability sweeps. Quadratic in K. The default is now 100; pass `50` explicitly to reproduce older default runs. |
 | `--min-gene-score` | float | 0.0 | Minimum gene score |
-| `--score-column` | str | `z_attribution` | Variant-level score column for ranking and gene scoring. Choices: `z_attribution`, `delta_rank`. Use `delta_rank` with a rank-calibrated input from `bootstrap_null_calibration.py`. |
+| `--score-column` | str | `z_attribution` | Variant-level score column for ranking and gene scoring. Choices: `z_attribution`, `delta_rank`. **Use `delta_rank`** with a rank-calibrated input from `bootstrap_null_calibration.py`: it is the primary ranking metric. `z_attribution` is a per-chromosome visualisation score. The default is unchanged for reproducibility of prior runs. |
 | `--significance-threshold` | str | `p_0.05` | Null-derived significance threshold to enforce when available |
 | `--min-significant-variants` | int | 1 | Minimum number of significant variants required for a gene |
 | `--allow-nonsignificant-genes` | flag | False | Allow genes with no null-significant variants |
@@ -2615,7 +2620,7 @@ Aggregates variant-level SIEVE rankings to a gene-level TSV for cross-cohort bur
 |--------|------|---------|-------------|
 | `--variant-rankings` | path | required | Corrected variant rankings CSV |
 | `--output` | path | required | Output gene list TSV |
-| `--score-column` | str | `z_attribution` | Column to use for scoring |
+| `--score-column` | str | `z_attribution` | Column to use for scoring. **Use `delta_rank`**, the primary ranking metric, which resolves to the gene-level `gene_delta_rank` column when present. `z_attribution` is a per-chromosome visualisation score retained for continuity with Manhattan plots and earlier runs. The default is unchanged for reproducibility of prior runs. |
 | `--exclude-sex-chroms` | flag | True | Exclude sex chromosome genes |
 | `--include-sex-chroms` | flag | False | Include sex chromosome genes (overrides --exclude-sex-chroms) |
 | `--min-null-threshold` | str | None | Only include genes with variants exceeding this null threshold (`p05`, `p01`, `p001`) |
@@ -2629,7 +2634,7 @@ Aggregates variant-level SIEVE rankings to a gene-level TSV for cross-cohort bur
 python scripts/generate_sieve_gene_list.py \
     --variant-rankings results/attribution_comparison/corrected/corrected_variant_rankings.csv \
     --output validation/sieve_gene_lists/sieve_genes.tsv \
-    --score-column z_attribution \
+    --score-column delta_rank \
     --aggregation max
 ```
 
@@ -2638,7 +2643,7 @@ python scripts/generate_sieve_gene_list.py \
 python scripts/generate_sieve_gene_list.py \
     --variant-rankings results/attribution_comparison/corrected/corrected_variant_rankings.csv \
     --output validation/sieve_gene_lists/sieve_genes_fdr05.tsv \
-    --score-column z_attribution \
+    --score-column delta_rank \
     --fdr-threshold 0.05 \
     --aggregation max
 ```
@@ -2769,7 +2774,7 @@ Tests whether SIEVE gene sets carry non-linear discriminative information by tra
 | `--cv-folds` | int | `5` | Number of stratified CV folds |
 | `--seed` | int | `42` | Random seed |
 | `--n-cores` | int | `-1` | Number of outer-loop cores for permutation evaluation |
-| `--score-column` | str | `z_attribution` | Gene-ranking score to use; `z_attribution` maps to `gene_z_score` |
+| `--score-column` | str | `z_attribution` | Gene-ranking score to use. **Use `delta_rank`**, the primary ranking metric, which resolves to `gene_delta_rank`. `z_attribution` maps to `gene_z_score` and is the per-chromosome visualisation view. The default is unchanged for reproducibility of prior runs. |
 | `--also-export-csv` | flag | off | Export classifier input matrices as CSV under `csv/` in the output directory |
 
 **Example** (fixed top-k, multi-level with both classifiers):
@@ -2985,11 +2990,15 @@ python scripts/validate_nonlinear_classifier.py \
 
 #### Score Column Selection
 
-Use `--score-column z_attribution` for the default corrected-score workflow. The script maps this onto the gene-level `gene_z_score` column inside `corrected_gene_rankings*.csv`.
+Use `--score-column delta_rank`. This is the primary ranking metric: scale-free, stable across annotation levels, and mapped automatically onto the `gene_delta_rank` column in the gene-stats CSV produced by `bootstrap_null_calibration.py`, where each gene's score is `max(delta_rank)` across its variants by default. Higher values indicate stronger promotion of the gene's variants by the real model relative to the bootstrap-null ensemble.
 
-Use `--score-column fdr_gene` when you want to rank genes by their gene-level null-contrast significance instead of corrected effect size. Lower values are treated as better for FDR-based ranking.
+Use `--score-column z_attribution` for the per-chromosome visualisation view, retained for continuity with Manhattan plots and earlier runs. The script maps this onto the gene-level `gene_z_score` column inside `corrected_gene_rankings*.csv`. Per-chromosome z-scoring flattens genome-wide signal, so do not use it as the primary ranking.
 
-Use `--score-column delta_rank` for a bootstrap-informed robustness check. This maps onto the `gene_delta_rank` column in the gene-stats CSV produced by `bootstrap_null_calibration.py`, where each gene's score is `max(delta_rank)` across its variants by default (mirroring `gene_z_score = max(z_attribution)`). Higher values indicate stronger promotion of the gene's variants by the real model relative to the bootstrap-null ensemble. Run the validation twice with separate `--output-tsv` paths — one for `z_attribution` and one for `delta_rank` — and apply BH-FDR independently within each invocation across the full result grid. Pooling the two runs would halve statistical power and prevent a clean determination of whether the robustness finding holds independently. The same primary/robustness pattern applies upstream when generating the gene list itself (`generate_sieve_gene_list.py --score-column delta_rank`); see `complete-workflow.md` Step 8a.
+Use `--score-column fdr_gene` when you want to rank genes by their gene-level null-contrast significance instead of effect size. Lower values are treated as better for FDR-based ranking.
+
+Run the validation twice with separate `--output-tsv` paths, one for `delta_rank` and one for `z_attribution`, and apply BH-FDR independently within each invocation across the full result grid. Pooling the two runs would halve statistical power and prevent a clean determination of whether each view holds independently. The same pattern applies upstream when generating the gene list itself (`generate_sieve_gene_list.py --score-column delta_rank`); see the Complete Workflow, Step 8a.
+
+The `argparse` default is still `z_attribution` so that prior runs reproduce exactly. Pass `--score-column delta_rank` explicitly.
 
 #### FDR-Threshold Gene Selection
 
@@ -3045,7 +3054,7 @@ parameters:
   classifier: random_forest
   cv_folds: 5
   n_permutations: 1000
-  score_column: z_attribution
+  score_column: delta_rank
 
 observed:
   mean_auc: 0.587
@@ -3176,10 +3185,10 @@ Putting scalar burden and non-linear classifier validation together for one coho
 # --- Step 1: Generate gene lists per ablation level ---
 for level in L0 L1 L2 L3; do
     python scripts/generate_sieve_gene_list.py \
-        --variant-rankings results/${level}_attribution_comparison/corrected/corrected_variant_rankings.csv \
+        --variant-rankings results/${level}_attribution_comparison/variant_rankings_rank_calibrated.csv \
         --output validation/sieve_gene_lists/sieve_genes.tsv \
         --ablation-level ${level} \
-        --score-column z_attribution \
+        --score-column delta_rank \
         --aggregation max
 done
 
@@ -3352,7 +3361,17 @@ The script adds:
 
 All existing columns — including `empirical_p_variant` and `fdr_variant` — are preserved unchanged. By default, the corrected rankings exclude sex chromosomes. Use `--include-sex-chroms` if you want to keep them in the output (they remain flagged).
 
-For ablation comparison, use the chrX-corrected files `corrected_variant_rankings.csv` from `corrected/` and rank variants with `--score-column z_attribution` for the continuity view. If you have also run `bootstrap_null_calibration.py`, use the resulting rank-calibrated files with `--score-column delta_rank` for the bootstrap-informed view. `z_attribution` and `delta_rank` answer related but distinct questions: the former preserves the chrX-corrected ordering, while the latter measures promotion relative to the bootstrap-null ensemble.
+##### Choosing a ranking metric
+
+Rank variants by `delta_rank`. It is defined as `median_null_rank - real_rank`, so it is scale-free, it is stable across annotation levels, and it holds the chromosome X share of the top-ranked set at 3 to 8 per cent. It is the primary ranking metric, and it is what you should pass to `--score-column` for cross-level comparison, gene-list generation and validation.
+
+`z_attribution` is a per-chromosome z-score. Z-scoring within each chromosome removes the between-chromosome component of the signal, which flattens genome-wide differences; it is retained as a visualisation score for Manhattan plots and for continuity with earlier runs, not as a ranking metric.
+
+Do not rank by a naive magnitude-based empirical p-value when comparing models. Real and null attributions sit on different scales: the real model learns signal and its attribution distribution shifts upward, while the null sits at an area under the curve near 0.50. A p-value computed by comparing raw magnitudes across that scale gap is therefore not a valid cross-model comparison.
+
+The `argparse` defaults still name `z_attribution`, so that prior runs reproduce exactly. Pass `--score-column delta_rank` explicitly.
+
+For ablation comparison, run `bootstrap_null_calibration.py` first, then rank the resulting rank-calibrated files with `--score-column delta_rank`. If you also want the `z_attribution` view for figures, rerun with separate output paths rather than pooling the two.
 
 ##### Gene Rankings
 
@@ -3896,12 +3915,12 @@ If the wall-clock time scales poorly with `--n-jobs`, confirm the script is capp
 3. Apply post-hoc correction (`correct_chrx_bias.py`)
 
 **Note**: `correct_chrx_bias.py` excludes sex chromosomes by default; use `--include-sex-chroms` if you need chrX/chrY retained.
-4. Re-run ablation comparison on the null-contrasted significance rankings:
+4. Re-run the ablation comparison ranked by `delta_rank`, the primary ranking metric, which holds the chromosome X share of the top-ranked set at 3 to 8 per cent:
    ```bash
    python scripts/compare_ablation_rankings.py \
-       --ranking-dir results/ablation/significance_rankings \
-       --score-column empirical_p_variant \
-       --out-comparison significance_ablation_ranking_comparison.yaml
+       --ranking-dir results/ablation/rank_calibrated_rankings \
+       --score-column delta_rank \
+       --out-comparison delta_ablation_ranking_comparison.yaml
    ```
 
 ##### Ablation comparison with `--score-column delta_rank` gives Jaccard values of `1.0` across all level pairs

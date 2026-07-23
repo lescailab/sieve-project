@@ -33,7 +33,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--score-column",
         default="z_attribution",
-        help="Column to use for scoring (default: z_attribution)",
+        help=(
+            "Column to use for scoring (default: z_attribution). delta_rank is "
+            "the recommended choice: it is the primary ranking metric, "
+            "scale-free and stable across annotation levels. z_attribution is a "
+            "per-chromosome visualisation score retained for continuity with "
+            "Manhattan plots and earlier runs."
+        ),
     )
     parser.add_argument(
         "--exclude-sex-chroms",
