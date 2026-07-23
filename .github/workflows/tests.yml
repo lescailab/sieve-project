@@ -95,5 +95,8 @@ jobs:
       - name: Fail if any console entry point is undocumented
         run: python scripts/sync_command_table.py --check
 
+      - name: Fail if the documented version is out of date
+        run: python scripts/sync_docs_version.py --check
+
       - name: Check prose style (British English, no em dashes)
         run: python scripts/check_docs_style.py

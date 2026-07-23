@@ -386,7 +386,8 @@ sieve-project/
 │   ├── compare_ablation_rankings.py   # Ranking overlap across levels
 │   ├── plot_ablation_comparison.py    # Multi-panel ablation figure
 │   ├── assemble_user_guide.py         # Builds USER_GUIDE.md from documentation/
-│   └── sync_command_table.py          # Syncs the installed-command table
+│   ├── sync_command_table.py          # Syncs the installed-command table
+│   └── sync_docs_version.py           # Syncs the documented version
 ├── utilities/
 │   └── demos/             # Print-driven walkthrough scripts (not pytest tests)
 └── tests/                 # Unit tests

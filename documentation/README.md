@@ -12,7 +12,13 @@ Editing `USER_GUIDE.md` directly will fail the `docs-drift` CI job: change the
 relevant page here instead, then run `python scripts/assemble_user_guide.py`
 and commit both.
 
-The Installed Commands table in `command-reference.md` is likewise generated,
-from `[project.scripts]` in `pyproject.toml`, by
-`scripts/sync_command_table.py`. Adding or renaming a console entry point
-without rerunning it fails the same CI job.
+Two regions inside these pages are generated too, each between HTML comment
+markers, and each checked by the same CI job:
+
+- the Installed Commands table in `command-reference.md`, from
+  `[project.scripts]` in `pyproject.toml`, by `scripts/sync_command_table.py`
+- the version line in `index.md`, from `__version__` in `src/__init__.py`, by
+  `scripts/sync_docs_version.py`
+
+Adding or renaming a console entry point, or bumping the version, without
+rerunning the corresponding script fails CI.
