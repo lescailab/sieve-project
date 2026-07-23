@@ -91,3 +91,6 @@ jobs:
             echo "  python scripts/assemble_user_guide.py"
             exit 1
           fi
+
+      - name: Fail if any console entry point is undocumented
+        run: python scripts/sync_command_table.py --check

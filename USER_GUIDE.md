@@ -73,6 +73,13 @@ Unlike existing methods:
 
 #### For the Impatient
 
+Installing SIEVE puts 24 `sieve-*` commands on your `PATH`. Those are the
+primary form and are used throughout this guide. Every one of them is
+equivalent to running its script directly, so contributors working from a
+checkout can substitute `python scripts/<name>.py` anywhere a `sieve-*`
+command appears. See the [Command Reference](#command-reference) for the
+full mapping.
+
 ```bash
 # 1. Install
 git clone https://github.com/lescailab/sieve-project.git
@@ -102,29 +109,29 @@ vep \
 tabix -p vcf your_data_vep.vcf.gz
 
 # 3. (Optional, recommended) Infer genetic sex for ploidy-aware encoding
-python scripts/infer_sex.py \
+sieve-infer-sex \
     --vcf your_data_vep.vcf.gz \
     --output-dir results/sex_inference \
     --genome-build GRCh37
 
 # 4. Preprocess (once)
-python scripts/preprocess.py \
+sieve-preprocess \
     --vcf your_data_vep.vcf.gz \
     --phenotypes phenotypes.tsv \
     --output preprocessed.pt \
     --sex-map results/sex_inference/sample_sex.tsv \
     --genome-build GRCh37
 
-# 4. Train
-python scripts/train.py \
+# 5. Train
+sieve-train \
     --preprocessed-data preprocessed.pt \
     --level L3 \
     --experiment-name my_model \
     --output-dir experiments \
     --device cuda
 
-# 5. Explain
-python scripts/explain.py \
+# 6. Explain
+sieve-explain \
     --experiment-dir experiments/my_model \
     --preprocessed-data preprocessed.pt \
     --output-dir results/explainability
@@ -140,7 +147,7 @@ bash scripts/run_null_baseline_analysis.sh
 # 7. (Optional) Correct chrX ploidy bias for ranking/visualisation
 #    Run AFTER step 6 on the significance-annotated file so that
 #    empirical_p_variant and fdr_variant columns are preserved in the output.
-python scripts/correct_chrx_bias.py \
+sieve-correct-chrx-bias \
     --rankings results/null_baseline_run/results/attribution_comparison/variant_rankings_with_significance.csv \
     --output-dir results/null_baseline_run/results/attribution_comparison/corrected \
     --include-sex-chroms
@@ -150,7 +157,7 @@ python scripts/correct_chrx_bias.py \
 
 ```bash
 # Use included test data
-python scripts/train.py \
+sieve-train \
     --vcf test_data/small/test_data.vcf.gz \
     --phenotypes test_data/small/test_data_phenotypes.tsv \
     --level L3 \
@@ -158,6 +165,9 @@ python scripts/train.py \
     --batch-size 8 \
     --output-dir test_run
 ```
+
+Working from a checkout instead of an installed environment? The same run is
+`python scripts/train.py` with identical arguments.
 
 ---
 
@@ -273,7 +283,7 @@ conda install -c bioconda ensembl-vep
 vep_install -a cf -s homo_sapiens -y GRCh37 -c /path/to/vep_cache
 ```
 
-See [Detailed Usage — How to Annotate Your VCF](detailed-usage.md#how-to-annotate-your-vcf-with-ensembl-vep)
+See [Detailed Usage — How to Annotate Your VCF](#how-to-annotate-your-vcf-with-ensembl-vep)
 for the full VEP command and required flags.
 
 #### Conda Package Workflow
@@ -286,6 +296,15 @@ package. A complete command-based walkthrough is in:
 ---
 
 ## Complete Workflow
+
+Commands below are given in their installed form, the `sieve-*` console
+commands that `pip install sieve` puts on your `PATH`. Each is equivalent to
+running its script directly, so if you are working from a checkout you can
+substitute `python scripts/<name>.py` anywhere a `sieve-*` command appears.
+The [Command Reference](#command-reference) lists the full mapping.
+
+Shell wrappers such as `run_null_baseline_analysis.sh` have no installed
+command and are always invoked from a checkout.
 
 #### Overview
 
@@ -343,7 +362,7 @@ package. A complete command-based walkthrough is in:
 
 **Command**:
 ```bash
-python scripts/preprocess.py \
+sieve-preprocess \
     --vcf cohort.vcf.gz \
     --phenotypes phenotypes.tsv \
     --output preprocessed.pt \
@@ -353,7 +372,7 @@ python scripts/preprocess.py \
 
 **Optional sex inference** (recommended for chrX/chrY analyses):
 ```bash
-python scripts/infer_sex.py \
+sieve-infer-sex \
     --vcf cohort.vcf.gz \
     --output-dir results/sex_inference \
     --genome-build GRCh37
@@ -390,7 +409,7 @@ python scripts/infer_sex.py \
 
 **Command**:
 ```bash
-python scripts/train.py \
+sieve-train \
     --preprocessed-data preprocessed.pt \
     --level L3 \
     --val-split 0.2 \
@@ -433,7 +452,7 @@ python scripts/train.py \
 
 **Command**:
 ```bash
-python scripts/explain.py \
+sieve-explain \
     --experiment-dir experiments/my_model \
     --preprocessed-data preprocessed.pt \
     --output-dir results/explainability \
@@ -482,27 +501,27 @@ The wrapper reads hyperparameters directly from the real run `config.yaml` (incl
 **Manual Steps** (for reference — the wrapper above covers all of these automatically):
 ```bash
 # 1. Create permuted dataset
-python scripts/create_null_baseline.py \
+sieve-create-null-baseline \
     --input preprocessed.pt \
     --output preprocessed_NULL.pt \
     --seed 42
 
 # 2. Train null model (SAME params as real!)
-python scripts/train.py \
+sieve-train \
     --preprocessed-data preprocessed_NULL.pt \
     --level L3 \
     --experiment-name null_baseline \
     [... exact same parameters as real model ...]
 
 # 3. Run explainability on null
-python scripts/explain.py \
+sieve-explain \
     --experiment-dir experiments/null_baseline \
     --preprocessed-data preprocessed_NULL.pt \
     --output-dir results/null_attributions \
     --is-null-baseline
 
 # 4. Compare raw real vs raw null attributions
-python scripts/compare_attributions.py \
+sieve-compare-attributions \
     --real results/explainability/sieve_variant_rankings.csv \
     --null results/null_attributions/sieve_variant_rankings.csv \
     --output-dir results/attribution_comparison \
@@ -510,7 +529,7 @@ python scripts/compare_attributions.py \
 
 # 5. (Separate) Apply chrX correction to the significance-annotated file
 #    Run this AFTER compare_attributions.py so significance columns are preserved
-python scripts/correct_chrx_bias.py \
+sieve-correct-chrx-bias \
     --rankings results/attribution_comparison/variant_rankings_with_significance.csv \
     --output-dir results/attribution_comparison/corrected \
     --include-sex-chroms \
@@ -552,7 +571,7 @@ ChrX correction (`correct_chrx_bias.py`) is a separate ranking adjustment applie
 
 **Step 5a: Compare model performance across levels**:
 ```bash
-python scripts/ablation_compare.py \
+sieve-ablation-compare \
     --results-dir experiments \
     --out-summary-tsv results/ablation/ablation_summary.tsv \
     --out-summary-yaml results/ablation/ablation_summary.yaml
@@ -579,7 +598,7 @@ for LEVEL in L0 L1 L2 L3; do
 done
 
 # Run comparison
-python scripts/compare_ablation_rankings.py \
+sieve-compare-ablation-rankings \
     --ranking-dir results/ablation/rankings \
     --score-column empirical_p_variant \
     --top-k 50,100,200,500 \
@@ -592,7 +611,7 @@ python scripts/compare_ablation_rankings.py \
 
 **Step 5d: Visualise the comparison**:
 ```bash
-python scripts/plot_ablation_comparison.py \
+sieve-plot-ablation-comparison \
     --jaccard-tsv results/ablation/ablation_jaccard_matrix.tsv \
     --level-specific-tsv results/ablation/level_specific_variants.tsv \
     --summary-yaml results/ablation/ablation_summary.yaml \
@@ -628,7 +647,7 @@ This path is especially interesting because the candidate interactions come from
 
 **Commands**:
 ```bash
-python scripts/explain.py \
+sieve-explain \
     --experiment-dir experiments/my_model \
     --preprocessed-data preprocessed.pt \
     --output-dir results/explainability \
@@ -638,7 +657,7 @@ python scripts/explain.py \
 ```
 
 ```bash
-python scripts/validate_epistasis.py \
+sieve-validate-epistasis \
     --interactions results/explainability/sieve_interactions.csv \
     --checkpoint experiments/my_model/best_model.pt \
     --config experiments/my_model/config.yaml \
@@ -672,13 +691,13 @@ Use it to answer three questions that the attention path alone cannot resolve:
 
 **Commands**:
 ```bash
-python scripts/audit_cooccurrence.py \
+sieve-audit-cooccurrence \
     --preprocessed-data preprocessed.pt \
     --output-dir results/epistasis_audit
 ```
 
 ```bash
-python scripts/aggregate_gene_interactions.py \
+sieve-aggregate-gene-interactions \
     --preprocessed-data preprocessed.pt \
     --variant-rankings results/attribution_comparison/corrected_variant_rankings.csv \
     --gene-rankings results/attribution_comparison/corrected_gene_rankings.csv \
@@ -688,7 +707,7 @@ python scripts/aggregate_gene_interactions.py \
 ```
 
 ```bash
-python scripts/epistasis_power_analysis.py \
+sieve-epistasis-power-analysis \
     --cooccurrence results/epistasis_audit/cooccurrence_per_pair.csv \
     --cooccurrence-summary results/epistasis_audit/cooccurrence_by_maf_bin.csv \
     --real-attributions-npz results/explainability/attributions.npz \
@@ -714,7 +733,7 @@ python scripts/epistasis_power_analysis.py \
 
 **Command**:
 ```bash
-python scripts/validate_discoveries.py \
+sieve-validate-discoveries \
     --variant-rankings results/explainability/sieve_variant_rankings.csv \
     --gene-rankings results/explainability/sieve_gene_rankings.csv \
     --output-dir results/validation \
@@ -759,7 +778,7 @@ Running SIEVE on the validation cohorts would validate that the pipeline works, 
 
 **Command**:
 ```bash
-python scripts/generate_sieve_gene_list.py \
+sieve-generate-gene-list \
     --variant-rankings results/attribution_comparison/variant_rankings_rank_calibrated.csv \
     --output validation/sieve_gene_lists/sieve_genes.tsv \
     --score-column delta_rank \
@@ -772,7 +791,7 @@ This takes the rank-calibrated variant rankings and produces a ranked gene list 
 **To generate per-ablation-level gene lists** (for testing whether different annotation levels replicate differently):
 ```bash
 for level in L0 L1 L2 L3; do
-    python scripts/generate_sieve_gene_list.py \
+    sieve-generate-gene-list \
         --variant-rankings results/${level}_attribution_comparison/variant_rankings_rank_calibrated.csv \
         --output validation/sieve_gene_lists/sieve_genes.tsv \
         --ablation-level ${level} \
@@ -785,7 +804,7 @@ This produces `L0_sieve_genes.tsv`, `L1_sieve_genes.tsv`, etc.
 
 **Optional: filter to null-significant genes only**:
 ```bash
-python scripts/generate_sieve_gene_list.py \
+sieve-generate-gene-list \
     --variant-rankings results/attribution_comparison/corrected/corrected_variant_rankings.csv \
     --output validation/sieve_gene_lists/sieve_genes_sig.tsv \
     --min-null-threshold p01 \
@@ -796,7 +815,7 @@ This retains only genes containing at least one variant exceeding the null model
 
 **Optional: filter by FDR threshold** (gene set size determined dynamically):
 ```bash
-python scripts/generate_sieve_gene_list.py \
+sieve-generate-gene-list \
     --variant-rankings results/attribution_comparison/variant_rankings_rank_calibrated.csv \
     --output validation/sieve_gene_lists/sieve_genes_fdr05.tsv \
     --score-column delta_rank \
@@ -816,7 +835,7 @@ so do not use it as the primary ranking.
 
 ```bash
 for level in L0 L1 L2 L3; do
-    python scripts/generate_sieve_gene_list.py \
+    sieve-generate-gene-list \
         --variant-rankings results/${level}_attribution_comparison/corrected/corrected_variant_rankings.csv \
         --output validation/sieve_gene_lists/sieve_genes.tsv \
         --ablation-level ${level} \
@@ -856,7 +875,7 @@ NEXN         3            2.98          2             1
 
 **Command** (recommended — with full matrix for permutation testing):
 ```bash
-python scripts/extract_validation_burden.py \
+sieve-extract-burden \
     --vcf /path/to/validation_cohort.vcf.gz \
     --phenotypes /path/to/validation_phenotypes.tsv \
     --sieve-genes validation/sieve_gene_lists/sieve_genes.tsv \
@@ -894,7 +913,7 @@ python scripts/extract_validation_burden.py \
 >
 > ```bash
 > # Parse VCF once (use any gene list — the matrix is gene-list agnostic)
-> python scripts/extract_validation_burden.py \
+> sieve-extract-burden \
 >     --vcf /path/to/validation_cohort.vcf.gz \
 >     --phenotypes /path/to/validation_phenotypes.tsv \
 >     --sieve-genes validation/sieve_gene_lists/L3_sieve_genes.tsv \
@@ -905,7 +924,7 @@ python scripts/extract_validation_burden.py \
 >
 > # Test enrichment per level (fast — reads parquet, no VCF)
 > for level in L0 L1 L2 L3; do
->     python scripts/test_burden_enrichment.py \
+>     sieve-test-burden-enrichment \
 >         --burden-dir validation/cohort_b \
 >         --sieve-genes validation/sieve_gene_lists/${level}_sieve_genes.tsv \
 >         --output-dir validation/cohort_b/enrichment_${level} \
@@ -938,7 +957,7 @@ validation/cohort_b/
 
 **Repeat for each validation cohort**:
 ```bash
-python scripts/extract_validation_burden.py \
+sieve-extract-burden \
     --vcf /path/to/cohort_c.vcf.gz \
     --phenotypes /path/to/cohort_c_phenotypes.tsv \
     --sieve-genes validation/sieve_gene_lists/sieve_genes.tsv \
@@ -965,7 +984,7 @@ Because the full gene matrix was pre-computed in Step 8b, each permutation is a 
 
 **Command**:
 ```bash
-python scripts/test_burden_enrichment.py \
+sieve-test-burden-enrichment \
     --burden-dir validation/cohort_b \
     --sieve-genes validation/sieve_gene_lists/sieve_genes.tsv \
     --output-dir validation/cohort_b/enrichment \
@@ -976,7 +995,7 @@ python scripts/test_burden_enrichment.py \
 
 **To test consequence-specific enrichment** (requires `--consequence-stratify` in Step 8b):
 ```bash
-python scripts/test_burden_enrichment.py \
+sieve-test-burden-enrichment \
     --burden-dir validation/cohort_b \
     --sieve-genes validation/sieve_gene_lists/sieve_genes.tsv \
     --output-dir validation/cohort_b/enrichment \
@@ -988,7 +1007,7 @@ python scripts/test_burden_enrichment.py \
 
 **To include covariates** (e.g. sex, principal components):
 ```bash
-python scripts/test_burden_enrichment.py \
+sieve-test-burden-enrichment \
     --burden-dir validation/cohort_b \
     --sieve-genes validation/sieve_gene_lists/sieve_genes.tsv \
     --output-dir validation/cohort_b/enrichment \
@@ -1036,7 +1055,7 @@ The `cross_cohort_validation_summary.yaml` applies Bonferroni correction across 
 **Per-ablation-level testing** (tests whether different annotation levels replicate differently):
 ```bash
 for level in L0 L1 L2 L3; do
-    python scripts/test_burden_enrichment.py \
+    sieve-test-burden-enrichment \
         --burden-dir validation/cohort_b \
         --sieve-genes validation/sieve_gene_lists/${level}_sieve_genes.tsv \
         --output-dir validation/cohort_b/enrichment_${level} \
@@ -1072,7 +1091,7 @@ The script auto-detects `gene_rankings_with_significance.csv` in each level subd
 
 **Command — fixed top-k** (all levels at once):
 ```bash
-python scripts/validate_nonlinear_classifier.py \
+sieve-validate-nonlinear-classifier \
     --real-rankings-dir ablation/significance_rankings \
     --burden-matrix validation/cohort_b/gene_burden_matrix.parquet \
     --phenotypes /path/to/validation_phenotypes.tsv \
@@ -1086,7 +1105,7 @@ python scripts/validate_nonlinear_classifier.py \
 
 **Command — FDR-threshold** (gene set size determined per level):
 ```bash
-python scripts/validate_nonlinear_classifier.py \
+sieve-validate-nonlinear-classifier \
     --real-rankings-dir ablation/significance_rankings \
     --burden-matrix validation/cohort_b/gene_burden_matrix.parquet \
     --phenotypes /path/to/validation_phenotypes.tsv \
@@ -1121,7 +1140,7 @@ validation/cohort_b/nonlinear_validation/
     └── feature_matrix_L{0..3}_topK{k}.csv      # Feature matrix per (level, top_k); one file per combination, phenotype column uses 0=control 1=case
 ```
 
-**Interpreting the results**: see the [Validation](validation.md) chapter for detailed guidance.
+**Interpreting the results**: see the [Validation](#validation) chapter for detailed guidance.
 
 !!! tip "Start with quick exploration"
     Use `--n-permutations 200` for a fast initial run. Once you identify the most promising level/top-k combinations, re-run with `--n-permutations 1000` for publication-quality results.
@@ -1134,7 +1153,7 @@ validation/cohort_b/nonlinear_validation/
 
 **Command**:
 ```bash
-python scripts/summarize_classifier_comparison.py \
+sieve-summarize-classifier-comparison \
     --results-dir validation/cohort_b/nonlinear_validation/ \
     --output-dir validation/cohort_b/nonlinear_validation/summary_plots/
 ```
@@ -1151,7 +1170,7 @@ This script scans the YAML outputs from Step 8d, pairs RF and LR results per `(l
 
 **Command**:
 ```bash
-python scripts/plot_validation_burden.py \
+sieve-plot-validation-burden \
     --input-dirs validation/cohort_b/enrichment_L0 \
                  validation/cohort_b/enrichment_L1 \
                  validation/cohort_b/enrichment_L2 \
@@ -1174,14 +1193,14 @@ Putting it all together for two validation cohorts:
 
 ```bash
 # --- Gene list from discovery cohort ---
-python scripts/generate_sieve_gene_list.py \
+sieve-generate-gene-list \
     --variant-rankings results/attribution_comparison/variant_rankings_rank_calibrated.csv \
     --output validation/sieve_gene_lists/sieve_genes.tsv \
     --score-column delta_rank \
     --aggregation max
 
 # --- Cohort B ---
-python scripts/extract_validation_burden.py \
+sieve-extract-burden \
     --vcf /path/to/validation_cohort_b.vcf.gz \
     --phenotypes /path/to/validation_cohort_b_phenotypes.tsv \
     --sieve-genes validation/sieve_gene_lists/sieve_genes.tsv \
@@ -1190,7 +1209,7 @@ python scripts/extract_validation_burden.py \
     --consequence-stratify \
     --compute-full-gene-matrix
 
-python scripts/test_burden_enrichment.py \
+sieve-test-burden-enrichment \
     --burden-dir validation/cohort_b \
     --sieve-genes validation/sieve_gene_lists/sieve_genes.tsv \
     --output-dir validation/cohort_b/enrichment \
@@ -1200,7 +1219,7 @@ python scripts/test_burden_enrichment.py \
     --seed 42
 
 # --- Cohort C ---
-python scripts/extract_validation_burden.py \
+sieve-extract-burden \
     --vcf /path/to/validation_cohort_c.vcf.gz \
     --phenotypes /path/to/validation_cohort_c_phenotypes.tsv \
     --sieve-genes validation/sieve_gene_lists/sieve_genes.tsv \
@@ -1209,7 +1228,7 @@ python scripts/extract_validation_burden.py \
     --consequence-stratify \
     --compute-full-gene-matrix
 
-python scripts/test_burden_enrichment.py \
+sieve-test-burden-enrichment \
     --burden-dir validation/cohort_c \
     --sieve-genes validation/sieve_gene_lists/sieve_genes.tsv \
     --output-dir validation/cohort_c/enrichment \
@@ -1219,7 +1238,7 @@ python scripts/test_burden_enrichment.py \
     --seed 42
 
 # --- Non-linear classifier validation (Cohort B) ---
-python scripts/validate_nonlinear_classifier.py \
+sieve-validate-nonlinear-classifier \
     --real-rankings-dir ablation/significance_rankings \
     --burden-matrix validation/cohort_b/gene_burden_matrix.parquet \
     --phenotypes /path/to/cohort_b_phenotypes.tsv \
@@ -1229,12 +1248,12 @@ python scripts/validate_nonlinear_classifier.py \
     --classifiers rf,lr \
     --n-cores 8
 
-python scripts/summarize_classifier_comparison.py \
+sieve-summarize-classifier-comparison \
     --results-dir validation/cohort_b/nonlinear_validation/ \
     --output-dir validation/cohort_b/nonlinear_validation/summary_plots/
 
 # --- Non-linear classifier validation (Cohort C) ---
-python scripts/validate_nonlinear_classifier.py \
+sieve-validate-nonlinear-classifier \
     --real-rankings-dir ablation/significance_rankings \
     --burden-matrix validation/cohort_c/gene_burden_matrix.parquet \
     --phenotypes /path/to/cohort_c_phenotypes.tsv \
@@ -1244,12 +1263,12 @@ python scripts/validate_nonlinear_classifier.py \
     --classifiers rf,lr \
     --n-cores 8
 
-python scripts/summarize_classifier_comparison.py \
+sieve-summarize-classifier-comparison \
     --results-dir validation/cohort_c/nonlinear_validation/ \
     --output-dir validation/cohort_c/nonlinear_validation/summary_plots/
 
 # --- Collect and plot scalar burden results ---
-python scripts/plot_validation_burden.py \
+sieve-plot-validation-burden \
     --input-dirs validation/cohort_b/enrichment_L0 \
                  validation/cohort_b/enrichment_L1 \
                  validation/cohort_b/enrichment_L2 \
@@ -1986,6 +2005,72 @@ conservative by a factor of the test count.
 ---
 
 ## Command Reference
+
+### Installed Commands
+
+<!-- BEGIN GENERATED COMMAND TABLE -->
+
+Installing SIEVE (`pip install sieve`) provides 24 console
+commands. Each is equivalent to running the script it points at, so
+`sieve-train --help` and `python scripts/train.py --help` are the same
+command. The installed form is the one to use from an installed
+environment; the script path is for contributors working from a checkout.
+
+This table is generated from `[project.scripts]` in `pyproject.toml` by
+`scripts/sync_command_table.py`. Do not edit it by hand.
+
+| Installed command | Script |
+|-------------------|--------|
+| `sieve-ablation-compare` | `scripts/ablation_compare.py` |
+| `sieve-aggregate-gene-interactions` | `scripts/aggregate_gene_interactions.py` |
+| `sieve-audit-cooccurrence` | `scripts/audit_cooccurrence.py` |
+| `sieve-bootstrap-null-calibration` | `scripts/bootstrap_null_calibration.py` |
+| `sieve-check-sex-balance` | `scripts/check_sex_balance.py` |
+| `sieve-compare-ablation-rankings` | `scripts/compare_ablation_rankings.py` |
+| `sieve-compare-attributions` | `scripts/compare_attributions.py` |
+| `sieve-correct-chrx-bias` | `scripts/correct_chrx_bias.py` |
+| `sieve-create-null-baseline` | `scripts/create_null_baseline.py` |
+| `sieve-epistasis-power-analysis` | `scripts/epistasis_power_analysis.py` |
+| `sieve-explain` | `scripts/explain.py` |
+| `sieve-extract-burden` | `scripts/extract_validation_burden.py` |
+| `sieve-generate-gene-list` | `scripts/generate_sieve_gene_list.py` |
+| `sieve-infer-sex` | `scripts/infer_sex.py` |
+| `sieve-plot-ablation-comparison` | `scripts/plot_ablation_comparison.py` |
+| `sieve-plot-validation-burden` | `scripts/plot_validation_burden.py` |
+| `sieve-preprocess` | `scripts/preprocess.py` |
+| `sieve-run-null-baseline` | `scripts/run_null_baseline.py` |
+| `sieve-summarize-classifier-comparison` | `scripts/summarize_classifier_comparison.py` |
+| `sieve-test-burden-enrichment` | `scripts/test_burden_enrichment.py` |
+| `sieve-train` | `scripts/train.py` |
+| `sieve-validate-discoveries` | `scripts/validate_discoveries.py` |
+| `sieve-validate-epistasis` | `scripts/validate_epistasis.py` |
+| `sieve-validate-nonlinear-classifier` | `scripts/validate_nonlinear_classifier.py` |
+
+<!-- END GENERATED COMMAND TABLE -->
+
+#### Scripts without an entry point
+
+These scripts are plotting and repair utilities. They deliberately have no
+installed command and are run from a checkout with `python scripts/<name>.py`:
+
+- `check_chromosome_distribution.py`
+- `fix_ranking_outputs.py`
+- `gene_enrichment_plot.py`
+- `manhattan_plot.py`
+- `plot_ablation.py`
+- `plot_detailed_architecture.py`
+- `plot_null_comparison.py`
+- `plot_training_history.py`
+- `render_model_architecture.py`
+- `repair_gene_delta_rank.py`
+
+Two further scripts maintain the documentation itself and are described in
+`documentation/README.md`: `assemble_user_guide.py` and
+`sync_command_table.py`.
+
+---
+
+### Command Options
 
 #### preprocess.py
 
@@ -2765,7 +2850,7 @@ python scripts/test_burden_enrichment.py \
 python scripts/validate_nonlinear_classifier.py [OPTIONS]
 ```
 
-Tests whether SIEVE gene sets carry non-linear discriminative information by training a random forest (and optionally logistic regression) on the per-gene burden vector and comparing performance against a permutation null from size-matched random gene sets. See [Validation](validation.md) for detailed usage and interpretation.
+Tests whether SIEVE gene sets carry non-linear discriminative information by training a random forest (and optionally logistic regression) on the per-gene burden vector and comparing performance against a permutation null from size-matched random gene sets. See [Validation](#validation) for detailed usage and interpretation.
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
@@ -2906,8 +2991,8 @@ The scalar burden test collapses the k-dimensional gene vector into a single sum
 
 Before running non-linear classifier validation, you need:
 
-1. **Gene-burden matrix** from `extract_validation_burden.py --compute-full-gene-matrix` (see [Complete Workflow, Step 8b](complete-workflow.md))
-2. **SIEVE gene lists** from `generate_sieve_gene_list.py` (see [Complete Workflow, Step 8a](complete-workflow.md))
+1. **Gene-burden matrix** from `extract_validation_burden.py --compute-full-gene-matrix` (see [Complete Workflow, Step 8b](#complete-workflow))
+2. **SIEVE gene lists** from `generate_sieve_gene_list.py` (see [Complete Workflow, Step 8a](#complete-workflow))
 3. **Phenotype file** in standard SIEVE format (`sample_id<TAB>phenotype`, 1=control, 2=case)
 
 ---
@@ -3538,7 +3623,7 @@ The figure produced by `plot_ablation_comparison.py` contains four panels:
 
 #### Non-Linear Classifier Validation Results
 
-The non-linear classifier validation tests whether the **pattern** of variation across SIEVE genes jointly discriminates cases from controls, beyond what a scalar burden sum can capture. See the [Validation](validation.md) chapter for full usage details.
+The non-linear classifier validation tests whether the **pattern** of variation across SIEVE genes jointly discriminates cases from controls, beyond what a scalar burden sum can capture. See the [Validation](#validation) chapter for full usage details.
 
 ##### Summary Table (`nonlinear_validation_summary.tsv`)
 
@@ -3694,7 +3779,7 @@ python scripts/train.py \
 annotation format (e.g. SnpEff `ANN` field).
 
 **Solution**: Run VEP before preprocessing. See the
-[Detailed Usage](detailed-usage.md#how-to-annotate-your-vcf-with-ensembl-vep)
+[Detailed Usage](#how-to-annotate-your-vcf-with-ensembl-vep)
 page for the full command and required flags. The minimal command is:
 
 ```bash

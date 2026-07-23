@@ -183,6 +183,76 @@ def _slugify(heading: str) -> str:
     return re.sub(r"[-\s]+", "-", slug).strip("-")
 
 
+LINK_RE = re.compile(r"\]\(([^)\s]+\.md)(#[^)\s]*)?\)")
+
+
+def page_anchors(pages: list[Path]) -> dict[str, str]:
+    """Map each page's path, as pages link to it, to its in-document anchor.
+
+    A cross-page link such as ``](command-reference.md)`` is correct on the
+    MkDocs site, where each page is its own URL, but dangles in the assembled
+    single-file guide. This mapping lets those links be rewritten to the
+    anchor of the corresponding heading.
+
+    Parameters
+    ----------
+    pages : list of Path
+        The documentation pages being assembled.
+
+    Returns
+    -------
+    dict of str to str
+        Both the bare filename and the path relative to ``documentation/``,
+        mapped to the anchor derived from that page's level-1 heading.
+    """
+    docs_dir = pages[0].parent if pages else Path()
+    while docs_dir.name == "appendices":
+        docs_dir = docs_dir.parent
+
+    anchors: dict[str, str] = {}
+    for page in pages:
+        title = _first_heading(page.read_text(encoding="utf-8"))
+        anchor = "#" + _slugify(title) if title else ""
+        if not anchor:
+            continue
+        anchors[page.name] = anchor
+        try:
+            anchors[page.relative_to(docs_dir).as_posix()] = anchor
+        except ValueError:
+            pass
+    return anchors
+
+
+def rewrite_internal_links(text: str, anchors: dict[str, str]) -> str:
+    """Rewrite cross-page Markdown links to in-document anchors.
+
+    ``](page.md)`` becomes ``](#page-title)`` and ``](page.md#section)``
+    becomes ``](#section)``, since a heading keeps its anchor when demoted.
+    Links to targets outside the assembled set are left alone.
+
+    Parameters
+    ----------
+    text : str
+        Markdown source of a single page.
+    anchors : dict of str to str
+        Mapping from page path to in-document anchor, from `page_anchors`.
+
+    Returns
+    -------
+    str
+        The source with cross-page links pointing inside the assembled guide.
+    """
+
+    def replace(match: re.Match[str]) -> str:
+        target, fragment = match.group(1), match.group(2)
+        key = target.lstrip("./")
+        if key not in anchors:
+            return match.group(0)
+        return f"]({fragment})" if fragment else f"]({anchors[key]})"
+
+    return LINK_RE.sub(replace, text)
+
+
 def build_toc(pages: list[Path]) -> str:
     """Build a table of contents linking to each page's top-level heading."""
     entries = []
@@ -212,9 +282,10 @@ def assemble(pages: list[Path] | None = None) -> str:
         pages = load_nav_pages()
 
     parts = [BANNER, f"# {GUIDE_TITLE}\n", build_toc(pages)]
+    anchors = page_anchors(pages)
 
     for page in pages:
-        text = page.read_text(encoding="utf-8")
+        text = rewrite_internal_links(page.read_text(encoding="utf-8"), anchors)
         if _first_heading(text) == GUIDE_TITLE:
             text = _strip_first_heading(text)
         else:
