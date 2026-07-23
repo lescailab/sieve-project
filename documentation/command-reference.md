@@ -1,5 +1,71 @@
 # Command Reference
 
+## Installed Commands
+
+<!-- BEGIN GENERATED COMMAND TABLE -->
+
+Installing SIEVE (`pip install sieve`) provides 24 console
+commands. Each is equivalent to running the script it points at, so
+`sieve-train --help` and `python scripts/train.py --help` are the same
+command. The installed form is the one to use from an installed
+environment; the script path is for contributors working from a checkout.
+
+This table is generated from `[project.scripts]` in `pyproject.toml` by
+`scripts/sync_command_table.py`. Do not edit it by hand.
+
+| Installed command | Script |
+|-------------------|--------|
+| `sieve-ablation-compare` | `scripts/ablation_compare.py` |
+| `sieve-aggregate-gene-interactions` | `scripts/aggregate_gene_interactions.py` |
+| `sieve-audit-cooccurrence` | `scripts/audit_cooccurrence.py` |
+| `sieve-bootstrap-null-calibration` | `scripts/bootstrap_null_calibration.py` |
+| `sieve-check-sex-balance` | `scripts/check_sex_balance.py` |
+| `sieve-compare-ablation-rankings` | `scripts/compare_ablation_rankings.py` |
+| `sieve-compare-attributions` | `scripts/compare_attributions.py` |
+| `sieve-correct-chrx-bias` | `scripts/correct_chrx_bias.py` |
+| `sieve-create-null-baseline` | `scripts/create_null_baseline.py` |
+| `sieve-epistasis-power-analysis` | `scripts/epistasis_power_analysis.py` |
+| `sieve-explain` | `scripts/explain.py` |
+| `sieve-extract-burden` | `scripts/extract_validation_burden.py` |
+| `sieve-generate-gene-list` | `scripts/generate_sieve_gene_list.py` |
+| `sieve-infer-sex` | `scripts/infer_sex.py` |
+| `sieve-plot-ablation-comparison` | `scripts/plot_ablation_comparison.py` |
+| `sieve-plot-validation-burden` | `scripts/plot_validation_burden.py` |
+| `sieve-preprocess` | `scripts/preprocess.py` |
+| `sieve-run-null-baseline` | `scripts/run_null_baseline.py` |
+| `sieve-summarize-classifier-comparison` | `scripts/summarize_classifier_comparison.py` |
+| `sieve-test-burden-enrichment` | `scripts/test_burden_enrichment.py` |
+| `sieve-train` | `scripts/train.py` |
+| `sieve-validate-discoveries` | `scripts/validate_discoveries.py` |
+| `sieve-validate-epistasis` | `scripts/validate_epistasis.py` |
+| `sieve-validate-nonlinear-classifier` | `scripts/validate_nonlinear_classifier.py` |
+
+<!-- END GENERATED COMMAND TABLE -->
+
+### Scripts without an entry point
+
+These scripts are plotting and repair utilities. They deliberately have no
+installed command and are run from a checkout with `python scripts/<name>.py`:
+
+- `check_chromosome_distribution.py`
+- `fix_ranking_outputs.py`
+- `gene_enrichment_plot.py`
+- `manhattan_plot.py`
+- `plot_ablation.py`
+- `plot_detailed_architecture.py`
+- `plot_null_comparison.py`
+- `plot_training_history.py`
+- `render_model_architecture.py`
+- `repair_gene_delta_rank.py`
+
+Two further scripts maintain the documentation itself and are described in
+`documentation/README.md`: `assemble_user_guide.py` and
+`sync_command_table.py`.
+
+---
+
+## Command Options
+
 ### preprocess.py
 
 ```bash
