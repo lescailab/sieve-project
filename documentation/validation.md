@@ -241,7 +241,7 @@ linear_baseline:
 
 2. **RF > LR gap**: If the random forest outperforms logistic regression on the SIEVE gene set, the signal has non-linear structure — combinations of gene burdens matter, not just their sum. This directly supports SIEVE's model design.
 
-3. **Level consistency**: If multiple ablation levels show signal, the discovery is robust. If only L0 (genotype-only) shows signal, the discovery is annotation-free. If only L3 shows signal, it may depend on functional annotations.
+3. **Level consistency**: If multiple ablation levels show signal, the discovery is robust. If only L0 (genotype-only) shows signal, the discovery survives at the ablation floor and is carried by genome structure alone. If only L3 shows signal, it may depend on functional annotations.
 
 4. **Top-k sensitivity**: Signal concentrated in top-50 genes suggests a small set of strong drivers. Signal appearing only at top-500 suggests a diffuse polygenic signal.
 

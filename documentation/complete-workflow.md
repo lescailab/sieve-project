@@ -90,12 +90,12 @@ python scripts/infer_sex.py \
 
 **Purpose**: Learn which variants predict case/control status
 
-**Theory**: SIEVE uses position-aware sparse attention to learn relationships between variants. Training includes:
+**Theory**: SIEVE uses position-aware dense self-attention over the sparse variant set to learn relationships between variants. Training includes:
 - Classification loss: Binary cross-entropy on case/control prediction
 - Embedding sparsity regularisation (optional): Encourages model to concentrate signal in fewer variant or gene embeddings
 
 **Annotation Levels**:
-- **L0**: Genotype dosage only (0, 1, 2) - tests annotation-free discovery
+- **L0**: Genotype dosage only (0, 1, 2) - the ablation floor
 - **L1**: L0 + genomic position
 - **L2**: L1 + consequence class (missense/synonymous/LoF)
 - **L3**: L2 + SIFT + PolyPhen ← **recommended starting point**

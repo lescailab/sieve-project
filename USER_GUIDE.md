@@ -47,15 +47,15 @@ fail the build.
 
 Unlike existing methods:
 - **Direct VCF Processing**: No conversion to PLINK or custom formats required
-- **Annotation-Free Discovery**: Tests whether ML can discover variants without prior knowledge
+- **Annotation-Ablation Protocol**: Quantifies how much of the ranking is carried by genome structure and how much by supplied annotation
 - **Position-Aware**: Learns spatial relationships between variants (e.g., compound heterozygosity)
 - **Built-in Interpretability**: Embedding sparsity regularisation incorporated into training
 - **Statistical Validation**: Null baseline analysis establishes significance thresholds
 
 ### Scientific Questions SIEVE Addresses
 
-1. **Can deep learning discover variants that annotations miss?** → Annotation ablation experiments (L0-L3, with L4 reserved as a compatibility placeholder)
-2. **Do spatial relationships between variants matter?** → Position-aware sparse attention
+1. **How much of a variant ranking is carried by annotation?** → Annotation ablation experiments (L0-L3, with L4 reserved as a compatibility placeholder)
+2. **Do spatial relationships between variants matter?** → Position-aware dense self-attention over the sparse variant set
 3. **Can we make models interpretable by design?** → Embedding-sparsity-regularised training
 4. **Are discoveries statistically significant?** → Null baseline analysis
 
@@ -64,7 +64,7 @@ Unlike existing methods:
 - **Train** models at multiple annotation levels (genotype-only to current functional-score annotations)
 - **Explain** predictions with integrated gradients attribution
 - **Discover** novel variant associations with statistical validation
-- **Detect** epistatic interactions via attention patterns
+- **Test** candidate epistatic interactions using counterfactual perturbation and post-hoc attribution and co-occurrence analysis, with an explicit power analysis reported alongside the result
 - **Validate** discoveries against ClinVar, GWAS, and GO databases
 
 ---
@@ -377,12 +377,12 @@ python scripts/infer_sex.py \
 
 **Purpose**: Learn which variants predict case/control status
 
-**Theory**: SIEVE uses position-aware sparse attention to learn relationships between variants. Training includes:
+**Theory**: SIEVE uses position-aware dense self-attention over the sparse variant set to learn relationships between variants. Training includes:
 - Classification loss: Binary cross-entropy on case/control prediction
 - Embedding sparsity regularisation (optional): Encourages model to concentrate signal in fewer variant or gene embeddings
 
 **Annotation Levels**:
-- **L0**: Genotype dosage only (0, 1, 2) - tests annotation-free discovery
+- **L0**: Genotype dosage only (0, 1, 2) - the ablation floor
 - **L1**: L0 + genomic position
 - **L2**: L1 + consequence class (missense/synonymous/LoF)
 - **L3**: L2 + SIFT + PolyPhen ← **recommended starting point**
@@ -1515,7 +1515,7 @@ The annotation ablation protocol tests whether deep learning can discover varian
 - Good balance of information and interpretability
 - Comparable to existing methods
 
-**Use L0** to test annotation-free discovery:
+**Use L0** as the ablation floor of the protocol:
 - If L0 performs well (AUC > 0.6), genotype patterns alone carry signal
 - Variants unique to L0 may represent novel mechanisms
 
@@ -3097,7 +3097,7 @@ linear_baseline:
 
 2. **RF > LR gap**: If the random forest outperforms logistic regression on the SIEVE gene set, the signal has non-linear structure — combinations of gene burdens matter, not just their sum. This directly supports SIEVE's model design.
 
-3. **Level consistency**: If multiple ablation levels show signal, the discovery is robust. If only L0 (genotype-only) shows signal, the discovery is annotation-free. If only L3 shows signal, it may depend on functional annotations.
+3. **Level consistency**: If multiple ablation levels show signal, the discovery is robust. If only L0 (genotype-only) shows signal, the discovery survives at the ablation floor and is carried by genome structure alone. If only L3 shows signal, it may depend on functional annotations.
 
 4. **Top-k sensitivity**: Signal concentrated in top-50 genes suggests a small set of strong drivers. Signal appearing only at top-500 suggests a diffuse polygenic signal.
 
@@ -3449,7 +3449,7 @@ levels:
 ```
 
 **Interpretation**:
-- **L0 AUC > 0.6**: Genotype patterns alone carry disease signal (annotation-free discovery is feasible)
+- **L0 AUC > 0.6**: Genotype patterns alone carry disease signal. L0 is the ablation floor of the protocol, so this tells you how much of the model's discrimination survives when every supplied annotation is removed.
 - **L2 ≈ L3**: Consequence class is sufficient; SIFT/PolyPhen add little beyond consequence type
 - **L3 > L0 by >0.1 AUC**: Annotations provide substantial additional signal
 - **L3 ≈ L0**: Annotations do not help, model discovers signal from genotype structure alone
@@ -3473,7 +3473,7 @@ Each row represents a pairwise comparison at a given top-k:
 - **Jaccard < 0.3**: Different rankings — annotation level fundamentally changes which variants are prioritised
 
 **Scientific significance**:
-- High L0-vs-L3 Jaccard indicates the model can discover the same variants without annotations (supports annotation-free discovery)
+- Agreement between the L0 and L3 rankings measures how much of the ranking is stable under annotation ablation: a high L0-vs-L3 Jaccard means the ordering is carried largely by genome structure rather than by the supplied annotations
 - Low L0-vs-L3 Jaccard suggests annotations drive different discoveries (may indicate circular logic if annotations encode known associations)
 
 ##### Level-Specific Variants (`level_specific_variants.tsv`)
@@ -3504,7 +3504,7 @@ The figure produced by `plot_ablation_comparison.py` contains four panels:
 
 2. **Jaccard by Top-k** (top-right): Line plot showing how overlap evolves as you consider more variants. If lines rise steeply, the top-ranked variants differ but broader rankings converge.
 
-3. **Level-Specific Counts** (bottom-left): Bar chart of how many uniquely important variants each level discovers. Large L0 bars support annotation-free discovery.
+3. **Level-Specific Counts** (bottom-left): Bar chart of how many uniquely important variants each level discovers. Large L0 bars mean a substantial part of the ranking is set at the ablation floor, before any annotation is supplied.
 
 4. **AUC Comparison** (bottom-right): Model performance per level with error bars. The best level is highlighted. The red dashed line marks random performance (AUC=0.5).
 
@@ -4179,7 +4179,23 @@ $$
 \tilde{h}_v = h_v + e_{\mathrm{chrom}(v)}
 $$
 
-### 5. Position-Aware Sparse Attention
+### 5. Position-Aware Self-Attention
+
+Attention is computed among the variant-present positions within each sample and
+is dense over that set. Cost is quadratic in the number of variants a sample
+carries, not in the number of genomic positions, which is what makes the
+computation tractable. Attention scores carry a learnable relative-position bias
+indexed by T5-style logarithmic distance buckets: small within-chromosome
+distances receive near-exact buckets, larger distances are logarithmically
+compressed up to a maximum of 100,000 bases, and a dedicated bucket indexes
+cross-chromosome pairs. Cross-chromosome attention is not masked; the separate
+bucket prevents coordinate differences between chromosomes from being read as
+within-chromosome distances.
+
+The sparsity in SIEVE is therefore a property of the input representation, which
+materialises only the alternate-allele sites each individual carries, and not a
+property of the attention pattern: there is no fixed sparsity mask, no block
+structure, and no local window.
 
 For each attention layer:
 
@@ -4286,7 +4302,9 @@ $$
 
 The public result key is still named `attribution_sparsity` for backward
 compatibility, but the implemented regulariser is not gradient entropy and does
-not compute Integrated Gradients during training.
+not compute Integrated Gradients during training. Integrated gradients are
+computed only in the explain step, on the best-validation-area-under-the-curve
+checkpoint, never during training.
 
 For non-chunked batches, the sparsity term is the mean normalised sum of
 variant embedding L2 norms:
@@ -4487,13 +4505,13 @@ Determine whether models with minimal annotations can discover variants that ann
 **If hypothesis is refuted**:
 - L0 model fails to learn (AUC ~0.5), suggesting annotations are necessary
 - All high-ranking variants at L0 are a subset of L3 rankings
-- This would still be informative: it means annotation-free discovery is not feasible for this phenotype
+- This would still be informative: it means the ranking for this phenotype is carried by the supplied annotations rather than by genome structure
 
 #### Experiment 2: Position-Aware vs Position-Agnostic
 
 ##### Purpose
 
-Test whether spatial relationships between variants carry disease-relevant information by comparing position-aware sparse attention against permutation-invariant deep sets.
+Test whether spatial relationships between variants carry disease-relevant information by comparing position-aware self-attention against permutation-invariant deep sets.
 
 ##### Protocol
 

@@ -59,7 +59,7 @@ def test_variant_encoder():
 
 def test_attention():
     """Test PositionAwareSparseAttention component."""
-    print_section("Testing Position-Aware Sparse Attention")
+    print_section("Testing Position-Aware Self-Attention")
 
     attention = PositionAwareSparseAttention(
         latent_dim=64,
@@ -368,7 +368,7 @@ def main():
     print("✅ All Phase 1C tests passed successfully!")
     print("\nTested components:")
     print("  ✓ VariantEncoder (feature projection)")
-    print("  ✓ PositionAwareSparseAttention (core innovation)")
+    print("  ✓ PositionAwareSparseAttention (position-aware self-attention)")
     print("  ✓ GeneAggregator (variant → gene pooling)")
     print("  ✓ PhenotypeClassifier (binary classification)")
     print("  ✓ Complete SIEVE model (end-to-end)")

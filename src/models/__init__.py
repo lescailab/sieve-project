@@ -3,7 +3,7 @@ Model architecture module for SIEVE.
 
 This module contains all neural network components for SIEVE:
 - VariantEncoder: Feature projection
-- PositionAwareSparseAttention: Core innovation (position-aware attention)
+- PositionAwareSparseAttention: Position-aware self-attention over the variants
 - GeneAggregator: Variant to gene-level aggregation
 - PhenotypeClassifier: Binary classification head
 - SIEVE: Complete end-to-end model
