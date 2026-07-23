@@ -7,6 +7,10 @@ edit_uri: edit/main/documentation/
 docs_dir: documentation
 site_dir: site
 
+# Contributor note for the documentation/ directory itself, not a site page.
+exclude_docs: |
+  README.md
+
 nav:
   - Home: index.md
   - Quick Start: quick-start.md

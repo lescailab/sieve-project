@@ -65,3 +65,29 @@ jobs:
         run: pytest ${{ matrix.test-file }} -v --no-header -o "addopts="
         env:
           PYTHONPATH: ${{ github.workspace }}
+
+  docs-drift:
+    name: Docs Drift
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install assembler dependencies
+        run: pip install "pyyaml>=6.0"
+
+      - name: Reassemble USER_GUIDE.md from documentation/
+        run: python scripts/assemble_user_guide.py
+
+      - name: Fail if USER_GUIDE.md is out of date
+        run: |
+          if ! git diff --exit-code USER_GUIDE.md; then
+            echo "::error::USER_GUIDE.md does not match documentation/."
+            echo "documentation/ is the source of truth. Edit the page there, then run:"
+            echo "  python scripts/assemble_user_guide.py"
+            exit 1
+          fi
