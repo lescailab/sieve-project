@@ -499,7 +499,7 @@ def get_level_description(level: AnnotationLevel) -> str:
         AnnotationLevel.L1: "L1: Genotype + Position",
         AnnotationLevel.L2: "L2: Genotype + Position + Consequence",
         AnnotationLevel.L3: "L3: Genotype + Position + Consequence + SIFT + PolyPhen",
-        AnnotationLevel.L4: "L4: Full annotations (currently same as L3)",
+        AnnotationLevel.L4: "L4: Compatibility placeholder (currently identical to L3)",
     }
     return descriptions[level]
 
