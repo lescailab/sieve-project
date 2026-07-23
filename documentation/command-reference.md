@@ -444,7 +444,7 @@ Compares variant attribution rankings across annotation levels. Computes pairwis
 **Example**:
 ```bash
 python scripts/compare_ablation_rankings.py \
-    --ranking-dir results/ablation/rankings \
+    --ranking-dir results/ablation/rank_calibrated_rankings \
     --score-column delta_rank \
     --top-k 50,100,200,500 \
     --out-comparison results/ablation/ablation_ranking_comparison.yaml \
@@ -638,9 +638,9 @@ Aggregates variant-level SIEVE rankings to a gene-level TSV for cross-cohort bur
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `--variant-rankings` | path | required | Corrected variant rankings CSV |
+| `--variant-rankings` | path | required | Variant rankings CSV that contains the column named by `--score-column`. For `delta_rank` this is the rank-calibrated CSV from `bootstrap_null_calibration.py`; for `z_attribution` it is `corrected_variant_rankings.csv` from `correct_chrx_bias.py`. |
 | `--output` | path | required | Output gene list TSV |
-| `--score-column` | str | `z_attribution` | Column to use for scoring. **Use `delta_rank`**, the primary ranking metric, which resolves to the gene-level `gene_delta_rank` column when present. `z_attribution` is a per-chromosome visualisation score retained for continuity with Manhattan plots and earlier runs. The default is unchanged for reproducibility of prior runs. |
+| `--score-column` | str | `z_attribution` | Variant-level column to aggregate per gene into the output `gene_score`. **Use `delta_rank`**, the primary ranking metric, together with a rank-calibrated input from `bootstrap_null_calibration.py`. The column must be present in `--variant-rankings` or the script exits with `Score column not found`; there is no alias resolution here. `z_attribution` is a per-chromosome visualisation score retained for continuity with Manhattan plots and earlier runs. The default is unchanged for reproducibility of prior runs. |
 | `--exclude-sex-chroms` | flag | True | Exclude sex chromosome genes |
 | `--include-sex-chroms` | flag | False | Include sex chromosome genes (overrides --exclude-sex-chroms) |
 | `--min-null-threshold` | str | None | Only include genes with variants exceeding this null threshold (`p05`, `p01`, `p001`) |
@@ -652,7 +652,7 @@ Aggregates variant-level SIEVE rankings to a gene-level TSV for cross-cohort bur
 **Example** (fixed gene list):
 ```bash
 python scripts/generate_sieve_gene_list.py \
-    --variant-rankings results/attribution_comparison/corrected/corrected_variant_rankings.csv \
+    --variant-rankings results/attribution_comparison/variant_rankings_rank_calibrated.csv \
     --output validation/sieve_gene_lists/sieve_genes.tsv \
     --score-column delta_rank \
     --aggregation max
@@ -661,7 +661,7 @@ python scripts/generate_sieve_gene_list.py \
 **Example** (FDR-threshold filtered):
 ```bash
 python scripts/generate_sieve_gene_list.py \
-    --variant-rankings results/attribution_comparison/corrected/corrected_variant_rankings.csv \
+    --variant-rankings results/attribution_comparison/variant_rankings_rank_calibrated.csv \
     --output validation/sieve_gene_lists/sieve_genes_fdr05.tsv \
     --score-column delta_rank \
     --fdr-threshold 0.05 \
@@ -794,7 +794,7 @@ Tests whether SIEVE gene sets carry non-linear discriminative information by tra
 | `--cv-folds` | int | `5` | Number of stratified CV folds |
 | `--seed` | int | `42` | Random seed |
 | `--n-cores` | int | `-1` | Number of outer-loop cores for permutation evaluation |
-| `--score-column` | str | `z_attribution` | Gene-ranking score to use. **Use `delta_rank`**, the primary ranking metric, which resolves to `gene_delta_rank`. `z_attribution` maps to `gene_z_score` and is the per-chromosome visualisation view. The default is unchanged for reproducibility of prior runs. |
+| `--score-column` | str | `z_attribution` | Gene-ranking score to use. **Use `delta_rank`**, the primary ranking metric; this script resolves it to the `gene_delta_rank` column when present. `z_attribution` resolves to `gene_z_score` and is the per-chromosome visualisation view. The default is unchanged for reproducibility of prior runs. |
 | `--also-export-csv` | flag | off | Export classifier input matrices as CSV under `csv/` in the output directory |
 
 **Example** (fixed top-k, multi-level with both classifiers):

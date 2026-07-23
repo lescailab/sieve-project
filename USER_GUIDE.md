@@ -773,7 +773,7 @@ This takes the rank-calibrated variant rankings and produces a ranked gene list 
 ```bash
 for level in L0 L1 L2 L3; do
     python scripts/generate_sieve_gene_list.py \
-        --variant-rankings results/${level}_attribution_comparison/corrected/corrected_variant_rankings.csv \
+        --variant-rankings results/${level}_attribution_comparison/variant_rankings_rank_calibrated.csv \
         --output validation/sieve_gene_lists/sieve_genes.tsv \
         --ablation-level ${level} \
         --score-column delta_rank \
@@ -797,7 +797,7 @@ This retains only genes containing at least one variant exceeding the null model
 **Optional: filter by FDR threshold** (gene set size determined dynamically):
 ```bash
 python scripts/generate_sieve_gene_list.py \
-    --variant-rankings results/attribution_comparison/corrected/corrected_variant_rankings.csv \
+    --variant-rankings results/attribution_comparison/variant_rankings_rank_calibrated.csv \
     --output validation/sieve_gene_lists/sieve_genes_fdr05.tsv \
     --score-column delta_rank \
     --fdr-threshold 0.05 \
@@ -1716,15 +1716,17 @@ python scripts/ablation_compare.py \
     --out-summary-tsv results/ablation/ablation_summary.tsv \
     --out-summary-yaml results/ablation/ablation_summary.yaml
 
-# Compare attribution rankings, ranked by the primary metric delta_rank
-mkdir -p results/ablation/rankings
+# Compare attribution rankings, ranked by the primary metric delta_rank.
+# delta_rank lives in the rank-calibrated CSVs from bootstrap_null_calibration.py,
+# not in the chrX-corrected files, so collect those.
+mkdir -p results/ablation/rank_calibrated_rankings
 for LEVEL in L0 L1 L2 L3; do
-    cp results/null_baseline_${LEVEL}/results/attribution_comparison/corrected/corrected_variant_rankings.csv \
-       results/ablation/rankings/${LEVEL}_sieve_variant_rankings.csv
+    cp results/null_baseline_${LEVEL}/results/attribution_comparison/variant_rankings_rank_calibrated.csv \
+       results/ablation/rank_calibrated_rankings/${LEVEL}_sieve_variant_rankings.csv
 done
 
 python scripts/compare_ablation_rankings.py \
-    --ranking-dir results/ablation/rankings \
+    --ranking-dir results/ablation/rank_calibrated_rankings \
     --score-column delta_rank \
     --out-comparison results/ablation/ablation_ranking_comparison.yaml \
     --out-jaccard results/ablation/ablation_jaccard_matrix.tsv \
@@ -1743,12 +1745,12 @@ python scripts/plot_ablation_comparison.py \
 If your ranking files are not in a single directory with level prefixes, you can specify them individually:
 
 ```bash
-# Rank by delta_rank, the primary ranking metric
+# Rank by delta_rank, the primary ranking metric, using the rank-calibrated CSVs
 python scripts/compare_ablation_rankings.py \
-    --rankings L0:results/null_baseline_L0/results/attribution_comparison/corrected/corrected_variant_rankings.csv \
-               L1:results/null_baseline_L1/results/attribution_comparison/corrected/corrected_variant_rankings.csv \
-               L2:results/null_baseline_L2/results/attribution_comparison/corrected/corrected_variant_rankings.csv \
-               L3:results/null_baseline_L3/results/attribution_comparison/corrected/corrected_variant_rankings.csv \
+    --rankings L0:results/null_baseline_L0/results/attribution_comparison/variant_rankings_rank_calibrated.csv \
+               L1:results/null_baseline_L1/results/attribution_comparison/variant_rankings_rank_calibrated.csv \
+               L2:results/null_baseline_L2/results/attribution_comparison/variant_rankings_rank_calibrated.csv \
+               L3:results/null_baseline_L3/results/attribution_comparison/variant_rankings_rank_calibrated.csv \
     --score-column delta_rank \
     --out-comparison results/ablation/ablation_ranking_comparison.yaml \
     --out-jaccard results/ablation/ablation_jaccard_matrix.tsv \
@@ -2424,7 +2426,7 @@ Compares variant attribution rankings across annotation levels. Computes pairwis
 **Example**:
 ```bash
 python scripts/compare_ablation_rankings.py \
-    --ranking-dir results/ablation/rankings \
+    --ranking-dir results/ablation/rank_calibrated_rankings \
     --score-column delta_rank \
     --top-k 50,100,200,500 \
     --out-comparison results/ablation/ablation_ranking_comparison.yaml \
@@ -2618,9 +2620,9 @@ Aggregates variant-level SIEVE rankings to a gene-level TSV for cross-cohort bur
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `--variant-rankings` | path | required | Corrected variant rankings CSV |
+| `--variant-rankings` | path | required | Variant rankings CSV that contains the column named by `--score-column`. For `delta_rank` this is the rank-calibrated CSV from `bootstrap_null_calibration.py`; for `z_attribution` it is `corrected_variant_rankings.csv` from `correct_chrx_bias.py`. |
 | `--output` | path | required | Output gene list TSV |
-| `--score-column` | str | `z_attribution` | Column to use for scoring. **Use `delta_rank`**, the primary ranking metric, which resolves to the gene-level `gene_delta_rank` column when present. `z_attribution` is a per-chromosome visualisation score retained for continuity with Manhattan plots and earlier runs. The default is unchanged for reproducibility of prior runs. |
+| `--score-column` | str | `z_attribution` | Variant-level column to aggregate per gene into the output `gene_score`. **Use `delta_rank`**, the primary ranking metric, together with a rank-calibrated input from `bootstrap_null_calibration.py`. The column must be present in `--variant-rankings` or the script exits with `Score column not found`; there is no alias resolution here. `z_attribution` is a per-chromosome visualisation score retained for continuity with Manhattan plots and earlier runs. The default is unchanged for reproducibility of prior runs. |
 | `--exclude-sex-chroms` | flag | True | Exclude sex chromosome genes |
 | `--include-sex-chroms` | flag | False | Include sex chromosome genes (overrides --exclude-sex-chroms) |
 | `--min-null-threshold` | str | None | Only include genes with variants exceeding this null threshold (`p05`, `p01`, `p001`) |
@@ -2632,7 +2634,7 @@ Aggregates variant-level SIEVE rankings to a gene-level TSV for cross-cohort bur
 **Example** (fixed gene list):
 ```bash
 python scripts/generate_sieve_gene_list.py \
-    --variant-rankings results/attribution_comparison/corrected/corrected_variant_rankings.csv \
+    --variant-rankings results/attribution_comparison/variant_rankings_rank_calibrated.csv \
     --output validation/sieve_gene_lists/sieve_genes.tsv \
     --score-column delta_rank \
     --aggregation max
@@ -2641,7 +2643,7 @@ python scripts/generate_sieve_gene_list.py \
 **Example** (FDR-threshold filtered):
 ```bash
 python scripts/generate_sieve_gene_list.py \
-    --variant-rankings results/attribution_comparison/corrected/corrected_variant_rankings.csv \
+    --variant-rankings results/attribution_comparison/variant_rankings_rank_calibrated.csv \
     --output validation/sieve_gene_lists/sieve_genes_fdr05.tsv \
     --score-column delta_rank \
     --fdr-threshold 0.05 \
@@ -2774,7 +2776,7 @@ Tests whether SIEVE gene sets carry non-linear discriminative information by tra
 | `--cv-folds` | int | `5` | Number of stratified CV folds |
 | `--seed` | int | `42` | Random seed |
 | `--n-cores` | int | `-1` | Number of outer-loop cores for permutation evaluation |
-| `--score-column` | str | `z_attribution` | Gene-ranking score to use. **Use `delta_rank`**, the primary ranking metric, which resolves to `gene_delta_rank`. `z_attribution` maps to `gene_z_score` and is the per-chromosome visualisation view. The default is unchanged for reproducibility of prior runs. |
+| `--score-column` | str | `z_attribution` | Gene-ranking score to use. **Use `delta_rank`**, the primary ranking metric; this script resolves it to the `gene_delta_rank` column when present. `z_attribution` resolves to `gene_z_score` and is the per-chromosome visualisation view. The default is unchanged for reproducibility of prior runs. |
 | `--also-export-csv` | flag | off | Export classifier input matrices as CSV under `csv/` in the output directory |
 
 **Example** (fixed top-k, multi-level with both classifiers):

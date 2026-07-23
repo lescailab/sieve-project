@@ -22,7 +22,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--variant-rankings",
         type=Path,
         required=True,
-        help="Corrected variant rankings CSV (output of correct_chrx_bias.py)",
+        help=(
+            "Variant rankings CSV containing the column named by --score-column. "
+            "For --score-column delta_rank use the rank-calibrated CSV from "
+            "bootstrap_null_calibration.py; for --score-column z_attribution use "
+            "the corrected rankings from correct_chrx_bias.py."
+        ),
     )
     parser.add_argument(
         "--output",
@@ -34,11 +39,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--score-column",
         default="z_attribution",
         help=(
-            "Column to use for scoring (default: z_attribution). delta_rank is "
-            "the recommended choice: it is the primary ranking metric, "
-            "scale-free and stable across annotation levels. z_attribution is a "
-            "per-chromosome visualisation score retained for continuity with "
-            "Manhattan plots and earlier runs."
+            "Variant-level column to aggregate per gene into the output "
+            "gene_score (default: z_attribution). delta_rank is the recommended "
+            "choice: it is the primary ranking metric, scale-free and stable "
+            "across annotation levels, and requires a rank-calibrated input from "
+            "bootstrap_null_calibration.py. The named column must be present in "
+            "--variant-rankings; there is no alias resolution here. "
+            "z_attribution is a per-chromosome visualisation score retained for "
+            "continuity with Manhattan plots and earlier runs."
         ),
     )
     parser.add_argument(

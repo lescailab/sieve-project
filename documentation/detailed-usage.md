@@ -416,15 +416,17 @@ python scripts/ablation_compare.py \
     --out-summary-tsv results/ablation/ablation_summary.tsv \
     --out-summary-yaml results/ablation/ablation_summary.yaml
 
-# Compare attribution rankings, ranked by the primary metric delta_rank
-mkdir -p results/ablation/rankings
+# Compare attribution rankings, ranked by the primary metric delta_rank.
+# delta_rank lives in the rank-calibrated CSVs from bootstrap_null_calibration.py,
+# not in the chrX-corrected files, so collect those.
+mkdir -p results/ablation/rank_calibrated_rankings
 for LEVEL in L0 L1 L2 L3; do
-    cp results/null_baseline_${LEVEL}/results/attribution_comparison/corrected/corrected_variant_rankings.csv \
-       results/ablation/rankings/${LEVEL}_sieve_variant_rankings.csv
+    cp results/null_baseline_${LEVEL}/results/attribution_comparison/variant_rankings_rank_calibrated.csv \
+       results/ablation/rank_calibrated_rankings/${LEVEL}_sieve_variant_rankings.csv
 done
 
 python scripts/compare_ablation_rankings.py \
-    --ranking-dir results/ablation/rankings \
+    --ranking-dir results/ablation/rank_calibrated_rankings \
     --score-column delta_rank \
     --out-comparison results/ablation/ablation_ranking_comparison.yaml \
     --out-jaccard results/ablation/ablation_jaccard_matrix.tsv \
@@ -443,12 +445,12 @@ python scripts/plot_ablation_comparison.py \
 If your ranking files are not in a single directory with level prefixes, you can specify them individually:
 
 ```bash
-# Rank by delta_rank, the primary ranking metric
+# Rank by delta_rank, the primary ranking metric, using the rank-calibrated CSVs
 python scripts/compare_ablation_rankings.py \
-    --rankings L0:results/null_baseline_L0/results/attribution_comparison/corrected/corrected_variant_rankings.csv \
-               L1:results/null_baseline_L1/results/attribution_comparison/corrected/corrected_variant_rankings.csv \
-               L2:results/null_baseline_L2/results/attribution_comparison/corrected/corrected_variant_rankings.csv \
-               L3:results/null_baseline_L3/results/attribution_comparison/corrected/corrected_variant_rankings.csv \
+    --rankings L0:results/null_baseline_L0/results/attribution_comparison/variant_rankings_rank_calibrated.csv \
+               L1:results/null_baseline_L1/results/attribution_comparison/variant_rankings_rank_calibrated.csv \
+               L2:results/null_baseline_L2/results/attribution_comparison/variant_rankings_rank_calibrated.csv \
+               L3:results/null_baseline_L3/results/attribution_comparison/variant_rankings_rank_calibrated.csv \
     --score-column delta_rank \
     --out-comparison results/ablation/ablation_ranking_comparison.yaml \
     --out-jaccard results/ablation/ablation_jaccard_matrix.tsv \

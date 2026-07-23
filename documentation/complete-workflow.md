@@ -486,7 +486,7 @@ This takes the rank-calibrated variant rankings and produces a ranked gene list 
 ```bash
 for level in L0 L1 L2 L3; do
     python scripts/generate_sieve_gene_list.py \
-        --variant-rankings results/${level}_attribution_comparison/corrected/corrected_variant_rankings.csv \
+        --variant-rankings results/${level}_attribution_comparison/variant_rankings_rank_calibrated.csv \
         --output validation/sieve_gene_lists/sieve_genes.tsv \
         --ablation-level ${level} \
         --score-column delta_rank \
@@ -510,7 +510,7 @@ This retains only genes containing at least one variant exceeding the null model
 **Optional: filter by FDR threshold** (gene set size determined dynamically):
 ```bash
 python scripts/generate_sieve_gene_list.py \
-    --variant-rankings results/attribution_comparison/corrected/corrected_variant_rankings.csv \
+    --variant-rankings results/attribution_comparison/variant_rankings_rank_calibrated.csv \
     --output validation/sieve_gene_lists/sieve_genes_fdr05.tsv \
     --score-column delta_rank \
     --fdr-threshold 0.05 \
