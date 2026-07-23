@@ -4,6 +4,8 @@
 
 **Version**: 1.3.0
 
+**Last updated**: 2026-07-23
+
 <!-- END GENERATED VERSION -->
 
 ## Introduction

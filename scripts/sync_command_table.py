@@ -28,13 +28,13 @@ try:  # Python 3.11+
 except ModuleNotFoundError:  # Python 3.10, which this project still supports
     try:
         import tomli as tomllib  # type: ignore[no-redef]
-    except ModuleNotFoundError:  # pragma: no cover - depends on the interpreter
+    except ModuleNotFoundError as error:  # pragma: no cover - interpreter-dependent
         raise SystemExit(
             "Reading pyproject.toml needs a TOML parser. Python 3.11+ has one "
             "built in; on Python 3.10 install the backport with:\n"
             "    pip install tomli\n"
             "or install the development extra: pip install -e '.[dev]'"
-        )
+        ) from error
 
 ROOT = Path(__file__).resolve().parent.parent
 PYPROJECT = ROOT / "pyproject.toml"
