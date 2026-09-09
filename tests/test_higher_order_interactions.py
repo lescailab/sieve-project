@@ -520,8 +520,11 @@ def test_variant_sample_index_finds_carriers_and_flags_ambiguity():
     # and must be marked ambiguous rather than resolved to one of the two.
     duplicate = VariantRecord('1', 1000, 'A', 'G', 'GENE0', 'missense_variant', 1, {})
     dataset.samples[0].variants.append(duplicate)
-    _, reindexed = build_variant_sample_index(dataset)
+    recarried, reindexed = build_variant_sample_index(dataset)
     assert reindexed[0][(1000, gene_id)] == -1
+    # An ambiguous locus is not a carrier the counterfactual can use, so the
+    # sample must leave the carrier set rather than be filtered out later.
+    assert recarried[(1000, gene_id)] == {1, 2, 3}
 
 
 def test_carrier_window_keeps_every_member_inside_the_chunk():
@@ -824,3 +827,86 @@ def test_the_discovery_module_does_not_import_the_evaluation_module():
     assert 'higher_order_evaluation' not in source.replace(
         ':mod:`src.explain.higher_order_evaluation`', ''
     )
+
+
+# ----- Output tables stay readable when a run emits nothing --------------------
+
+
+def test_empty_output_tables_still_carry_their_headers(tmp_path):
+    """
+    A run that emits no edge and no candidate must still write files the same
+    downstream reader can parse, not headerless empty ones.
+    """
+    from scripts.discover_interactions import (
+        CANDIDATE_COLUMNS, EDGE_COLUMNS, candidates_to_frame, write_graph_tables
+    )
+
+    # Every edge falls below the support threshold, so no edge is reported.
+    graph = make_graph(np.zeros((3, 3)))
+    write_graph_tables(graph, tmp_path, max_edges=10, min_support=2)
+
+    edges = pd.read_csv(tmp_path / 'attention_graph_edges.csv')
+    assert edges.empty
+    assert list(edges.columns) == EDGE_COLUMNS
+
+    variants = pd.read_csv(tmp_path / 'attention_graph_variants.csv')
+    assert len(variants) == 3
+
+    empty_candidates = candidates_to_frame([], graph)
+    assert empty_candidates.empty
+    assert list(empty_candidates.columns) == CANDIDATE_COLUMNS
+
+
+def test_evaluation_runs_when_no_candidate_cleared_the_null():
+    """
+    Stage 5 must report every true set as a miss rather than fail when the
+    discovery emitted nothing.
+    """
+    from scripts.discover_interactions import CANDIDATE_COLUMNS, candidates_to_frame
+
+    empty = candidates_to_frame([], make_graph(np.zeros((3, 3))))
+    scored = empty.assign(is_significant=False, status='untested')
+    truth = [((100, 0), (200, 1), (300, 2))]
+
+    recovery, by_order, rates = evaluation.evaluate(scored, truth)
+
+    assert len(recovery) == 1
+    assert not bool(recovery.loc[0, 'recovered_exact'])
+    assert not bool(recovery.loc[0, 'recovered_containing'])
+    assert by_order.loc[0, 'proportion_exact'] == pytest.approx(0.0)
+    assert rates['n_surviving'] == 0
+    assert np.isnan(rates['false_discovery_rate'])
+    assert 'density_gap' in CANDIDATE_COLUMNS
+
+
+def test_a_candidate_whose_only_carrier_is_ambiguous_reports_no_carrier():
+    """
+    With the ambiguous sample removed from the carrier set, the candidate is
+    reported as having no carrier rather than as untestable.
+    """
+    from src.explain.higher_order import CandidateSet, test_candidate_sets
+
+    dataset = make_dataset(n_samples=1, n_variants=4)
+    gene_id = dataset.gene_index['GENE0']
+    # A second allele at the same position in the same gene makes the locus
+    # ambiguous in the only sample that carries it.
+    dataset.samples[0].variants.append(
+        VariantRecord('1', 1000, 'A', 'G', 'GENE0', 'missense_variant', 1, {})
+    )
+
+    graph = make_graph(
+        np.array([[0.0, 0.5], [0.5, 0.0]]),
+        keys=[(1000, gene_id), (1010, dataset.gene_index['GENE1'])],
+    )
+    candidate = CandidateSet(
+        members=(0, 1), order=2, density=0.5, min_edge=0.5,
+        null_mean_density=0.1, null_quantile_density=0.2,
+        density_gap=0.4, density_z=2.0, seed=(0, 1),
+    )
+
+    results = test_candidate_sets(
+        HigherOrderCounterfactual(model=tiny_model(), device='cpu'),
+        dataset, [candidate], graph, chunk_size=10,
+    )
+
+    assert results[0]['status'] == 'no_carrier'

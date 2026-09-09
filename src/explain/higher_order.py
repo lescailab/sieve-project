@@ -1063,6 +1063,11 @@ def build_variant_sample_index(dataset) -> Tuple[Dict[VariantKey, set], List[Dic
             key = (int(variant.pos), int(gene_id))
             if key in key_to_idx:
                 key_to_idx[key] = -1
+                # The locus cannot be resolved to one variant in this sample,
+                # so the sample is not a carrier the counterfactual can use;
+                # leaving it in would report a candidate as untestable rather
+                # than as having no carrier.
+                key_to_samples[key].discard(sample_idx)
             else:
                 key_to_idx[key] = variant_idx
                 key_to_samples[key].add(sample_idx)

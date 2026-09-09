@@ -340,6 +340,28 @@ def load_seed_pairs(path: Path, key_to_index: Dict) -> List[Tuple[int, int]]:
     return seeds
 
 
+# Column orders are named so that a table with no rows is still written with
+# its headers: a run that emits no edge or no candidate must produce a file
+# downstream readers can parse, not a headerless empty one.
+EDGE_COLUMNS = [
+    'variant1_pos', 'variant1_gene', 'variant2_pos', 'variant2_gene',
+    'attention', 'n_individuals',
+]
+
+CANDIDATE_COLUMNS = [
+    'set_id', 'order', 'members', 'density', 'min_edge',
+    'null_mean_density', 'null_quantile_density', 'density_gap', 'density_z',
+    'seed_variant1_pos', 'seed_variant1_gene',
+    'seed_variant2_pos', 'seed_variant2_gene',
+]
+
+TRACE_COLUMNS = [
+    'seed_variant1_pos', 'seed_variant1_gene',
+    'seed_variant2_pos', 'seed_variant2_gene',
+    'size', 'density', 'min_edge', 'members',
+]
+
+
 def write_graph_tables(graph, output_dir: Path, max_edges: int, min_support: int) -> None:
     """Write the retained variant pool and its strongest edges."""
     variants = pd.DataFrame({
@@ -361,7 +383,7 @@ def write_graph_tables(graph, output_dir: Path, max_edges: int, min_support: int
             'n_individuals': int(graph.support[i, j]),
         }
         for i, j, weight in edges
-    ])
+    ], columns=EDGE_COLUMNS)
     edge_frame.to_csv(output_dir / 'attention_graph_edges.csv', index=False)
     print(f"  Wrote {len(variants)} variants and {len(edge_frame)} edges")
 
@@ -386,7 +408,7 @@ def candidates_to_frame(candidates, graph) -> pd.DataFrame:
             'seed_variant2_pos': graph.keys[candidate.seed[1]][0],
             'seed_variant2_gene': graph.keys[candidate.seed[1]][1],
         })
-    return pd.DataFrame(rows)
+    return pd.DataFrame(rows, columns=CANDIDATE_COLUMNS)
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -516,7 +538,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             ),
         }
         for trace in traces
-    ])
+    ], columns=TRACE_COLUMNS)
     trace_frame.to_csv(output_dir / 'expansion_trace.csv', index=False)
 
     null_frame = pd.DataFrame([
