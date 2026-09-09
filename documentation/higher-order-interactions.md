@@ -103,6 +103,13 @@ the members' embeddings, but the interaction is a `k`-th order difference in whi
 context largely cancels. A candidate whose members cannot share a window of `--test-chunk-size`
 variants in any carrier is reported untested rather than approximated further.
 
+Where the model was fitted with covariates, each condition is scored at the carrier's own
+covariate profile, sex in column 0 followed by any further covariates stored on the sample,
+which is the convention training and integrated gradients both apply. Covariates are
+concatenated ahead of a non-linear classifier, so scoring at a profile the carrier does not
+have would move the operating point and change the interaction rather than only its baseline.
+The profile enters the classifier alone, leaving the attention graph unaffected.
+
 Cost grows as `2^k` per candidate, which bounds the practical order and is exposed as
 `--max-test-order`.
 

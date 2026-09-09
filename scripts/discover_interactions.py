@@ -50,6 +50,7 @@ from src.models import ChunkedSIEVEModel
 from src.models.sieve import create_sieve_model, load_state_dict_with_legacy_upgrade
 from src.explain.higher_order import (
     HigherOrderCounterfactual,
+    resolve_num_covariates,
     accumulate_attention_mass,
     build_attention_graph,
     collect_seeds,
@@ -609,6 +610,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         'aggregate_layers': args.aggregate_layers,
         'aggregate_heads': args.aggregate_heads,
         'restricted_by_attributions': paths['attributions'] is not None,
+        'num_covariates': resolve_num_covariates(model),
         'n_seeds': len(seeds),
         'n_seed_pairs_from_file': len(extra_seeds),
         'max_order': args.max_order,

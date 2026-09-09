@@ -910,3 +910,137 @@ def test_a_candidate_whose_only_carrier_is_ambiguous_reports_no_carrier():
     )
 
     assert results[0]['status'] == 'no_carrier'
+
+
+# ----- Covariates reach the counterfactual -------------------------------------
+
+
+class CovariateSensitiveModel(nn.Module):
+    """
+    A model whose three-way interaction depends on the covariate value.
+
+    Mirrors the fitted architecture in the way that matters here: covariates
+    are concatenated ahead of a non-linear head, so an omitted covariate
+    vector moves the operating point and changes the interaction rather than
+    only its baseline.
+    """
+
+    num_covariates = 2
+
+    def __init__(self, indices):
+        super().__init__()
+        self.indices = list(indices)
+
+    def forward(self, features, positions, gene_ids, mask, covariates=None, **kwargs):
+        present = [bool(mask[0, i]) for i in self.indices]
+        if covariates is None:
+            # What the fitted classifier does with a missing vector.
+            covariate_value = 0.0
+        else:
+            covariate_value = float(covariates.reshape(-1)[0])
+        value = 0.1 + 0.4 * covariate_value * float(all(present))
+        return torch.log(torch.tensor(value) / (1 - torch.tensor(value))).reshape(1), None
+
+
+def test_covariates_are_threaded_into_the_counterfactual():
+    """
+    The synergy reported for a carrier must be the one at that carrier's
+    covariate profile, not at the all-zero profile the classifier falls back on.
+    """
+    indices = [0, 1, 2]
+    model = CovariateSensitiveModel(indices)
+    features, positions, gene_ids, mask = tiny_inputs(n_variants=4)
+    tester = HigherOrderCounterfactual(model=model, device='cpu')
+
+    without = tester.compute_interaction(
+        features, positions, gene_ids, mask, indices,
+    )
+    with_covariates = tester.compute_interaction(
+        features, positions, gene_ids, mask, indices,
+        covariates=torch.tensor([1.0, 0.0]),
+    )
+
+    assert without['synergy'] == pytest.approx(0.0, abs=1e-6)
+    assert with_covariates['synergy'] == pytest.approx(0.4, abs=1e-5)
+
+
+def test_a_one_dimensional_covariate_vector_is_accepted():
+    model = CovariateSensitiveModel([0, 1, 2])
+    features, positions, gene_ids, mask = tiny_inputs(n_variants=4)
+    tester = HigherOrderCounterfactual(model=model, device='cpu')
+
+    flat = tester.compute_interaction(
+        features, positions, gene_ids, mask, [0, 1, 2],
+        covariates=torch.tensor([1.0, 0.0]),
+    )
+    batched = tester.compute_interaction(
+        features, positions, gene_ids, mask, [0, 1, 2],
+        covariates=torch.tensor([[1.0, 0.0]]),
+    )
+
+    assert flat['synergy'] == pytest.approx(batched['synergy'])
+
+
+def test_resolve_num_covariates_reads_through_a_chunked_wrapper():
+    from src.models.chunked_sieve import ChunkedSIEVEModel
+    from src.explain.higher_order import resolve_num_covariates
+
+    plain = SIEVE(input_dim=4, num_genes=3, latent_dim=8, hidden_dim=16,
+                  num_heads=2, num_attention_layers=1, classifier_hidden_dim=16,
+                  dropout=0.0, num_covariates=3)
+    assert resolve_num_covariates(plain) == 3
+    assert resolve_num_covariates(ChunkedSIEVEModel(base_model=plain)) == 3
+    assert resolve_num_covariates(tiny_model()) == 0
+
+
+def test_carrier_covariates_follow_the_training_convention():
+    """Sex occupies column 0, with stored covariates filling the vector."""
+    from src.explain.higher_order import build_carrier_covariates
+
+    dataset = make_dataset(n_samples=2, n_variants=4)
+    dataset.samples[0].sex = 'M'
+    dataset.samples[1].sex = 'F'
+
+    assert build_carrier_covariates(dataset, 0, 0) is None
+
+    male = build_carrier_covariates(dataset, 0, 3)
+    female = build_carrier_covariates(dataset, 1, 3)
+    assert male.shape == (1, 3)
+    assert float(male[0, 0]) == pytest.approx(1.0)
+    assert float(female[0, 0]) == pytest.approx(0.0)
+
+    # A stored vector is used as it stands, sex included, as training built it.
+    dataset.samples[0].covariates = np.array([1.0, 0.5, -0.25], dtype=np.float32)
+    stored = build_carrier_covariates(dataset, 0, 3)
+    assert np.allclose(stored.numpy().reshape(-1), [1.0, 0.5, -0.25])
+
+
+def test_covariate_model_end_to_end_through_test_candidate_sets():
+    """A covariate-bearing model is scored at each carrier's own profile."""
+    from src.explain.higher_order import CandidateSet, test_candidate_sets
+
+    dataset = make_dataset(n_samples=2, n_variants=4)
+    for sample in dataset.samples:
+        sample.sex = 'M'
+        sample.covariates = np.array([1.0, 0.0], dtype=np.float32)
+
+    keys = [(1000, dataset.gene_index['GENE0']),
+            (1010, dataset.gene_index['GENE1']),
+            (1020, dataset.gene_index['GENE2'])]
+    weights = np.full((3, 3), 0.5) - np.eye(3) * 0.5
+    graph = make_graph(weights, keys=keys)
+    candidate = CandidateSet(
+        members=(0, 1, 2), order=3, density=0.5, min_edge=0.5,
+        null_mean_density=0.1, null_quantile_density=0.2,
+        density_gap=0.4, density_z=2.0, seed=(0, 1),
+    )
+
+    tester = HigherOrderCounterfactual(
+        model=CovariateSensitiveModel([0, 1, 2]), device='cpu'
+    )
+    results = test_candidate_sets(tester, dataset, [candidate], graph, chunk_size=10)
+
+    assert results[0]['status'] == 'tested'
+    # 0.4 at the carrier's profile; an omitted vector would report 0.0.
+    assert results[0]['synergy'] == pytest.approx(0.4, abs=1e-5)
+    assert results[0]['is_significant']

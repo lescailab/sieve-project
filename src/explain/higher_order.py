@@ -42,6 +42,7 @@ from torch import Tensor
 from torch.utils.data import DataLoader
 
 from src.data import SampleVariants
+from src.data.covariates import encode_sex_for_covariate
 from src.encoding.chunked_dataset import collate_chunks
 from src.encoding.sparse_tensor import build_variant_tensor
 
@@ -931,6 +932,7 @@ class HigherOrderCounterfactual:
         mask: Tensor,
         variant_indices: Sequence[int],
         chrom_ids: Optional[Tensor] = None,
+        covariates: Optional[Tensor] = None,
     ) -> Dict:
         """
         Interaction of one variant set in one individual.
@@ -943,6 +945,15 @@ class HigherOrderCounterfactual:
             Indices of the set members within these tensors.
         chrom_ids : Optional[Tensor]
             Chromosome indices, when the model is chromosome-aware.
+        covariates : Optional[Tensor]
+            The individual's covariate vector, shape ``(num_covariates,)`` or
+            ``(1, num_covariates)``. Required when the model was fitted with
+            ``num_covariates > 0``: the classifier substitutes zeros for a
+            missing vector, which would evaluate every condition at a
+            covariate profile the carrier does not have. Since covariates are
+            concatenated ahead of a non-linear classifier, that shifts the
+            operating point and changes the interaction, not merely its
+            baseline.
 
         Returns
         -------
@@ -968,6 +979,11 @@ class HigherOrderCounterfactual:
             mask = mask.unsqueeze(0)
             if chrom_ids is not None and chrom_ids.dim() == 1:
                 chrom_ids = chrom_ids.unsqueeze(0)
+
+        if covariates is not None:
+            if covariates.dim() == 1:
+                covariates = covariates.unsqueeze(0)
+            covariates = covariates.to(self.device)
 
         features = features.to(self.device)
         positions = positions.to(self.device)
@@ -1001,6 +1017,7 @@ class HigherOrderCounterfactual:
 
                     logits, _ = self.model(
                         perturbed_features, positions, gene_ids, perturbed_mask,
+                        covariates=covariates,
                         chrom_ids=chrom_ids,
                     )
                     pred = torch.sigmoid(logits).item()
@@ -1142,6 +1159,82 @@ def extract_carrier_window(
     return tensors, [i - start for i in indices], start, end
 
 
+def resolve_num_covariates(model: nn.Module) -> int:
+    """
+    Number of sample-level covariates the fitted model expects.
+
+    Parameters
+    ----------
+    model : nn.Module
+        A SIEVE model or a chunked wrapper around one.
+
+    Returns
+    -------
+    int
+        ``num_covariates`` of the underlying model, zero when it has none.
+    """
+    base = getattr(model, 'base_model', model)
+    return int(getattr(base, 'num_covariates', 0))
+
+
+def build_carrier_covariates(
+    dataset,
+    sample_idx: int,
+    num_covariates: int,
+    device: str = 'cpu',
+) -> Optional[Tensor]:
+    """
+    One individual's covariate vector, assembled as training assembled it.
+
+    Sex occupies column 0 and any further columns carry the covariates stored
+    on the sample, which is the convention
+    :func:`~src.models.chunked_sieve.build_sample_covariates` applies for
+    training and integrated gradients alike.
+
+    Parameters
+    ----------
+    dataset : object
+        Dataset exposing ``samples``.
+    sample_idx : int
+        Individual to build the vector for.
+    num_covariates : int
+        Number of covariates the model expects.
+    device : str
+        Device the returned tensor is placed on.
+
+    Returns
+    -------
+    Optional[Tensor]
+        ``(1, num_covariates)``, or ``None`` for a model with no covariates.
+    """
+    if num_covariates == 0:
+        return None
+
+    # Imported here rather than at module level, as the gradients path does,
+    # to keep src.explain from importing src.models at import time.
+    from src.models.chunked_sieve import build_sample_covariates
+
+    target_device = torch.device(device)
+    sample = dataset.samples[sample_idx]
+
+    stored = getattr(sample, 'covariates', None)
+    batch_covariates = None
+    if stored is not None:
+        batch_covariates = torch.as_tensor(
+            np.asarray(stored, dtype=np.float32)
+        ).reshape(1, -1).to(target_device)
+
+    sex = torch.tensor(
+        [encode_sex_for_covariate(getattr(sample, 'sex', None))],
+        dtype=torch.float32,
+    ).to(target_device)
+
+    return build_sample_covariates(
+        sex, num_covariates, 1, target_device,
+        batch_covariates=batch_covariates,
+    )
+
+
 def test_candidate_sets(
     tester: HigherOrderCounterfactual,
     dataset,
@@ -1180,6 +1273,10 @@ def test_candidate_sets(
         so the emitted candidate list and this table stay aligned.
     """
     key_to_samples, sample_key_to_idx = build_variant_sample_index(dataset)
+    # A model fitted with covariates scores a carrier at that carrier's own
+    # profile; leaving them out would silently evaluate every condition at an
+    # all-zero profile.
+    num_covariates = resolve_num_covariates(tester.model)
     results: List[Dict] = []
 
     for candidate_idx, candidate in enumerate(candidates):
@@ -1236,6 +1333,9 @@ def test_candidate_sets(
             if window is None:
                 continue
             tensors, remapped, _start, _end = window
+            carrier_covariates = build_carrier_covariates(
+                dataset, sample_idx, num_covariates, tester.device
+            )
 
             try:
                 result = tester.compute_interaction(
@@ -1245,6 +1345,7 @@ def test_candidate_sets(
                     mask=tensors['mask'],
                     variant_indices=remapped,
                     chrom_ids=tensors.get('chrom_ids'),
+                    covariates=carrier_covariates,
                 )
             except torch.cuda.OutOfMemoryError:
                 torch.cuda.empty_cache()
