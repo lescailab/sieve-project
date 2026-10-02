@@ -202,7 +202,7 @@ sieve-co2-report \
     --output-dir results/co2_footprint
 ```
 
-The command produces a normalized `co2_footprint_runs.csv` and a consolidated
+The command produces a normalised `co2_footprint_runs.csv` and a consolidated
 `co2_footprint_report.md`.
 
 ### 5. Null Baseline Analysis (Statistical Validation)

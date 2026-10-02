@@ -195,6 +195,32 @@ def test_malformed_and_non_sieve_rows_are_skipped(tmp_path, capsys):
     assert "project_name must begin with 'sieve-'" in stderr
 
 
+@pytest.mark.parametrize(
+    "field, value",
+    [
+        ("duration", "nan"),
+        ("emissions", "inf"),
+        ("energy_consumed", "-0.5"),
+        ("cpu_energy", "-1e-3"),
+    ],
+)
+def test_non_finite_and_negative_measurements_are_skipped(tmp_path, capsys, field, value):
+    row = _row(
+        "bad-value",
+        "sieve-training",
+        duration=10,
+        emissions=0.1,
+        cpu_energy=0.1,
+        gpu_energy=0,
+        ram_energy=0,
+    )
+    row[field] = value
+    path = _write_emissions(tmp_path / "co2footprint" / "emissions.csv", [row])
+
+    assert co2_report.normalize_emissions_files([path]) == []
+    assert "invalid" in capsys.readouterr().err
+
+
 def test_main_writes_csv_and_markdown(tmp_path):
     input_dir = tmp_path / "analysis"
     _write_emissions(

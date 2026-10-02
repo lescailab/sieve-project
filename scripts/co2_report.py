@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import math
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -119,13 +120,18 @@ def _parse_float(
             raise ValueError(f"missing {names[0]}")
         return 0.0
     try:
-        return float(value)
+        number = float(value)
     except ValueError as error:
         raise ValueError(f"invalid {names[0]} value {value!r}") from error
+    # float() accepts nan/inf and negatives; none is a physical energy, emission
+    # or duration, and one such row would turn every aggregate into nan/inf.
+    if not math.isfinite(number) or number < 0:
+        raise ValueError(f"invalid {names[0]} value {value!r}")
+    return number
 
 
 def normalize_emissions_files(paths: Iterable[Path]) -> list[dict[str, Any]]:
-    """Read and normalize valid SIEVE CodeCarbon rows from one or more files."""
+    """Read and normalise valid SIEVE CodeCarbon rows from one or more files."""
     normalized: list[dict[str, Any]] = []
     seen_run_ids: set[str] = set()
 
@@ -203,7 +209,7 @@ def normalize_emissions_files(paths: Iterable[Path]) -> list[dict[str, Any]]:
 
 
 def write_normalized_csv(rows: list[dict[str, Any]], output_path: Path) -> None:
-    """Write normalized run-level measurements."""
+    """Write normalised run-level measurements."""
     with output_path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=RUN_COLUMNS)
         writer.writeheader()
@@ -328,7 +334,7 @@ def build_markdown_report(rows: list[dict[str, Any]]) -> str:
             "- CPU and Apple Silicon measurements may use fallback estimates when RAPL or "
             "powermetrics access is unavailable.",
             "- Component energy values absent from a source row are represented as zero in "
-            "the normalized report.",
+            "the normalised report.",
             "",
         ]
     )
@@ -336,7 +342,7 @@ def build_markdown_report(rows: list[dict[str, Any]]) -> str:
 
 
 def write_reports(rows: list[dict[str, Any]], output_dir: Path) -> tuple[Path, Path]:
-    """Write normalized CSV and Markdown report files."""
+    """Write normalised CSV and Markdown report files."""
     output_dir.mkdir(parents=True, exist_ok=True)
     csv_path = output_dir / "co2_footprint_runs.csv"
     markdown_path = output_dir / "co2_footprint_report.md"

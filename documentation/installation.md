@@ -26,7 +26,6 @@ conda activate sieve
 
 ```bash
 conda install -c lescailab -c pytorch -c nvidia -c bioconda -c conda-forge sieve
-python -m pip install "codecarbon>=3.2.8,<4"
 ```
 
 The channel order matters: `lescailab` must appear first so that the SIEVE package
@@ -40,8 +39,7 @@ sieve --help
 ```
 
 All `sieve-*` commands exposed by the package should be available immediately.
-CodeCarbon is installed from PyPI because its current releases are not
-maintained as conda packages.
+CodeCarbon is installed from conda-forge as a dependency of the package.
 
 ---
 

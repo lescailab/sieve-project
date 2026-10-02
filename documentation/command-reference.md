@@ -4,7 +4,7 @@
 
 <!-- BEGIN GENERATED COMMAND TABLE -->
 
-Installing SIEVE (`pip install sieve`) provides 24 console
+Installing SIEVE (`pip install sieve`) provides 25 console
 commands. Each is equivalent to running the script it points at, so
 `sieve-train --help` and `python scripts/train.py --help` are the same
 command. The installed form is the one to use from an installed
@@ -20,6 +20,7 @@ This table is generated from `[project.scripts]` in `pyproject.toml` by
 | `sieve-audit-cooccurrence` | `scripts/audit_cooccurrence.py` |
 | `sieve-bootstrap-null-calibration` | `scripts/bootstrap_null_calibration.py` |
 | `sieve-check-sex-balance` | `scripts/check_sex_balance.py` |
+| `sieve-co2-report` | `scripts/co2_report.py` |
 | `sieve-compare-ablation-rankings` | `scripts/compare_ablation_rankings.py` |
 | `sieve-compare-attributions` | `scripts/compare_attributions.py` |
 | `sieve-correct-chrx-bias` | `scripts/correct_chrx_bias.py` |
@@ -281,13 +282,13 @@ sieve-co2-report \
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `--input` | file or directory | required | Emissions CSV or directory recursively containing `co2footprint/emissions.csv`; repeatable |
-| `--output-dir` | path | required | Destination for the normalized CSV and Markdown report |
+| `--output-dir` | path | required | Destination for the normalised CSV and Markdown report |
 
 **Outputs**:
 
-- `co2_footprint_runs.csv` — normalized per-run energy, emissions, hardware,
+- `co2_footprint_runs.csv` - normalised per-run energy, emissions, hardware,
   location, tracking mode, and source fields
-- `co2_footprint_report.md` — overall and per-stage totals, individual runs,
+- `co2_footprint_report.md` - overall and per-stage totals, individual runs,
   measurement environments, and interpretation caveats
 
 Repeated runs append raw measurements. The report compiler deduplicates rows by
