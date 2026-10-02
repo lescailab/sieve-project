@@ -217,6 +217,7 @@ sieve --help
 ```
 
 All `sieve-*` commands exposed by the package should be available immediately.
+CodeCarbon is installed from conda-forge as a dependency of the package.
 
 ---
 
@@ -282,6 +283,7 @@ Core packages installed by either route:
 - **scikit-learn** (metrics, preprocessing)
 - **matplotlib** (visualisation)
 - **PyYAML** (configuration)
+- **CodeCarbon** (operational energy and CO2-equivalent estimates)
 
 See `pyproject.toml` for the complete list.
 
@@ -445,6 +447,7 @@ sieve-train \
 - `config.yaml` - Full configuration for reproducibility
 - `fold_*/config.yaml` - Fold-specific config (CV mode)
 - `fold_*/fold_info.yaml` - Fold split metadata and training summary (CV mode)
+- `co2footprint/emissions.csv` - Appended CodeCarbon measurement for each training invocation
 
 **Expected Results**:
 - Validation AUC > 0.6: Model is learning signal
@@ -479,11 +482,36 @@ sieve-explain \
 - `sieve_variant_rankings.csv` - All variants ranked by attribution
 - `sieve_gene_rankings.csv` - Gene-level aggregated scores
 - `sieve_interactions.csv` - High-attention variant pairs
+- `co2footprint/emissions.csv` - Appended CodeCarbon measurement for each explain invocation
 
 **Interpretation**:
 - **High attribution**: Variant strongly influences model prediction
 - **Consistent across samples**: Variant is important for many individuals
 - **Case-enriched**: Variant has higher attribution in cases than controls
+
+---
+
+##### Compile the analysis footprint
+
+After training and explainability, combine their raw measurements into a
+run-level CSV and a human-readable report:
+
+```bash
+sieve-co2-report \
+    --input experiments/analysis_a \
+    --input results/explainability \
+    --output-dir results/co2_footprint
+```
+
+The report contains per-stage and overall runtime, energy, component energy,
+and CO2-equivalent totals. These are operational estimates for CPU, GPU, and
+RAM rather than lifecycle or whole-facility accounting. Machine tracking can
+include unrelated work on shared hosts; use dedicated allocations when
+comparability matters.
+
+The shared `run_with_co2_tracking` helper in `src/co2footprint.py` is the
+extension point for adding the same one-invocation measurement to other
+compute-heavy commands without changing their scientific implementation.
 
 ---
 
@@ -2025,7 +2053,7 @@ conservative by a factor of the test count.
 
 <!-- BEGIN GENERATED COMMAND TABLE -->
 
-Installing SIEVE (`pip install sieve`) provides 24 console
+Installing SIEVE (`pip install sieve`) provides 25 console
 commands. Each is equivalent to running the script it points at, so
 `sieve-train --help` and `python scripts/train.py --help` are the same
 command. The installed form is the one to use from an installed
@@ -2041,6 +2069,7 @@ This table is generated from `[project.scripts]` in `pyproject.toml` by
 | `sieve-audit-cooccurrence` | `scripts/audit_cooccurrence.py` |
 | `sieve-bootstrap-null-calibration` | `scripts/bootstrap_null_calibration.py` |
 | `sieve-check-sex-balance` | `scripts/check_sex_balance.py` |
+| `sieve-co2-report` | `scripts/co2_report.py` |
 | `sieve-compare-ablation-rankings` | `scripts/compare_ablation_rankings.py` |
 | `sieve-compare-attributions` | `scripts/compare_attributions.py` |
 | `sieve-correct-chrx-bias` | `scripts/correct_chrx_bias.py` |
@@ -2283,6 +2312,43 @@ python scripts/explain.py \
     --attention-percentile 99.9 \
     --device cuda
 ```
+
+---
+
+#### co2_report.py
+
+Training and explainability automatically append one machine-level CodeCarbon
+measurement to `<output-dir>/co2footprint/emissions.csv`. Training places this
+directory below the resolved experiment directory.
+
+```bash
+sieve-co2-report \
+    --input experiments/analysis_a \
+    --input results/explainability \
+    --output-dir results/co2_footprint
+```
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--input` | file or directory | required | Emissions CSV or directory recursively containing `co2footprint/emissions.csv`; repeatable |
+| `--output-dir` | path | required | Destination for the normalised CSV and Markdown report |
+
+**Outputs**:
+
+- `co2_footprint_runs.csv` - normalised per-run energy, emissions, hardware,
+  location, tracking mode, and source fields
+- `co2_footprint_report.md` - overall and per-stage totals, individual runs,
+  measurement environments, and interpretation caveats
+
+Repeated runs append raw measurements. The report compiler deduplicates rows by
+CodeCarbon run ID when input paths overlap.
+
+CodeCarbon estimates operational CPU, NVIDIA GPU, and RAM usage. Machine-level
+tracking can include unrelated activity on shared hosts, so dedicated compute
+allocations give cleaner estimates. If RAPL or `powermetrics` access is
+unavailable, CodeCarbon may use fallback estimates. Measurements stay in local
+files and are not uploaded to the CodeCarbon API; automatic location resolution
+may still perform a network lookup.
 
 ---
 

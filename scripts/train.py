@@ -29,6 +29,7 @@ import yaml
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.data import build_sample_variants
+from src.co2footprint import run_with_co2_tracking
 from src.data.covariates import (
     attach_pc_covariates_to_samples,
     compute_file_sha256,
@@ -480,27 +481,8 @@ def train_single_fold(
     return best_metrics
 
 
-def main():
-    """Main training function."""
-    args = parse_args()
-    set_seed(args.seed)
-
-    # Validate arguments
-    if args.preprocessed_data is None and (args.vcf is None or args.phenotypes is None):
-        raise ValueError("Must provide either --preprocessed-data OR both --vcf and --phenotypes")
-    if args.pc_map is not None and args.num_pcs == 0:
-        raise ValueError("--pc-map requires --num-pcs > 0")
-    if args.num_pcs > 0 and args.pc_map is None:
-        raise ValueError("--num-pcs requires --pc-map")
-
-    # Create experiment name
-    if args.experiment_name is None:
-        args.experiment_name = f"{args.level}_run"
-
-    # Create output directory
-    output_dir = Path(args.output_dir) / args.experiment_name
-    output_dir.mkdir(parents=True, exist_ok=True)
-
+def _run_training(args, output_dir: Path) -> None:
+    """Run the existing training workload inside its prepared output directory."""
     # Load sex map / PC map if provided
     sex_map = None
     pc_map = None
@@ -867,6 +849,27 @@ def main():
         print(f"\nResults saved to {results_path}")
 
     print(f"\nTraining complete! Outputs saved to {output_dir}")
+
+
+def main():
+    """Parse training arguments and run the workload with CO2 tracking."""
+    args = parse_args()
+    set_seed(args.seed)
+
+    # Validate arguments before starting a compute measurement.
+    if args.preprocessed_data is None and (args.vcf is None or args.phenotypes is None):
+        raise ValueError("Must provide either --preprocessed-data OR both --vcf and --phenotypes")
+    if args.pc_map is not None and args.num_pcs == 0:
+        raise ValueError("--pc-map requires --num-pcs > 0")
+    if args.num_pcs > 0 and args.pc_map is None:
+        raise ValueError("--num-pcs requires --pc-map")
+
+    if args.experiment_name is None:
+        args.experiment_name = f"{args.level}_run"
+
+    output_dir = Path(args.output_dir) / args.experiment_name
+    output_dir.mkdir(parents=True, exist_ok=True)
+    return run_with_co2_tracking("training", output_dir, _run_training, args, output_dir)
 
 
 if __name__ == '__main__':

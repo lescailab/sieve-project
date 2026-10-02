@@ -23,6 +23,10 @@ jobs:
             test-file: tests/test_chunked_sieve.py
           - name: Co-occurrence Audit
             test-file: tests/test_cooccurrence_audit.py
+          - name: CO2 Footprint Tracking
+            test-file: tests/test_co2footprint.py
+          - name: CO2 Report
+            test-file: tests/test_co2_report.py
           - name: Epistasis Power Analysis
             test-file: tests/test_epistasis_power.py
           - name: Fold Config Saving
