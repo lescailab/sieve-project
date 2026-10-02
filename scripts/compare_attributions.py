@@ -10,7 +10,7 @@ P-values Should Never Be Zero") and applies Benjamini–Hochberg FDR correction.
 
 Order of operations
 -------------------
-The null comparison must operate on **raw** ``mean_attribution`` values — not on
+The null comparison must operate on **raw** ``mean_attribution`` values, not on
 chrX-corrected z-scores.  Both models (real and null) saw the same input data
 with the same chrX inflation; the only difference is the labels.  The raw
 attribution magnitude IS the signal, and the chrX inflation cancels in the
@@ -161,7 +161,7 @@ def _require_mean_attribution(df: pd.DataFrame, label: str) -> None:
 def _filter_sex_chroms(df: pd.DataFrame, genome_build_name: str) -> pd.DataFrame:
     """Remove sex-chromosome variants from *df* and return the filtered copy."""
     if 'chromosome' not in df.columns:
-        print("  WARNING: 'chromosome' column not found — cannot filter sex chromosomes")
+        print("  WARNING: 'chromosome' column not found: cannot filter sex chromosomes")
         return df
     build = get_genome_build(genome_build_name)
     mask = ~df['chromosome'].apply(lambda c: is_sex_chrom(str(c), build))
@@ -308,7 +308,7 @@ def main() -> None:
         null_df = _filter_sex_chroms(null_df, args.genome_build)
 
     # ------------------------------------------------------------------
-    # Distributional sanity check (stdout only — not written to any file)
+    # Distributional sanity check (stdout only, not written to any file)
     # ------------------------------------------------------------------
     real_attr = real_df['mean_attribution'].dropna().values
     null_attr = null_df['mean_attribution'].dropna().values

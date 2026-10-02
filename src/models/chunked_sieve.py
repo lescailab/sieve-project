@@ -298,7 +298,7 @@ class ChunkedSIEVEModel(nn.Module):
                     index=index,
                     src=chunk_gene_embeddings,
                     reduce='amax',
-                    include_self=True  # Keep initial zeros, matching previous behavior
+                    include_self=True  # Keep initial zeros, matching previous behaviour
                 )
 
         elif self.aggregation_method == 'attention':
@@ -374,7 +374,7 @@ class ChunkedSIEVEModel(nn.Module):
 
         Notes
         -----
-        Attribution regularization uses gene-level sparsity (not variant-level)
+        Attribution regularisation uses gene-level sparsity (not variant-level)
         since chunked processing operates on aggregated gene embeddings.
         This encourages the model to rely on fewer genes rather than fewer variants.
         """

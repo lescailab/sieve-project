@@ -71,7 +71,7 @@ def create_single_permutation(
 
     print(f"Original data: {n_samples} samples ({n_cases} cases, {n_controls} controls)")
 
-    # Report all keys found in the data — everything except 'labels'
+    # Report all keys found in the data, everything except 'labels'
     # (or the label field inside 'samples') will be copied verbatim.
     all_keys = sorted(data.keys())
     print(f"Data keys ({len(all_keys)}): {all_keys}")

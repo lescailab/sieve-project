@@ -6,4 +6,4 @@ A deep learning framework for discovering disease-associated genetic variants
 from exome sequencing data with built-in interpretability.
 """
 
-__version__ = "0.1.0"
+__version__ = "1.3.0"

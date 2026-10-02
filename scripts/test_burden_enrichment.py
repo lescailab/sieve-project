@@ -383,7 +383,7 @@ def generate_report(
     method_label = _validate_correction(correction)
 
     lines = [
-        f"# Cross-Cohort Burden Validation Report — {cohort_name}",
+        f"# Cross-Cohort Burden Validation Report, {cohort_name}",
         "",
         "## Summary",
         "",
@@ -397,7 +397,7 @@ def generate_report(
             "",
             f"- **Genes tested**: {res.get('n_sieve_genes', k)} "
             f"({res.get('n_sieve_genes_found', '?')} found in VCF)",
-            f"- **Mean burden** — cases: {obs['mean_cases']:.2f}, controls: {obs['mean_controls']:.2f}",
+            f"- **Mean burden**, cases: {obs['mean_cases']:.2f}, controls: {obs['mean_controls']:.2f}",
             f"- **Logistic regression z**: {obs['logistic_z']:.3f} (p = {obs['logistic_p']:.4f})",
             f"- **Mann-Whitney U**: {obs['mannwhitney_U']:.0f} (p = {obs['mannwhitney_p']:.4f})",
             f"- **Empirical p** (vs {perm['n_permutations']} permutations): **{perm['empirical_p']:.4f}**",
@@ -420,7 +420,7 @@ def generate_report(
             status = "significant" if rej else "not significant"
             lines.append(
                 f"- Top-{k}: empirical p = {res['permutation']['empirical_p']:.4f}, "
-                f"adjusted p = {pad:.4f} — **{status}**"
+                f"adjusted p = {pad:.4f}: **{status}**"
             )
         lines.append("")
 
@@ -478,7 +478,7 @@ def main(argv: list[str] | None = None) -> None:
     # Normalise matrix gene names for matching
     gene_matrix.columns = [c.upper() for c in gene_matrix.columns]
 
-    # Background gene universe — must be restricted to genes actually in the matrix
+    # Background gene universe, must be restricted to genes actually in the matrix
     matrix_gene_set: set[str] = set(gene_matrix.columns)
     if args.background_genes and args.background_genes.exists():
         raw_bg = [
@@ -582,7 +582,7 @@ def main(argv: list[str] | None = None) -> None:
                 result["observed"]["logistic_z"],
                 result["permutation"]["empirical_p"],
                 args.output_dir / f"enrichment_plot{suffix}.png",
-                title=f"SIEVE Top-{k} Genes — {csq_type} burden",
+                title=f"SIEVE Top-{k} Genes: {csq_type} burden",
             )
 
             # Save YAML

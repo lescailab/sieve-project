@@ -4,7 +4,7 @@ Annotation extraction and processing utilities for SIEVE.
 This module provides functions for extracting and processing specific
 annotations from VEP-annotated variants, including:
 - Consequence severity mapping
-- SIFT and PolyPhen score extraction and normalization
+- SIFT and PolyPhen score extraction and normalisation
 - Missing value imputation
 - Annotation quality metrics
 
@@ -111,13 +111,13 @@ def map_consequence_to_severity(consequence: str) -> int:
 
 def normalize_sift_score(sift_score: Optional[float]) -> Optional[float]:
     """
-    Normalize SIFT score to [0, 1] where higher = more deleterious.
+    Normalise SIFT score to [0, 1] where higher = more deleterious.
 
     SIFT scores:
     - Original range: [0, 1]
     - Original interpretation: lower = more deleterious (0 = deleterious)
-    - Normalized: higher = more deleterious (1 = deleterious)
-    - Transformation: normalized = 1 - original
+    - Normalised: higher = more deleterious (1 = deleterious)
+    - Transformation: normalised = 1 - original
 
     Parameters
     ----------
@@ -127,7 +127,7 @@ def normalize_sift_score(sift_score: Optional[float]) -> Optional[float]:
     Returns
     -------
     Optional[float]
-        Normalized score [0, 1] where 1 = deleterious, or None
+        Normalised score [0, 1] where 1 = deleterious, or None
 
     Examples
     --------
@@ -147,7 +147,7 @@ def normalize_sift_score(sift_score: Optional[float]) -> Optional[float]:
 
 def normalize_polyphen_score(polyphen_score: Optional[float]) -> Optional[float]:
     """
-    Normalize PolyPhen score to [0, 1] where higher = more deleterious.
+    Normalise PolyPhen score to [0, 1] where higher = more deleterious.
 
     PolyPhen scores:
     - Original range: [0, 1]

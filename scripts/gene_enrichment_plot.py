@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Create gene enrichment visualization plots.
+Create gene enrichment visualisation plots.
 
 Creates:
 1. Bar plot of top genes by attribution score
@@ -151,7 +151,7 @@ def plot_gwas_validation(df, top_n=15, figsize=(10, 8)):
     scores = top_gwas['gene_score']
     study_counts = top_gwas['gwas_studies'] if 'gwas_studies' in top_gwas.columns else [0] * len(top_gwas)
 
-    # Normalize study counts for color
+    # Normalise study counts for color
     min_count = min(study_counts)
     max_count = max(study_counts)
 

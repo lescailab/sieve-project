@@ -411,7 +411,7 @@ def draw_architecture(
 
     # Attention Stack
     blocks.append({
-        "label": f"Position-Aware Sparse Attention  \u00d7{num_attn}",
+        "label": f"Position-Aware Self-Attention  \u00d7{num_attn}",
         "details": (
             f"Multi-head self-attention ({num_heads} heads, d_k={latent_dim // num_heads})\n"
             f"+ relative position bias ({num_pos_buckets} buckets)\n"

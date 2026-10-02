@@ -3,17 +3,17 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-**SIEVE** is a deep learning framework for discovering disease-associated genetic variants from exome sequencing data. Unlike existing methods that rely heavily on pre-computed functional annotations, SIEVE tests whether deep learning can discover variants from genotype patterns alone—enabling identification of associations that prior knowledge may miss.
+**SIEVE** is a deep learning framework for discovering disease-associated genetic variants from exome sequencing data. Unlike existing methods that rely heavily on pre-computed functional annotations, SIEVE tests whether deep learning can discover variants from genotype patterns alone, enabling identification of associations that prior knowledge may miss.
 
 ## Scientific Motivation
 
-Genome-wide association studies (GWAS) and existing deep learning methods for variant discovery share a common limitation: they either ignore prior biological knowledge entirely (standard GWAS) or depend heavily on it (methods like DeepRVAT that use 34 functional annotations). Neither approach directly tests whether machine learning can discover genuinely novel associations—patterns in case-control data that existing annotations don't capture.
+Genome-wide association studies (GWAS) and existing deep learning methods for variant discovery share a common limitation: they either ignore prior biological knowledge entirely (standard GWAS) or depend heavily on it (methods like DeepRVAT that use 34 functional annotations). Neither approach directly tests whether machine learning can discover genuinely novel associations: patterns in case-control data that existing annotations don't capture.
 
 SIEVE addresses three scientific questions:
 
 1. **Can deep learning discover variants that annotation-based methods miss?** We implement an annotation-ablation protocol, training models from genotype-only input through the current functional-score level, to identify variants that emerge from genotype patterns rather than annotation priors.
 
-2. **Do spatial relationships between variants carry disease signal?** Unlike permutation-invariant deep set approaches, SIEVE uses position-aware sparse attention to test whether the relative positions of an individual's variants (e.g., potential compound heterozygosity) are informative.
+2. **Do spatial relationships between variants carry disease signal?** Unlike permutation-invariant deep set approaches, SIEVE uses position-aware dense self-attention over the sparse variant set to test whether the relative positions of an individual's variants (e.g., potential compound heterozygosity) are informative.
 
 3. **Can inherent interpretability improve discovery?** Rather than applying explainability post-hoc, SIEVE incorporates embedding sparsity regularisation into the training objective, encouraging the model to concentrate signal in fewer variant or gene embeddings and producing more stable, meaningful attributions.
 
@@ -21,7 +21,7 @@ SIEVE addresses three scientific questions:
 
 ### 1. Annotation-Ablation Discovery Protocol
 
-SIEVE trains models at five annotation levels:
+SIEVE encodes variants at four operational annotation levels, L0 to L3, with dimensions 1, 65, 69 and 71 respectively. A fifth enumerator, L4, exists in the code as a compatibility placeholder and is currently identical to L3.
 
 - **L0**: Genotype dosage only (0, 1, 2)
 - **L1**: L0 + genomic position
@@ -31,20 +31,20 @@ SIEVE trains models at five annotation levels:
 
 By comparing variant rankings across levels, we identify:
 
-- *L0-specific variants*: Associations found without any annotations—potential novel discoveries
-- *L3-specific variants*: Associations that depend on current functional annotation context—validating that annotations add value
+- *L0-specific variants*: Associations found without any annotations: potential novel discoveries
+- *L3-specific variants*: Associations that depend on current functional annotation context, validating that annotations add value
 
-### 2. Position-Aware Sparse Attention
+### 2. Position-Aware Self-Attention
 
 Standard approaches treat variants as unordered sets (permutation-invariant). SIEVE preserves positional information through:
 
 - Sinusoidal positional encodings for genomic coordinates
-- Relative position bias in attention computation
-- Sparse attention that operates only on variant-present positions
+- A learnable relative position bias in the attention computation, indexed by T5-style logarithmic distance buckets with a dedicated bucket for cross-chromosome pairs
+- Self-attention over the variant-present positions of each sample
 
-This enables learning that nearby variants (compound heterozygosity) or specific distance patterns matter, while avoiding the computational burden of dense tensors.
+Attention is dense over the set of variants a sample carries; the sparsity is a property of the input representation, which materialises only alternate-allele sites, not of the attention pattern. Cost is therefore quadratic in the number of variants per sample rather than in the number of genomic positions. This enables learning that nearby variants (compound heterozygosity) or specific distance patterns matter, while avoiding the computational burden of dense tensors.
 
-### 3. Embedding-Sparsity-Regularized Training
+### 3. Embedding-Sparsity-Regularised Training
 
 Instead of training purely for classification and explaining afterward, SIEVE incorporates interpretability into the loss function:
 
@@ -54,7 +54,7 @@ $$
 + \lambda_{\mathrm{attr}}\mathcal{L}_{\mathrm{sparse}}
 $$
 
-The implemented sparsity term penalises L2 norms of variant embeddings in non-chunked training, or gene embeddings in chunked training. This encourages the model to concentrate predictive signal in fewer loci, producing more stable and meaningful post-training attributions.
+The implemented sparsity term penalises L2 norms of variant embeddings in non-chunked training, or gene embeddings in chunked training. This encourages the model to concentrate predictive signal in fewer loci, producing more stable and meaningful post-training attributions. Integrated gradients are computed only in the explain step, on the best-validation-area-under-the-curve checkpoint, never during training.
 
 ### 4. Null Baseline Attribution Analysis
 
@@ -210,7 +210,7 @@ The command produces a normalized `co2_footprint_runs.csv` and a consolidated
 To establish statistical significance:
 
 ```bash
-# Option 1: Use the complete pipeline wrapper (preferred — cohort-centric layout)
+# Option 1: Use the complete pipeline wrapper (preferred, cohort-centric layout)
 PROJECT_DIR=/path/to/project \
 LEVEL=L3 \
 bash scripts/run_null_baseline_analysis.sh
@@ -378,8 +378,9 @@ Within the co-occurrence audit, `n_pairs_gte5_cooccur` only means at least 5 joi
 
 ```text
 sieve-project/
-├── USER_GUIDE.md          # Comprehensive user documentation
+├── USER_GUIDE.md          # Generated from documentation/; do not edit by hand
 ├── README.md              # This file
+├── documentation/         # Hand-authored MkDocs source, the docs source of truth
 ├── src/
 │   ├── data/              # VCF parsing and dataset construction
 │   ├── encoding/          # Multi-level feature encoding
@@ -397,7 +398,12 @@ sieve-project/
 │   ├── run_null_baseline_analysis.sh  # Full null baseline pipeline
 │   ├── ablation_compare.py            # Performance across levels
 │   ├── compare_ablation_rankings.py   # Ranking overlap across levels
-│   └── plot_ablation_comparison.py    # Multi-panel ablation figure
+│   ├── plot_ablation_comparison.py    # Multi-panel ablation figure
+│   ├── assemble_user_guide.py         # Builds USER_GUIDE.md from documentation/
+│   ├── sync_command_table.py          # Syncs the installed-command table
+│   └── sync_docs_version.py           # Syncs the documented version
+├── utilities/
+│   └── demos/             # Print-driven walkthrough scripts (not pytest tests)
 └── tests/                 # Unit tests
 ```
 
@@ -406,16 +412,18 @@ sieve-project/
 | Feature                       | SIEVE | DeepRVAT | GenNet  | GWAS_NN | EpiDetect |
 |-------------------------------|-------|----------|---------|---------|-----------|
 | Direct VCF input              | ✓     | ✗        | ✗       | ✗       | ✗         |
-| Annotation-free discovery     | ✓     | ✗        | ✗       | ✗       | ✗         |
+| Annotation-ablation protocol  | ✓     | ✗        | ✗       | ✗       | ✗         |
 | Position-aware                | ✓     | ✗        | ✗       | ✗       | ✗         |
 | Built-in interpretability     | ✓     | ✗        | Partial | ✗       | ✗         |
-| Epistasis detection           | ✓     | ✗        | ✗       | ✓       | ✓         |
+| Epistasis testing with power analysis | ✓ | ✗     | ✗       | ✓       | ✓         |
 | Null baseline calibration     | ✓     | ✗        | ✗       | ✗       | ✗         |
 | Common + rare variants        | ✓     | Rare only| All     | Common  | Common    |
 | Marginal effect filtering     | N/A   | N/A      | N/A     | ✗       | ✓         |
 | Sample-level explanations     | ✓     | ✗        | ✗       | ✗       | ✗         |
 | Weight-based global explain.  | ✗     | ✗        | ✓       | ✗       | ✓         |
 | Network/centrality analysis   | ✗     | ✗        | ✗       | ✗       | ✓         |
+
+In the epistasis row, the ticks for GWAS_NN and EpiDetect record that those methods report interactions. The accompanying power analysis is specific to SIEVE: candidate interactions are tested by counterfactual perturbation against a power-quantified null, and the power diagnostics are reported alongside the result.
 
 EpiDetect is included here as the closest recent epistasis-focused comparator, but it operates in a different regime from SIEVE: a small pre-filtered set of GWAS-significant common SNPs, a shallow MLP for continuous-trait regression, very large cohorts (for example UK Biobank scale), and global weight-based interaction scoring rather than sample-level attribution with null-baseline calibration.
 
@@ -490,8 +498,8 @@ We welcome contributions! Key areas for improvement:
 
 - Additional annotation levels or feature encodings
 - Alternative aggregation methods (beyond max pooling)
-- Visualization improvements
-- Performance optimization
+- Visualisation improvements
+- Performance optimisation
 
 Please open an issue to discuss major changes before submitting PRs.
 

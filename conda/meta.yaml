@@ -1,4 +1,11 @@
-{% set version = "1.3.0" %}
+{# Single source of truth for the version is src/__init__.py, mirrored by
+   pyproject.toml via [tool.setuptools.dynamic]. from_recipe_dir is required:
+   without it the path resolves against the build work dir, not this recipe. #}
+{% set version = load_file_regex(
+     load_file='../src/__init__.py',
+     regex_pattern='__version__\\s*=\\s*"([^"]+)"',
+     from_recipe_dir=True,
+     permit_undefined_jinja=False)[1] %}
 
 package:
   name: sieve

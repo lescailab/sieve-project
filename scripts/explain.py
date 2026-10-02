@@ -7,13 +7,13 @@ attention patterns to discover disease-associated variants and epistatic
 interactions.
 
 Usage:
-    # Basic usage - analyze best model from experiment
+    # Basic usage - analyse best model from experiment
     python scripts/explain.py \
         --experiment-dir outputs/L3_attr_medium \
         --preprocessed-data data/preprocessed.pt \
         --output-dir results/explainability
 
-    # Analyze specific fold
+    # Analyse specific fold
     python scripts/explain.py \
         --checkpoint outputs/L3_attr_medium/fold_0/best_model.pt \
         --config outputs/L3_attr_medium/config.yaml \
@@ -31,9 +31,8 @@ Notes:
     Attribution magnitudes (mean_attribution, score) are model-specific and
     not directly comparable across annotation levels or model architectures.
     For cross-level ablation comparison use rank-based metrics (Jaccard on
-    top-K sets) rather than raw score differences. See KNOWN_LIMITATIONS.md
-    for details on the empirical p-value resolution floor and cross-level
-    scale incomparability.
+    top-K sets) rather than raw score differences, and rank by delta_rank,
+    which is scale-free and stable across annotation levels.
 
 Author: Francesco Lescai
 """
@@ -277,7 +276,7 @@ def _run_explain(args, output_dir: Path) -> None:
     if 'input_dim' not in config:
         config['input_dim'] = get_feature_dimension(annotation_level)
     # The chromosome embedding / cross-chromosome bias bucket are sized from
-    # the dataset, not stored in the original config — surface it here so the
+    # the dataset, not stored in the original config, surface it here so the
     # constructed model matches the checkpoint's tensor shapes.
     config['num_chromosomes'] = dataset.num_chromosomes
 
@@ -318,7 +317,7 @@ def _run_explain(args, output_dir: Path) -> None:
     # Detect covariate requirements from loaded model
     ig_num_covariates = getattr(ig_model, 'num_covariates', 0)
     if ig_num_covariates > 0:
-        print(f"  Model uses {ig_num_covariates} covariate(s) — covariates will be propagated through IG")
+        print(f"  Model uses {ig_num_covariates} covariate(s), which will be propagated through IG")
     if dataset.num_covariates not in (0, ig_num_covariates):
         raise ValueError(
             "Covariate tensor width in the dataset does not match the loaded model "
@@ -627,7 +626,7 @@ def _run_explain(args, output_dir: Path) -> None:
         else:
             print("  ⚠️ WARNING: No chromosome column in variant rankings!")
 
-        # Rank genes — primary (max) and two alternatives
+        # Rank genes, primary (max) and two alternatives
         gene_rankings = ranker.rank_genes(
             variant_rankings=variant_rankings,
             aggregation='max'

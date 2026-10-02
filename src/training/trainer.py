@@ -130,7 +130,7 @@ class Trainer:
                     loss_dict = loss_output
                     loss = loss_output['total']
                 else:
-                    # Scalar loss (e.g. BCEWithLogitsLoss) — no decomposition available
+                    # Scalar loss (e.g. BCEWithLogitsLoss), no decomposition available
                     loss = loss_output
                     loss_dict = {
                         'total': loss,

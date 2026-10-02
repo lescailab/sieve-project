@@ -17,7 +17,7 @@ import numpy as np
 
 class AttentionAnalyzer:
     """
-    Analyze attention patterns for epistatic interactions.
+    Analyse attention patterns for epistatic interactions.
 
     Parameters
     ----------

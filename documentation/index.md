@@ -1,9 +1,12 @@
 # SIEVE User Guide
 
-**Version**: 1.2.0
-**Last Updated**: 2026-04-29
-**For**: SIEVE v1.2.0+
+<!-- BEGIN GENERATED VERSION -->
 
+**Version**: 1.3.0
+
+**Last updated**: 2026-07-23
+
+<!-- END GENERATED VERSION -->
 
 ## Introduction
 
@@ -15,15 +18,15 @@
 
 Unlike existing methods:
 - **Direct VCF Processing**: No conversion to PLINK or custom formats required
-- **Annotation-Free Discovery**: Tests whether ML can discover variants without prior knowledge
+- **Annotation-Ablation Protocol**: Quantifies how much of the ranking is carried by genome structure and how much by supplied annotation
 - **Position-Aware**: Learns spatial relationships between variants (e.g., compound heterozygosity)
 - **Built-in Interpretability**: Embedding sparsity regularisation incorporated into training
 - **Statistical Validation**: Null baseline analysis establishes significance thresholds
 
 ### Scientific Questions SIEVE Addresses
 
-1. **Can deep learning discover variants that annotations miss?** → Annotation ablation experiments (L0-L3, with L4 reserved as a compatibility placeholder)
-2. **Do spatial relationships between variants matter?** → Position-aware sparse attention
+1. **How much of a variant ranking is carried by annotation?** → Annotation ablation experiments (L0-L3, with L4 reserved as a compatibility placeholder)
+2. **Do spatial relationships between variants matter?** → Position-aware dense self-attention over the sparse variant set
 3. **Can we make models interpretable by design?** → Embedding-sparsity-regularised training
 4. **Are discoveries statistically significant?** → Null baseline analysis
 
@@ -32,7 +35,7 @@ Unlike existing methods:
 - **Train** models at multiple annotation levels (genotype-only to current functional-score annotations)
 - **Explain** predictions with integrated gradients attribution
 - **Discover** novel variant associations with statistical validation
-- **Detect** epistatic interactions via attention patterns
+- **Test** candidate epistatic interactions using counterfactual perturbation and post-hoc attribution and co-occurrence analysis, with an explicit power analysis reported alongside the result
 - **Validate** discoveries against ClinVar, GWAS, and GO databases
 
 ---

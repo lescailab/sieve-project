@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Visualize ablation experiment results.
+Visualise ablation experiment results.
 
 Creates a bar plot showing AUC across annotation levels with error bars.
 

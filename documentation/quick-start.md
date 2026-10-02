@@ -2,6 +2,13 @@
 
 ### For the Impatient
 
+Installing SIEVE puts 24 `sieve-*` commands on your `PATH`. Those are the
+primary form and are used throughout this guide. Every one of them is
+equivalent to running its script directly, so contributors working from a
+checkout can substitute `python scripts/<name>.py` anywhere a `sieve-*`
+command appears. See the [Command Reference](command-reference.md) for the
+full mapping.
+
 ```bash
 # 1. Install
 git clone https://github.com/lescailab/sieve-project.git
@@ -31,29 +38,29 @@ vep \
 tabix -p vcf your_data_vep.vcf.gz
 
 # 3. (Optional, recommended) Infer genetic sex for ploidy-aware encoding
-python scripts/infer_sex.py \
+sieve-infer-sex \
     --vcf your_data_vep.vcf.gz \
     --output-dir results/sex_inference \
     --genome-build GRCh37
 
 # 4. Preprocess (once)
-python scripts/preprocess.py \
+sieve-preprocess \
     --vcf your_data_vep.vcf.gz \
     --phenotypes phenotypes.tsv \
     --output preprocessed.pt \
     --sex-map results/sex_inference/sample_sex.tsv \
     --genome-build GRCh37
 
-# 4. Train
-python scripts/train.py \
+# 5. Train
+sieve-train \
     --preprocessed-data preprocessed.pt \
     --level L3 \
     --experiment-name my_model \
     --output-dir experiments \
     --device cuda
 
-# 5. Explain
-python scripts/explain.py \
+# 6. Explain
+sieve-explain \
     --experiment-dir experiments/my_model \
     --preprocessed-data preprocessed.pt \
     --output-dir results/explainability
@@ -69,7 +76,7 @@ bash scripts/run_null_baseline_analysis.sh
 # 7. (Optional) Correct chrX ploidy bias for ranking/visualisation
 #    Run AFTER step 6 on the significance-annotated file so that
 #    empirical_p_variant and fdr_variant columns are preserved in the output.
-python scripts/correct_chrx_bias.py \
+sieve-correct-chrx-bias \
     --rankings results/null_baseline_run/results/attribution_comparison/variant_rankings_with_significance.csv \
     --output-dir results/null_baseline_run/results/attribution_comparison/corrected \
     --include-sex-chroms
@@ -79,7 +86,7 @@ python scripts/correct_chrx_bias.py \
 
 ```bash
 # Use included test data
-python scripts/train.py \
+sieve-train \
     --vcf test_data/small/test_data.vcf.gz \
     --phenotypes test_data/small/test_data_phenotypes.tsv \
     --level L3 \
@@ -87,5 +94,8 @@ python scripts/train.py \
     --batch-size 8 \
     --output-dir test_run
 ```
+
+Working from a checkout instead of an installed environment? The same run is
+`python scripts/train.py` with identical arguments.
 
 ---

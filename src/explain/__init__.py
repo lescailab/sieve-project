@@ -8,7 +8,7 @@ disease-associated variants through:
 - Counterfactual epistasis detection and validation
 - Variant ranking and prioritization
 - Biological validation against databases
-- Visualization of discovered variants
+- Visualisation of discovered variants
 
 Author: Francesco Lescai
 """

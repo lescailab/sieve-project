@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Summarize non-linear classifier validation: LR vs RF comparison plots.
+Summarise non-linear classifier validation: LR vs RF comparison plots.
 
 Scans a results directory for YAML outputs from validate_nonlinear_classifier.py,
 pairs logistic-regression and random-forest results for each level + top-k

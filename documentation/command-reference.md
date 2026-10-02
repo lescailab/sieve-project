@@ -1,5 +1,72 @@
 # Command Reference
 
+## Installed Commands
+
+<!-- BEGIN GENERATED COMMAND TABLE -->
+
+Installing SIEVE (`pip install sieve`) provides 24 console
+commands. Each is equivalent to running the script it points at, so
+`sieve-train --help` and `python scripts/train.py --help` are the same
+command. The installed form is the one to use from an installed
+environment; the script path is for contributors working from a checkout.
+
+This table is generated from `[project.scripts]` in `pyproject.toml` by
+`scripts/sync_command_table.py`. Do not edit it by hand.
+
+| Installed command | Script |
+|-------------------|--------|
+| `sieve-ablation-compare` | `scripts/ablation_compare.py` |
+| `sieve-aggregate-gene-interactions` | `scripts/aggregate_gene_interactions.py` |
+| `sieve-audit-cooccurrence` | `scripts/audit_cooccurrence.py` |
+| `sieve-bootstrap-null-calibration` | `scripts/bootstrap_null_calibration.py` |
+| `sieve-check-sex-balance` | `scripts/check_sex_balance.py` |
+| `sieve-compare-ablation-rankings` | `scripts/compare_ablation_rankings.py` |
+| `sieve-compare-attributions` | `scripts/compare_attributions.py` |
+| `sieve-correct-chrx-bias` | `scripts/correct_chrx_bias.py` |
+| `sieve-create-null-baseline` | `scripts/create_null_baseline.py` |
+| `sieve-epistasis-power-analysis` | `scripts/epistasis_power_analysis.py` |
+| `sieve-explain` | `scripts/explain.py` |
+| `sieve-extract-burden` | `scripts/extract_validation_burden.py` |
+| `sieve-generate-gene-list` | `scripts/generate_sieve_gene_list.py` |
+| `sieve-infer-sex` | `scripts/infer_sex.py` |
+| `sieve-plot-ablation-comparison` | `scripts/plot_ablation_comparison.py` |
+| `sieve-plot-validation-burden` | `scripts/plot_validation_burden.py` |
+| `sieve-preprocess` | `scripts/preprocess.py` |
+| `sieve-run-null-baseline` | `scripts/run_null_baseline.py` |
+| `sieve-summarize-classifier-comparison` | `scripts/summarize_classifier_comparison.py` |
+| `sieve-test-burden-enrichment` | `scripts/test_burden_enrichment.py` |
+| `sieve-train` | `scripts/train.py` |
+| `sieve-validate-discoveries` | `scripts/validate_discoveries.py` |
+| `sieve-validate-epistasis` | `scripts/validate_epistasis.py` |
+| `sieve-validate-nonlinear-classifier` | `scripts/validate_nonlinear_classifier.py` |
+
+<!-- END GENERATED COMMAND TABLE -->
+
+### Scripts without an entry point
+
+These scripts deliberately have no installed command and are run from a
+checkout with `python scripts/<name>.py`:
+
+- `check_chromosome_distribution.py`
+- `discover_interactions.py`
+- `fix_ranking_outputs.py`
+- `gene_enrichment_plot.py`
+- `manhattan_plot.py`
+- `plot_ablation.py`
+- `plot_detailed_architecture.py`
+- `plot_null_comparison.py`
+- `plot_training_history.py`
+- `render_model_architecture.py`
+- `repair_gene_delta_rank.py`
+
+Two further scripts maintain the documentation itself and are described in
+`documentation/README.md`: `assemble_user_guide.py` and
+`sync_command_table.py`.
+
+---
+
+## Command Options
+
 ### preprocess.py
 
 ```bash
@@ -282,7 +349,7 @@ This wrapper is configured through environment variables.
 |---------|----------|-------------|
 | `PROJECT_DIR` | Yes | Cohort project root directory (e.g. `/path/to/project`) |
 | `LEVEL` | Yes | Annotation level to run (e.g. `L3`) |
-| `NULL_DATA` | No | Pre-existing permuted `.pt` file — skips Step 1 if set |
+| `NULL_DATA` | No | Pre-existing permuted `.pt` file; skips Step 1 if set |
 | `DEVICE` | No | `cuda` or `cpu` (default: `cuda`) |
 | `PYTHON` | No | Python interpreter path override |
 | `EXCLUDE_SEX_CHROMS` | No | Set to `1` to pass `--exclude-sex-chroms` to the comparison step |
@@ -476,21 +543,22 @@ Compares variant attribution rankings across annotation levels. Computes pairwis
 | `--out-comparison` | path | `ablation_ranking_comparison.yaml` | Output YAML summary |
 | `--out-jaccard` | path | `ablation_jaccard_matrix.tsv` | Output Jaccard matrix TSV |
 | `--out-level-specific` | path | `level_specific_variants.tsv` | Output level-specific variants TSV |
-| `--score-column` | str | `z_attribution` | Column to rank variants by. Recommended choices are `z_attribution` for the chrX-corrected continuity view and `delta_rank` for the bootstrap-informed null-calibrated view. P/FDR-like columns and true rank columns are ranked ascending automatically; `delta_rank` is ranked descending. |
+| `--score-column` | str | `z_attribution` | Column to rank variants by. **Use `delta_rank`**: it is the primary ranking metric, scale-free and stable across annotation levels. `z_attribution` is a per-chromosome z-score retained as a visualisation score for Manhattan plots and for continuity with earlier runs; per-chromosome z-scoring flattens genome-wide signal, so it is not suitable for cross-level ranking comparison. P/FDR-like columns and true rank columns are ranked ascending automatically; `delta_rank` is ranked descending. The default is unchanged for reproducibility of prior runs, so pass `--score-column delta_rank` explicitly. |
 
 **Example**:
 ```bash
 python scripts/compare_ablation_rankings.py \
-    --ranking-dir results/ablation/rankings \
-    --score-column z_attribution \
+    --ranking-dir results/ablation/rank_calibrated_rankings \
+    --score-column delta_rank \
     --top-k 50,100,200,500 \
     --out-comparison results/ablation/ablation_ranking_comparison.yaml \
     --out-jaccard results/ablation/ablation_jaccard_matrix.tsv \
     --out-level-specific results/ablation/level_specific_variants.tsv
 ```
 
-For the two-run `z_attribution` plus `delta_rank` workflow, see
-`USER_GUIDE.md` under **Bootstrap-calibrated ablation comparison**.
+To additionally produce the `z_attribution` visualisation view, rerun with
+`--score-column z_attribution` and separate output paths. For the two-run
+workflow, see **Bootstrap-calibrated ablation comparison** under Detailed Usage.
 
 ---
 
@@ -568,6 +636,75 @@ python scripts/validate_epistasis.py [OPTIONS]
 
 ---
 
+### discover_interactions.py
+
+```bash
+python scripts/discover_interactions.py [OPTIONS]
+```
+
+Recovers epistatic variant sets of order greater than two from a fitted checkpoint. `higher-order-interactions.md` describes the stages, the outputs and the conditions of applicability.
+
+**Run layout and inputs**
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--run-dir` | path | required | Run directory holding `experiments/`, `preprocessed.pt` and `results/` |
+| `--experiment-name` | str | - | Experiment under `<run-dir>/experiments/` to read the model from. Required unless `--checkpoint` is given |
+| `--checkpoint` | path | - | Model checkpoint, overriding the run-directory layout |
+| `--config` | path | - | Config YAML, overriding the run-directory layout |
+| `--preprocessed-data` | path | - | Preprocessed data, overriding the run-directory layout |
+| `--output-dir` | path | - | Output directory. Defaults to `<run-dir>/results/interaction_discovery` |
+| `--device` | str | cuda | Device [cuda, cpu] |
+
+**Attention graph**
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--variant-percentile` | float | 99.0 | Percentile of mean attention mass below which variants are dropped |
+| `--max-graph-variants` | int | 2000 | Hard cap on the restricted variant pool |
+| `--min-edge-support` | int | 2 | Minimum individuals contributing to an edge |
+| `--attributions-dir` | path | - | `attributions_per_sample/` directory, to narrow the pool further |
+| `--attribution-top-k` | int | 20000 | Variants kept by mean absolute attribution before the percentile cut |
+| `--chunk-size` | int | 2000 | Variants per chunk for the attention passes |
+| `--batch-size` | int | 4 | Chunks per forward pass |
+| `--aggregate-layers` | str | mean | Reduction across attention layers [mean, max, last] |
+| `--aggregate-heads` | str | mean | Reduction across attention heads [mean, max] |
+| `--max-edges-reported` | int | 10000 | Edges written to the graph edge table |
+
+**Candidate search**
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--max-order` | int | 5 | Largest set size to grow to |
+| `--n-seeds` | int | 1000 | Seed edges expanded |
+| `--seed-pairs` | path | - | Interactions CSV whose pairs are added as seeds. Defaults to `<run-dir>/results/sieve_interactions.csv` when present |
+| `--no-seed-pairs` | flag | False | Seed from graph edges alone, ignoring any pair file |
+| `--n-null-draws` | int | 1000 | Random sets drawn per size for the density null |
+| `--null-quantile` | float | 0.95 | Quantile of the null at which expansion terminates |
+| `--null-seed` | int | 0 | Seed for the random draw, so a run is reproducible |
+| `--gap-tolerance` | float | 0.01 | Relative tolerance on the density gap. Growth that holds the gap to within it is emitted at the larger order |
+| `--allow-missing-edges` | flag | False | Admit a variant with no edge to some current members |
+
+**Counterfactual test**
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--skip-counterfactual` | flag | False | Emit candidates without testing them |
+| `--top-k-sets` | int | 100 | Candidates tested, by decreasing density gap |
+| `--max-test-order` | int | 5 | Candidates above this order are recorded as untested. The test costs `2^k` forward passes |
+| `--n-carriers` | int | 1 | Individuals each candidate is tested in |
+| `--test-chunk-size` | int | 3000 | Maximum variants per counterfactual forward pass |
+| `--synergy-threshold` | float | 0.05 | Absolute synergy above which a candidate is called significant |
+| `--independence-epsilon` | float | 0.01 | Absolute synergy below which a candidate is called independent |
+
+**Evaluation**
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--truth` | path | - | CSV of the generating architecture: `set_id`, `pos` and either `gene_id` or `gene`. Read by the evaluation stage alone |
+
+---
+
 ### audit_cooccurrence.py
 
 ```bash
@@ -610,7 +747,7 @@ python scripts/aggregate_gene_interactions.py [OPTIONS]
 | `--min-cooccur-samples` | int | 5 | Minimum gene-pair co-occurrence |
 | `--top-k-genes` | int list | `100` | Top-K gene set sizes. List supported (e.g. `100 2000`) for stability sweeps. Quadratic in K. The default is now 100; pass `50` explicitly to reproduce older default runs. |
 | `--min-gene-score` | float | 0.0 | Minimum gene score |
-| `--score-column` | str | `z_attribution` | Variant-level score column for ranking and gene scoring. Choices: `z_attribution`, `delta_rank`. Use `delta_rank` with a rank-calibrated input from `bootstrap_null_calibration.py`. |
+| `--score-column` | str | `z_attribution` | Variant-level score column for ranking and gene scoring. Choices: `z_attribution`, `delta_rank`. **Use `delta_rank`** with a rank-calibrated input from `bootstrap_null_calibration.py`: it is the primary ranking metric. `z_attribution` is a per-chromosome visualisation score. The default is unchanged for reproducibility of prior runs. |
 | `--significance-threshold` | str | `p_0.05` | Null-derived significance threshold to enforce when available |
 | `--min-significant-variants` | int | 1 | Minimum number of significant variants required for a gene |
 | `--allow-nonsignificant-genes` | flag | False | Allow genes with no null-significant variants |
@@ -674,9 +811,9 @@ Aggregates variant-level SIEVE rankings to a gene-level TSV for cross-cohort bur
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `--variant-rankings` | path | required | Corrected variant rankings CSV |
+| `--variant-rankings` | path | required | Variant rankings CSV that contains the column named by `--score-column`. For `delta_rank` this is the rank-calibrated CSV from `bootstrap_null_calibration.py`; for `z_attribution` it is `corrected_variant_rankings.csv` from `correct_chrx_bias.py`. |
 | `--output` | path | required | Output gene list TSV |
-| `--score-column` | str | `z_attribution` | Column to use for scoring |
+| `--score-column` | str | `z_attribution` | Variant-level column to aggregate per gene into the output `gene_score`. **Use `delta_rank`**, the primary ranking metric, together with a rank-calibrated input from `bootstrap_null_calibration.py`. The column must be present in `--variant-rankings` or the script exits with `Score column not found`; there is no alias resolution here. `z_attribution` is a per-chromosome visualisation score retained for continuity with Manhattan plots and earlier runs. The default is unchanged for reproducibility of prior runs. |
 | `--exclude-sex-chroms` | flag | True | Exclude sex chromosome genes |
 | `--include-sex-chroms` | flag | False | Include sex chromosome genes (overrides --exclude-sex-chroms) |
 | `--min-null-threshold` | str | None | Only include genes with variants exceeding this null threshold (`p05`, `p01`, `p001`) |
@@ -688,18 +825,18 @@ Aggregates variant-level SIEVE rankings to a gene-level TSV for cross-cohort bur
 **Example** (fixed gene list):
 ```bash
 python scripts/generate_sieve_gene_list.py \
-    --variant-rankings results/attribution_comparison/corrected/corrected_variant_rankings.csv \
+    --variant-rankings results/attribution_comparison/variant_rankings_rank_calibrated.csv \
     --output validation/sieve_gene_lists/sieve_genes.tsv \
-    --score-column z_attribution \
+    --score-column delta_rank \
     --aggregation max
 ```
 
 **Example** (FDR-threshold filtered):
 ```bash
 python scripts/generate_sieve_gene_list.py \
-    --variant-rankings results/attribution_comparison/corrected/corrected_variant_rankings.csv \
+    --variant-rankings results/attribution_comparison/variant_rankings_rank_calibrated.csv \
     --output validation/sieve_gene_lists/sieve_genes_fdr05.tsv \
-    --score-column z_attribution \
+    --score-column delta_rank \
     --fdr-threshold 0.05 \
     --aggregation max
 ```
@@ -728,7 +865,7 @@ Parses a validation VCF and computes per-sample burden counts within SIEVE gene 
 | `--from-variant-rankings` | flag | False | Input is a variant rankings CSV (aggregate internally) |
 | `--compute-full-gene-matrix` | flag | False | Build full gene-level burden matrix for permutation testing |
 
-> **Tip — multi-level validation in a single VCF pass**: The full gene matrix records
+> **Tip: multi-level validation in a single VCF pass**: The full gene matrix records
 > burden for *every* gene in the VCF, regardless of which `--sieve-genes` file you
 > provide. When comparing ablation levels (L0–L3), run `extract_validation_burden.py`
 > **once** with `--compute-full-gene-matrix` and any gene list, then call
@@ -746,7 +883,7 @@ Parses a validation VCF and computes per-sample burden counts within SIEVE gene 
 >     --consequence-stratify \
 >     --compute-full-gene-matrix
 >
-> # Test enrichment per level (fast — reads parquet, no VCF)
+> # Test enrichment per level (fast, reads parquet, no VCF)
 > for level in L0 L1 L2 L3; do
 >     python scripts/test_burden_enrichment.py \
 >         --burden-dir validation/cohort_b \
@@ -822,15 +959,15 @@ Tests whether SIEVE gene sets carry non-linear discriminative information by tra
 | `--burden-matrix` | path | required | Gene-burden matrix parquet file |
 | `--phenotypes` | path | required | Phenotype TSV (sample_id, phenotype: 1=ctrl, 2=case) |
 | `--output-tsv` | path | required | Summary TSV path |
-| `--top-k` | str | — | Comma-separated top-k values, e.g. `100,500,1000,2000`. Mutually exclusive with `--fdr-threshold`. |
-| `--fdr-threshold` | float | — | FDR cutoff for gene selection (e.g. `0.05`). Gene set size determined per level. Mutually exclusive with `--top-k`. |
+| `--top-k` | str | - | Comma-separated top-k values, e.g. `100,500,1000,2000`. Mutually exclusive with `--fdr-threshold`. |
+| `--fdr-threshold` | float | - | FDR cutoff for gene selection (e.g. `0.05`). Gene set size determined per level. Mutually exclusive with `--top-k`. |
 | `--classifiers` | str | required | Comma-separated classifier list from `rf,lr` |
 | `--levels` | str | `L0,L1,L2,L3` | Comma-separated annotation levels |
 | `--n-permutations` | int | `1000` | Number of random gene set permutations |
 | `--cv-folds` | int | `5` | Number of stratified CV folds |
 | `--seed` | int | `42` | Random seed |
 | `--n-cores` | int | `-1` | Number of outer-loop cores for permutation evaluation |
-| `--score-column` | str | `z_attribution` | Gene-ranking score to use; `z_attribution` maps to `gene_z_score` |
+| `--score-column` | str | `z_attribution` | Gene-ranking score to use. **Use `delta_rank`**, the primary ranking metric; this script resolves it to the `gene_delta_rank` column when present. `z_attribution` resolves to `gene_z_score` and is the per-chromosome visualisation view. The default is unchanged for reproducibility of prior runs. |
 | `--also-export-csv` | flag | off | Export classifier input matrices as CSV under `csv/` in the output directory |
 
 **Example** (fixed top-k, multi-level with both classifiers):
