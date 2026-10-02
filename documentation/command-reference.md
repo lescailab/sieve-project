@@ -44,10 +44,11 @@ This table is generated from `[project.scripts]` in `pyproject.toml` by
 
 ### Scripts without an entry point
 
-These scripts are plotting and repair utilities. They deliberately have no
-installed command and are run from a checkout with `python scripts/<name>.py`:
+These scripts deliberately have no installed command and are run from a
+checkout with `python scripts/<name>.py`:
 
 - `check_chromosome_distribution.py`
+- `discover_interactions.py`
 - `fix_ranking_outputs.py`
 - `gene_enrichment_plot.py`
 - `manhattan_plot.py`
@@ -595,6 +596,75 @@ python scripts/validate_epistasis.py [OPTIONS]
 | `--genome-build` | str | GRCh37 | Reference genome build |
 
 `validate_epistasis.py` validates candidate pairs from `sieve_interactions.csv`. Those candidates are limited to pairs visible within the same chunk during `explain.py`.
+
+---
+
+### discover_interactions.py
+
+```bash
+python scripts/discover_interactions.py [OPTIONS]
+```
+
+Recovers epistatic variant sets of order greater than two from a fitted checkpoint. `higher-order-interactions.md` describes the stages, the outputs and the conditions of applicability.
+
+**Run layout and inputs**
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--run-dir` | path | required | Run directory holding `experiments/`, `preprocessed.pt` and `results/` |
+| `--experiment-name` | str | - | Experiment under `<run-dir>/experiments/` to read the model from. Required unless `--checkpoint` is given |
+| `--checkpoint` | path | - | Model checkpoint, overriding the run-directory layout |
+| `--config` | path | - | Config YAML, overriding the run-directory layout |
+| `--preprocessed-data` | path | - | Preprocessed data, overriding the run-directory layout |
+| `--output-dir` | path | - | Output directory. Defaults to `<run-dir>/results/interaction_discovery` |
+| `--device` | str | cuda | Device [cuda, cpu] |
+
+**Attention graph**
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--variant-percentile` | float | 99.0 | Percentile of mean attention mass below which variants are dropped |
+| `--max-graph-variants` | int | 2000 | Hard cap on the restricted variant pool |
+| `--min-edge-support` | int | 2 | Minimum individuals contributing to an edge |
+| `--attributions-dir` | path | - | `attributions_per_sample/` directory, to narrow the pool further |
+| `--attribution-top-k` | int | 20000 | Variants kept by mean absolute attribution before the percentile cut |
+| `--chunk-size` | int | 2000 | Variants per chunk for the attention passes |
+| `--batch-size` | int | 4 | Chunks per forward pass |
+| `--aggregate-layers` | str | mean | Reduction across attention layers [mean, max, last] |
+| `--aggregate-heads` | str | mean | Reduction across attention heads [mean, max] |
+| `--max-edges-reported` | int | 10000 | Edges written to the graph edge table |
+
+**Candidate search**
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--max-order` | int | 5 | Largest set size to grow to |
+| `--n-seeds` | int | 1000 | Seed edges expanded |
+| `--seed-pairs` | path | - | Interactions CSV whose pairs are added as seeds. Defaults to `<run-dir>/results/sieve_interactions.csv` when present |
+| `--no-seed-pairs` | flag | False | Seed from graph edges alone, ignoring any pair file |
+| `--n-null-draws` | int | 1000 | Random sets drawn per size for the density null |
+| `--null-quantile` | float | 0.95 | Quantile of the null at which expansion terminates |
+| `--null-seed` | int | 0 | Seed for the random draw, so a run is reproducible |
+| `--gap-tolerance` | float | 0.01 | Relative tolerance on the density gap. Growth that holds the gap to within it is emitted at the larger order |
+| `--allow-missing-edges` | flag | False | Admit a variant with no edge to some current members |
+
+**Counterfactual test**
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--skip-counterfactual` | flag | False | Emit candidates without testing them |
+| `--top-k-sets` | int | 100 | Candidates tested, by decreasing density gap |
+| `--max-test-order` | int | 5 | Candidates above this order are recorded as untested. The test costs `2^k` forward passes |
+| `--n-carriers` | int | 1 | Individuals each candidate is tested in |
+| `--test-chunk-size` | int | 3000 | Maximum variants per counterfactual forward pass |
+| `--synergy-threshold` | float | 0.05 | Absolute synergy above which a candidate is called significant |
+| `--independence-epsilon` | float | 0.01 | Absolute synergy below which a candidate is called independent |
+
+**Evaluation**
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--truth` | path | - | CSV of the generating architecture: `set_id`, `pos` and either `gene_id` or `gene`. Read by the evaluation stage alone |
 
 ---
 

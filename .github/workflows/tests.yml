@@ -31,6 +31,8 @@ jobs:
             test-file: tests/test_gene_interactions.py
           - name: Genome Build
             test-file: tests/test_genome_build.py
+          - name: Higher-Order Interactions
+            test-file: tests/test_higher_order_interactions.py
           - name: Null Baseline
             test-file: tests/test_null_baseline.py
           - name: Phase 3 Explainability
