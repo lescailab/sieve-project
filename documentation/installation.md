@@ -39,6 +39,7 @@ sieve --help
 ```
 
 All `sieve-*` commands exposed by the package should be available immediately.
+CodeCarbon is installed from conda-forge as a dependency of the package.
 
 ---
 
@@ -104,6 +105,7 @@ Core packages installed by either route:
 - **scikit-learn** (metrics, preprocessing)
 - **matplotlib** (visualisation)
 - **PyYAML** (configuration)
+- **CodeCarbon** (operational energy and CO2-equivalent estimates)
 
 See `pyproject.toml` for the complete list.
 
@@ -131,4 +133,3 @@ package. A complete command-based walkthrough is in:
 - `conda/USAGE.md`
 
 ---
-
