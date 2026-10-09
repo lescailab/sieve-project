@@ -16,13 +16,21 @@ from torch import Tensor
 import numpy as np
 from captum.attr import IntegratedGradients
 
+from src.encoding.position_config import ResolvedIGMode
+
+
+MAX_TORCH_SEED = 2**63 - 1
+
 
 class IntegratedGradientsExplainer:
     """
     Compute variant attributions using Integrated Gradients.
 
     This class wraps Captum's IntegratedGradients to work with SIEVE's
-    multi-input architecture (features, positions, gene_ids, mask).
+    multi-input architecture. By default it preserves historical legacy
+    behavior, where the complete ``variant_features`` tensor is differentiable.
+    Content mode instead makes only ``content_features`` differentiable while
+    observed absolute-position features and all IDs/masks/covariates stay fixed.
 
     Parameters
     ----------
@@ -32,6 +40,14 @@ class IntegratedGradientsExplainer:
         Device to run computations ('cuda' or 'cpu')
     n_steps : int
         Number of integration steps (default: 50)
+    ig_mode : ResolvedIGMode or str
+        Resolved attribution mode. ``legacy`` preserves the historical Python
+        API. ``content`` uses SIEVE's split-primary model path. ``auto`` must be
+        resolved from configuration before constructing this explainer.
+    sampling_seed : Optional[int]
+        Deterministic base seed for ``attribute_batch()`` variant subsampling.
+        The default ``0`` makes scientific batch attribution reproducible.
+        ``None`` preserves explicit nondeterministic compatibility behavior.
 
     Attributes
     ----------
@@ -46,7 +62,7 @@ class IntegratedGradientsExplainer:
     --------
     >>> explainer = IntegratedGradientsExplainer(model, device='cuda')
     >>> attributions = explainer.attribute(features, positions, gene_ids, mask)
-    >>> # attributions shape: (batch, num_variants, input_dim)
+    >>> # legacy attributions shape: (batch, num_variants, input_dim)
     """
 
     def __init__(
@@ -54,23 +70,29 @@ class IntegratedGradientsExplainer:
         model: nn.Module,
         device: str = 'cuda',
         n_steps: int = 50,
-        max_variants: int = 2000
+        max_variants: int = 2000,
+        ig_mode: ResolvedIGMode | str = ResolvedIGMode.LEGACY,
+        sampling_seed: int | None = 0,
     ):
         self.model = model.to(device)
         self.model.eval()
         self.device = device
         self.n_steps = n_steps
         self.max_variants = max_variants
+        self.ig_mode = _coerce_resolved_ig_mode(ig_mode)
+        self.sampling_seed = _validate_sampling_seed(sampling_seed)
 
-        # Wrap model to work with Captum
-        self.model_wrapper = SIEVEWrapper(model)
+        if self.ig_mode is ResolvedIGMode.LEGACY:
+            self.model_wrapper = SIEVEWrapper(model)
+        else:
+            self.model_wrapper = ContentSIEVEWrapper(model)
 
         # Create IntegratedGradients instance
         self.ig = IntegratedGradients(self.model_wrapper)
 
     def attribute(
         self,
-        variant_features: Tensor,
+        variant_features: Tensor | None,
         positions: Tensor,
         gene_ids: Tensor,
         mask: Tensor,
@@ -78,13 +100,21 @@ class IntegratedGradientsExplainer:
         baseline: Optional[Tensor] = None,
         covariates: Optional[Tensor] = None,
         chrom_ids: Optional[Tensor] = None,
+        *,
+        content_features: Tensor | None = None,
+        absolute_position_features: Tensor | None = None,
     ) -> Tensor:
         """
         Compute integrated gradients attributions for variants.
 
+        Legacy mode attributes the complete historical ``variant_features``
+        tensor. Content mode requires ``variant_features=None`` and attributes
+        only ``content_features`` while observed absolute-position features are
+        fixed throughout integration.
+
         Parameters
         ----------
-        variant_features : Tensor
+        variant_features : Optional[Tensor]
             Variant features, shape (batch, num_variants, input_dim)
         positions : Tensor
             Genomic positions, shape (batch, num_variants)
@@ -95,20 +125,31 @@ class IntegratedGradientsExplainer:
         target : Optional[int]
             Target class (0 or 1). If None, uses predicted class
         baseline : Optional[Tensor]
-            Baseline input for integration. If None, uses zeros
+            Baseline input for integration. In legacy mode, shape must equal
+            ``variant_features.shape`` and the default is
+            ``zeros_like(variant_features)``. In content mode, shape must equal
+            ``content_features.shape`` and the default is
+            ``zeros_like(content_features)``. ``absolute_position_features`` is
+            not part of the baseline and remains at its observed fixed value
+            throughout integration.
         covariates : Optional[Tensor]
             Sample-level covariates, shape (batch, num_covariates).
             Must be provided when the model was trained with covariates
             (``num_covariates > 0``).  Omitting covariates for a model that
             expects them will explain a different function than was trained.
+        content_features : Optional[Tensor]
+            Split content features, shape (batch, num_variants, content_dim).
+            Required in content mode and forbidden in legacy mode.
+        absolute_position_features : Optional[Tensor]
+            Observed split absolute-position features. Required in content mode
+            and fixed as a non-Captum forward argument.
 
         Returns
         -------
         attributions : Tensor
-            Variant attributions, shape (batch, num_variants, input_dim)
+            Legacy mode shape is (batch, num_variants, input_dim). Content mode
+            shape is (batch, num_variants, content_dim).
         """
-        # Move inputs to device
-        variant_features = variant_features.to(self.device)
         positions = positions.to(self.device)
         gene_ids = gene_ids.to(self.device)
         mask = mask.to(self.device)
@@ -117,25 +158,61 @@ class IntegratedGradientsExplainer:
         if chrom_ids is not None:
             chrom_ids = chrom_ids.to(self.device)
 
-        # Create baseline (zero features)
-        if baseline is None:
-            baseline = torch.zeros_like(variant_features)
+        if self.ig_mode is ResolvedIGMode.LEGACY:
+            if variant_features is None:
+                raise ValueError("variant_features is required in legacy IG mode")
+            if content_features is not None or absolute_position_features is not None:
+                raise ValueError(
+                    "content_features and absolute_position_features are only valid "
+                    "in content IG mode"
+                )
+            variant_features = variant_features.to(self.device)
+            baseline = _prepare_baseline(baseline, variant_features, self.device)
+            additional = (positions, gene_ids, mask, covariates, chrom_ids)
+            return self.ig.attribute(
+                inputs=variant_features,
+                baselines=baseline,
+                target=target,
+                additional_forward_args=additional,
+                n_steps=self.n_steps
+            )
 
-        # Build additional_forward_args, covariates and chrom_ids always
-        # included so the wrapper signature stays stable; None is passed when
-        # unused.
-        additional = (positions, gene_ids, mask, covariates, chrom_ids)
+        if variant_features is not None:
+            raise ValueError("variant_features must be None in content IG mode")
+        if content_features is None and absolute_position_features is None:
+            raise ValueError(
+                "content_features and absolute_position_features are required "
+                "in content IG mode"
+            )
+        if content_features is None or absolute_position_features is None:
+            raise ValueError(
+                "content_features and absolute_position_features must be supplied "
+                "together in content IG mode"
+            )
 
-        # Compute attributions
-        attributions = self.ig.attribute(
-            inputs=variant_features,
+        content_features = content_features.to(self.device)
+        absolute_position_features = absolute_position_features.to(self.device)
+        baseline = _prepare_baseline(baseline, content_features, self.device)
+
+        # Absolute position remains part of the observed function, but not the
+        # attribution input. Detaching enforces that boundary even if a caller
+        # supplies a tensor that requires gradients.
+        fixed_absolute_position = absolute_position_features.detach()
+        additional = (
+            fixed_absolute_position,
+            positions,
+            gene_ids,
+            mask,
+            covariates,
+            chrom_ids,
+        )
+        return self.ig.attribute(
+            inputs=content_features,
             baselines=baseline,
             target=target,
             additional_forward_args=additional,
             n_steps=self.n_steps
         )
-
-        return attributions
 
     def attribute_batch(
         self,
@@ -150,6 +227,11 @@ class IntegratedGradientsExplainer:
         Integrated gradients requires storing all intermediate activations
         for gradient computation. With attention mechanisms over thousands
         of variants, batch processing exceeds GPU memory.
+
+        Legacy mode reads ``batch['features']`` and preserves historical
+        attribution widths. Content mode reads ``batch['content_features']`` and
+        ``batch['absolute_position_features']``; historical ``features`` is not
+        required for IG execution.
 
         Parameters
         ----------
@@ -168,7 +250,9 @@ class IntegratedGradientsExplainer:
         Returns
         -------
         all_attributions : List[np.ndarray]
-            List of attribution arrays, one per sample
+            List of attribution arrays, one per sample. In legacy mode, each
+            attribution matrix has width ``input_dim``. In content mode, each
+            attribution matrix has width ``content_dim``.
         all_variant_scores : List[np.ndarray]
             List of aggregated variant scores, one per sample
         all_metadata : List[Dict]
@@ -187,12 +271,25 @@ class IntegratedGradientsExplainer:
 
         for batch_idx, batch in enumerate(dataloader):
             # Extract batch data
-            features = batch['features']
+            if self.ig_mode is ResolvedIGMode.LEGACY:
+                features = batch['features']
+                content_features = None
+                absolute_position_features = None
+                batch_size = features.shape[0]
+            else:
+                if 'content_features' not in batch or 'absolute_position_features' not in batch:
+                    raise ValueError(
+                        "content IG mode requires batch['content_features'] and "
+                        "batch['absolute_position_features']"
+                    )
+                features = None
+                content_features = batch['content_features']
+                absolute_position_features = batch['absolute_position_features']
+                batch_size = content_features.shape[0]
             positions = batch['positions']
             gene_ids = batch['gene_ids']
             mask = batch['mask']
             chrom_ids_batch = batch.get('chrom_ids')
-            batch_size = features.shape[0]
 
             # --- Covariate handling ---
             # Build the per-sample covariate vector using the same logic as
@@ -237,7 +334,17 @@ class IntegratedGradientsExplainer:
                     print(f"  Processed {sample_num}/{total_samples} samples...", flush=True)
 
                 # Extract single sample (keep batch dimension)
-                sample_features = features[i:i+1]
+                sample_features = (
+                    features[i:i+1] if self.ig_mode is ResolvedIGMode.LEGACY else None
+                )
+                sample_content = (
+                    content_features[i:i+1]
+                    if self.ig_mode is ResolvedIGMode.CONTENT else None
+                )
+                sample_absolute_position = (
+                    absolute_position_features[i:i+1]
+                    if self.ig_mode is ResolvedIGMode.CONTENT else None
+                )
                 sample_positions = positions[i:i+1]
                 sample_gene_ids = gene_ids[i:i+1]
                 sample_mask = mask[i:i+1]
@@ -250,38 +357,58 @@ class IntegratedGradientsExplainer:
                     batch_covariates_full[i:i+1] if batch_covariates_full is not None else None
                 )
 
-                # CRITICAL: Limit variants to avoid OOM
-                # Count valid variants for this sample
-                num_valid_variants = sample_mask[0].sum().item()
+                global_sample_idx = len(all_metadata)
+                (
+                    selected_indices_cpu,
+                    sampling_applied,
+                    effective_sampling_seed,
+                ) = _select_variant_rows(
+                    sample_mask,
+                    self.max_variants,
+                    self.sampling_seed,
+                    global_sample_idx,
+                )
+                num_valid_variants = int(torch.where(sample_mask[0].detach().cpu())[0].numel())
 
-                if num_valid_variants > self.max_variants:
-                    # Too many variants - need to subsample
-                    valid_indices = torch.where(sample_mask[0])[0]
-
-                    # Random sampling of variant indices
-                    selected_indices = valid_indices[torch.randperm(len(valid_indices))[:self.max_variants]]
-                    selected_indices = selected_indices.sort()[0]  # Keep sorted for locality
-
-                    # Truncate to selected variants
-                    sample_features_truncated = sample_features[:, selected_indices, :]
+                if sampling_applied:
+                    selected_indices = selected_indices_cpu.to(sample_positions.device)
+                    # CRITICAL: Limit variants to avoid OOM. The same original
+                    # row indices drive every variant-level tensor so returned
+                    # rows and metadata remain comparable across legacy/content
+                    # IG modes.
+                    sample_features_truncated = (
+                        sample_features[:, selected_indices.to(sample_features.device), :]
+                        if sample_features is not None else None
+                    )
+                    sample_content_truncated = (
+                        sample_content[:, selected_indices.to(sample_content.device), :]
+                        if sample_content is not None else None
+                    )
+                    sample_absolute_position_truncated = (
+                        sample_absolute_position[
+                            :, selected_indices.to(sample_absolute_position.device), :
+                        ]
+                        if sample_absolute_position is not None else None
+                    )
                     sample_positions_truncated = sample_positions[:, selected_indices]
-                    sample_gene_ids_truncated = sample_gene_ids[:, selected_indices]
-                    sample_mask_truncated = sample_mask[:, selected_indices]
+                    sample_gene_ids_truncated = sample_gene_ids[
+                        :, selected_indices.to(sample_gene_ids.device)
+                    ]
+                    sample_mask_truncated = sample_mask[
+                        :, selected_indices.to(sample_mask.device)
+                    ]
                     sample_chrom_ids_truncated = (
-                        sample_chrom_ids[:, selected_indices]
+                        sample_chrom_ids[:, selected_indices.to(sample_chrom_ids.device)]
                         if sample_chrom_ids is not None else None
                     )
-
-                    # Track original indices for metadata
-                    original_indices = selected_indices
                 else:
-                    # Use all variants
                     sample_features_truncated = sample_features
+                    sample_content_truncated = sample_content
+                    sample_absolute_position_truncated = sample_absolute_position
                     sample_positions_truncated = sample_positions
                     sample_gene_ids_truncated = sample_gene_ids
                     sample_mask_truncated = sample_mask
                     sample_chrom_ids_truncated = sample_chrom_ids
-                    original_indices = None
 
                 # Compute attributions for this single sample (possibly truncated)
                 sample_attributions = self.attribute(
@@ -289,6 +416,8 @@ class IntegratedGradientsExplainer:
                     sample_gene_ids_truncated, sample_mask_truncated,
                     covariates=sample_covariates,
                     chrom_ids=sample_chrom_ids_truncated,
+                    content_features=sample_content_truncated,
+                    absolute_position_features=sample_absolute_position_truncated,
                 )
 
                 # Convert to numpy
@@ -313,27 +442,19 @@ class IntegratedGradientsExplainer:
                 all_attributions.append(attributions_np[valid_mask])
                 all_variant_scores.append(variant_scores[valid_mask])
 
-                # Store metadata (use truncated positions/genes if applicable)
-                if original_indices is not None:
-                    # Was truncated - use the selected subset
-                    metadata = {
-                        'positions': sample_positions_truncated[0][sample_mask_truncated[0]].cpu().numpy(),
-                        'gene_ids': sample_gene_ids_truncated[0][sample_mask_truncated[0]].cpu().numpy(),
-                        'sample_idx': len(all_metadata),
-                        'num_variants_original': num_valid_variants,
-                        'num_variants_analyzed': self.max_variants,
-                        'truncated': True,
-                    }
-                else:
-                    # Not truncated - use all
-                    metadata = {
-                        'positions': positions[i][mask[i]].cpu().numpy(),
-                        'gene_ids': gene_ids[i][mask[i]].cpu().numpy(),
-                        'sample_idx': len(all_metadata),
-                        'num_variants_original': num_valid_variants,
-                        'num_variants_analyzed': num_valid_variants,
-                        'truncated': False,
-                    }
+                selected_variant_indices = selected_indices_cpu.numpy().astype(np.int64)
+                metadata = {
+                    'positions': sample_positions_truncated[0][sample_mask_truncated[0]].cpu().numpy(),
+                    'gene_ids': sample_gene_ids_truncated[0][sample_mask_truncated[0]].cpu().numpy(),
+                    'sample_idx': global_sample_idx,
+                    'num_variants_original': num_valid_variants,
+                    'num_variants_analyzed': len(selected_variant_indices),
+                    'truncated': sampling_applied,
+                    'selected_variant_indices': selected_variant_indices,
+                    'sampling_seed': self.sampling_seed,
+                    'effective_sampling_seed': effective_sampling_seed,
+                    'sampling_applied': sampling_applied,
+                }
                 # Fix: use sample_ids (plural) not sample_id
                 if 'sample_ids' in batch:
                     metadata['sample_id'] = batch['sample_ids'][i]
@@ -399,6 +520,8 @@ class SIEVEWrapper(nn.Module):
 
     Covariates are passed as the optional last positional argument so that
     the function signature is identical whether or not the model uses them.
+    SIEVEWrapper intentionally remains the public legacy wrapper so existing
+    callers keep historical full-feature attribution semantics.
     """
 
     def __init__(self, model: nn.Module):
@@ -426,3 +549,138 @@ class SIEVEWrapper(nn.Module):
             chrom_ids=chrom_ids,
         )
         return logits
+
+
+class ContentSIEVEWrapper(nn.Module):
+    """
+    Wrapper for content-only Integrated Gradients.
+
+    ``content_features`` is the sole Captum differentiable input.
+    ``absolute_position_features`` is an observed fixed forward argument, while
+    positions, chromosome IDs, gene IDs, masks, and covariates remain fixed.
+    The wrapper uses the split-primary model path and is mathematically
+    different from slicing legacy full-feature attributions.
+    """
+
+    def __init__(self, model: nn.Module):
+        super().__init__()
+        self.model = model
+
+    def forward(
+        self,
+        content_features: Tensor,
+        absolute_position_features: Tensor,
+        positions: Tensor,
+        gene_ids: Tensor,
+        mask: Tensor,
+        covariates: Tensor | None = None,
+        chrom_ids: Tensor | None = None,
+    ) -> Tensor:
+        """Forward pass returning only logits from the split-primary path."""
+        logits, _ = self.model(
+            None,
+            positions,
+            gene_ids,
+            mask,
+            covariates=covariates,
+            return_attention=False,
+            return_intermediate=False,
+            chrom_ids=chrom_ids,
+            content_features=content_features,
+            absolute_position_features=absolute_position_features,
+        )
+        return logits
+
+
+def _validate_sampling_seed(sampling_seed: int | None) -> int | None:
+    """Validate the configured batch-sampling seed without silent coercion."""
+    if sampling_seed is None:
+        return None
+    if isinstance(sampling_seed, bool) or not isinstance(sampling_seed, int):
+        raise ValueError(
+            "sampling_seed must be None or an integer in the range "
+            f"0..{MAX_TORCH_SEED}"
+        )
+    if sampling_seed < 0 or sampling_seed > MAX_TORCH_SEED:
+        raise ValueError(
+            "sampling_seed must be None or an integer in the range "
+            f"0..{MAX_TORCH_SEED}"
+        )
+    return sampling_seed
+
+
+def _derive_effective_sampling_seed(sampling_seed: int, global_sample_idx: int) -> int:
+    """Derive a deterministic per-sample seed from the global sample order."""
+    return (sampling_seed + global_sample_idx) % (MAX_TORCH_SEED + 1)
+
+
+def _select_variant_rows(
+    sample_mask: Tensor,
+    max_variants: int,
+    sampling_seed: int | None,
+    global_sample_idx: int,
+) -> tuple[Tensor, bool, int | None]:
+    """Select original variant rows for batch IG without touching CUDA RNG.
+
+    Returned indices are CPU ``torch.long`` row numbers into the original padded
+    per-sample variant axis. Deterministic sampling uses a local CPU generator so
+    unrelated global or CUDA random state cannot change the selected subset.
+    """
+    valid_indices = torch.where(sample_mask[0].detach().cpu())[0]
+    if len(valid_indices) <= max_variants:
+        return valid_indices, False, None
+
+    if sampling_seed is None:
+        selected_indices = valid_indices[torch.randperm(len(valid_indices))[:max_variants]]
+        return selected_indices.sort()[0], True, None
+
+    effective_sampling_seed = _derive_effective_sampling_seed(
+        sampling_seed,
+        global_sample_idx,
+    )
+    generator = torch.Generator(device='cpu')
+    generator.manual_seed(effective_sampling_seed)
+    permutation = torch.randperm(len(valid_indices), generator=generator)
+    selected_indices = valid_indices[permutation[:max_variants]]
+    return selected_indices.sort()[0], True, effective_sampling_seed
+
+
+def _coerce_resolved_ig_mode(ig_mode: ResolvedIGMode | str) -> ResolvedIGMode:
+    if isinstance(ig_mode, ResolvedIGMode):
+        return ig_mode
+    if isinstance(ig_mode, str):
+        if ig_mode == ResolvedIGMode.CONTENT.value:
+            return ResolvedIGMode.CONTENT
+        if ig_mode == ResolvedIGMode.LEGACY.value:
+            return ResolvedIGMode.LEGACY
+        if ig_mode == "auto":
+            raise ValueError(
+                "ig_mode='auto' must be resolved from configuration before "
+                "constructing IntegratedGradientsExplainer"
+            )
+    raise ValueError("ig_mode must be resolved to 'content' or 'legacy'")
+
+
+def _prepare_baseline(
+    baseline: Tensor | None,
+    differentiable_input: Tensor,
+    device: str,
+) -> Tensor:
+    if baseline is None:
+        return torch.zeros_like(differentiable_input)
+    if not isinstance(baseline, torch.Tensor):
+        raise ValueError(
+            f"baseline must be a torch.Tensor; got {type(baseline).__name__}"
+        )
+    if baseline.shape != differentiable_input.shape:
+        raise ValueError(
+            "baseline shape must match the differentiable input shape: got "
+            f"{tuple(baseline.shape)}, expected {tuple(differentiable_input.shape)}"
+        )
+    baseline = baseline.to(device)
+    if baseline.dtype != differentiable_input.dtype:
+        raise ValueError(
+            "baseline dtype must match the differentiable input dtype: got "
+            f"{baseline.dtype}, expected {differentiable_input.dtype}"
+        )
+    return baseline

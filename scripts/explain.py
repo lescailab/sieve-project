@@ -39,34 +39,74 @@ Author: Francesco Lescai
 
 import argparse
 import gc
+import hashlib
+import math
 import shutil
 import sys
 from collections import Counter
+from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
-import yaml
-import torch
-from torch.utils.data import DataLoader
+
 import numpy as np
+import torch
+import yaml
+from torch.utils.data import DataLoader
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.co2footprint import run_with_co2_tracking
 from src.data.covariates import attach_pc_covariates_to_samples, load_pc_map
+from src.data.dataset_provenance import resolve_explanation_dataset_provenance
 from src.encoding import (
+    AnnotationLevel,
     ChunkedVariantDataset,
     collate_chunks,
-    get_feature_dimension,
-    AnnotationLevel
+    get_content_feature_dimension,
 )
-from src.models.sieve import create_sieve_model, load_state_dict_with_legacy_upgrade
-from src.models import ChunkedSIEVEModel
-from src.explain.gradients import IntegratedGradientsExplainer
+from src.encoding.position_config import PositionPreset, ResolvedIGMode
 from src.explain.attention_analysis import AttentionAnalyzer
+from src.explain.gradients import IntegratedGradientsExplainer
+from src.explain.ig_mode import RequestedIGMode, resolve_ig_mode
 from src.explain.variant_ranking import VariantRanker
+from src.models.reconstruction import (
+    ReconstructedSIEVEModel,
+    reconstruct_sieve_from_checkpoint,
+)
+
+ATTRIBUTION_SCHEMA_VERSION = 1
+VARIANT_SCORE_AGGREGATION = 'l2'
+SAMPLING_POLICY = 'manual_chunk_full_coverage_no_random_subsampling'
+LEGACY_COMPARABILITY_WARNING = (
+    "Legacy IG includes historical positional channels where present; raw "
+    "attribution magnitudes are not directly comparable with content-only "
+    "benchmark attribution."
+)
 
 
-def parse_args():
+@dataclass(frozen=True)
+class ResolvedModelLoad:
+    """Loaded explanation inputs and exact model-selection provenance."""
+
+    config: dict
+    checkpoint: dict
+    model_provenance: dict[str, object]
+
+
+def _non_negative_int(value: str) -> int:
+    """Parse a non-negative integer for fixed CV fold selection."""
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("--fold-index must be a non-negative integer") from exc
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("--fold-index must be a non-negative integer")
+    return parsed
+
+
+def build_arg_parser() -> argparse.ArgumentParser:
+    """Build the explainability CLI parser."""
     parser = argparse.ArgumentParser(
         description='Run explainability analysis on trained SIEVE model',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
@@ -81,6 +121,15 @@ def parse_args():
 
     parser.add_argument('--config', type=str,
                         help='Path to config.yaml (required if using --checkpoint)')
+    parser.add_argument(
+        '--fold-index',
+        type=_non_negative_int,
+        default=None,
+        help=(
+            'Optional zero-based CV fold index to explain from --experiment-dir. '
+            'When omitted, the historical best-AUC fold selection is preserved.'
+        ),
+    )
 
     # Data input
     parser.add_argument('--preprocessed-data', type=str, required=True,
@@ -116,6 +165,19 @@ def parse_args():
                         help='Skip attention analysis (faster)')
     parser.add_argument('--skip-ig', action='store_true',
                         help='Skip Integrated Gradients computation (use if you only need attention analysis)')
+    parser.add_argument(
+        '--ig-mode',
+        type=str,
+        default=RequestedIGMode.AUTO.value,
+        choices=[mode.value for mode in RequestedIGMode],
+        help=(
+            "Integrated Gradients mode. auto uses the saved attribution policy "
+            "for new-schema configs and preserves historical legacy attribution "
+            "for old configs; content attributes biological content while "
+            "absolute position remains fixed; legacy attributes the complete "
+            "historical feature representation."
+        ),
+    )
     parser.add_argument('--top-k-variants', type=int, default=100,
                         help='Number of top variants to extract')
     parser.add_argument('--top-k-interactions', type=int, default=100,
@@ -137,7 +199,10 @@ def parse_args():
                             "'rank_average': composite rank across mean, max, and sample count."
                         ))
     parser.add_argument('--is-null-baseline', action='store_true',
-                        help='Flag indicating this is a null baseline analysis (for metadata)')
+                        help=('Declare a null baseline analysis. For training runs that '
+                              'record dataset_provenance, must match the training run\'s '
+                              'null status and mismatches fail closed; historical runs '
+                              'keep metadata-only behaviour.'))
 
     # Device
     parser.add_argument('--device', type=str, default='cuda',
@@ -148,14 +213,111 @@ def parse_args():
     parser.add_argument('--genome-build', type=str, default='GRCh37',
                         help='Reference genome build (GRCh37 or GRCh38)')
 
-    return parser.parse_args()
+    return parser
 
 
-def load_model_and_config(args):
-    """Load model and configuration."""
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """Parse command-line arguments."""
+    parser = build_arg_parser()
+    args = parser.parse_args(argv)
+    if args.fold_index is not None and args.checkpoint:
+        parser.error("--fold-index is only valid with --experiment-dir")
+    return args
+
+
+def _sha256_file(path: Path, chunk_size: int = 1024 * 1024) -> str:
+    """Return the SHA-256 hash of *path* using bounded memory."""
+    digest = hashlib.sha256()
+    with path.open('rb') as handle:
+        for chunk in iter(lambda: handle.read(chunk_size), b''):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _require_checkpoint_file(path: Path) -> None:
+    """Require the selected checkpoint path to exist before torch loading."""
+    if not path.is_file():
+        raise FileNotFoundError(f"Checkpoint file not found: {path}")
+
+
+def _finite_auc(value, *, fold_index: int) -> float:
+    """Validate a finite numeric AUC from cv_results.yaml."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"fold_results[{fold_index}]['auc'] must be a finite number")
+    auc = float(value)
+    if not math.isfinite(auc):
+        raise ValueError(f"fold_results[{fold_index}]['auc'] must be a finite number")
+    return auc
+
+
+def _load_cv_results(path: Path) -> dict:
+    """Load and validate the cv_results.yaml structure used for fold selection."""
+    with open(path) as f:
+        cv_results = yaml.safe_load(f)
+    if not isinstance(cv_results, Mapping):
+        raise ValueError("cv_results.yaml must contain a mapping")
+    fold_results = cv_results.get('fold_results')
+    if not isinstance(fold_results, list) or not fold_results:
+        raise ValueError("cv_results.yaml must contain a non-empty fold_results list")
+    for fold_index, result in enumerate(fold_results):
+        if not isinstance(result, Mapping):
+            raise ValueError(f"fold_results[{fold_index}] must be a mapping")
+        if 'auc' not in result:
+            raise ValueError(f"fold_results[{fold_index}] must contain 'auc'")
+        _finite_auc(result['auc'], fold_index=fold_index)
+    return dict(cv_results)
+
+
+def _select_best_fold(cv_results: Mapping[str, object]) -> tuple[int, float]:
+    """Select the first fold with the maximum finite AUC, matching old ties."""
+    fold_results = cv_results['fold_results']
+    best_fold = 0
+    best_auc = _finite_auc(fold_results[0]['auc'], fold_index=0)
+    for i, result in enumerate(fold_results[1:], start=1):
+        auc = _finite_auc(result['auc'], fold_index=i)
+        if auc > best_auc:
+            best_auc = auc
+            best_fold = i
+    return best_fold, best_auc
+
+
+def _build_model_provenance(
+    *,
+    checkpoint_selection_mode: str,
+    checkpoint_path: Path,
+    config_path: Path,
+    selected_fold: int | None,
+    selected_fold_auc: float | None,
+    cv_results_path: Path | None,
+) -> dict[str, object]:
+    """Build top-level analysis metadata for exact model provenance.
+
+    Attribution stability comparisons need to know which checkpoint generated
+    each explanation; paths identify the selection and the hash identifies the
+    immutable file bytes. ``config_sha256`` (Phase 12C3B1, additive) records
+    the exact bytes of the config file used for reconstruction.
+    """
+    checkpoint_path = checkpoint_path.resolve()
+    config_path = config_path.resolve()
+    cv_results_path = cv_results_path.resolve() if cv_results_path is not None else None
+    return {
+        'schema_version': 1,
+        'checkpoint_selection_mode': checkpoint_selection_mode,
+        'checkpoint_path': str(checkpoint_path),
+        'checkpoint_sha256': _sha256_file(checkpoint_path),
+        'config_path': str(config_path),
+        'config_sha256': _sha256_file(config_path),
+        'selected_fold': selected_fold,
+        'selected_fold_auc': selected_fold_auc,
+        'cv_results_path': str(cv_results_path) if cv_results_path is not None else None,
+    }
+
+
+def load_model_and_config(args) -> ResolvedModelLoad:
+    """Load model/config and return exact checkpoint-selection provenance."""
     if args.experiment_dir:
         # Load from experiment directory
-        exp_dir = Path(args.experiment_dir)
+        exp_dir = Path(args.experiment_dir).resolve()
 
         # Load config
         config_path = exp_dir / 'config.yaml'
@@ -165,41 +327,402 @@ def load_model_and_config(args):
         # Find best fold (highest AUC in CV results)
         cv_results_path = exp_dir / 'cv_results.yaml'
         if cv_results_path.exists():
-            with open(cv_results_path) as f:
-                cv_results = yaml.safe_load(f)
+            cv_results = _load_cv_results(cv_results_path)
+            fold_results = cv_results['fold_results']
+            if args.fold_index is not None:
+                if args.fold_index >= len(fold_results):
+                    raise ValueError(
+                        f"--fold-index {args.fold_index} is out of range for "
+                        f"{len(fold_results)} fold_results entries"
+                    )
+                selected_fold = args.fold_index
+                selected_fold_auc = _finite_auc(
+                    fold_results[selected_fold]['auc'],
+                    fold_index=selected_fold,
+                )
+                checkpoint_selection_mode = 'cv_explicit_fold'
+            else:
+                selected_fold, selected_fold_auc = _select_best_fold(cv_results)
+                checkpoint_selection_mode = 'cv_best_fold'
 
-            # Find best fold
-            best_fold = 0
-            best_auc = 0
-            for i, result in enumerate(cv_results['fold_results']):
-                if result['auc'] > best_auc:
-                    best_auc = result['auc']
-                    best_fold = i
-
-            checkpoint_path = exp_dir / f'fold_{best_fold}' / 'best_model.pt'
-            print(f"Using fold {best_fold} (AUC: {best_auc:.4f})")
+            checkpoint_path = exp_dir / f'fold_{selected_fold}' / 'best_model.pt'
+            _require_checkpoint_file(checkpoint_path)
+            print(f"Using fold {selected_fold} (AUC: {selected_fold_auc:.4f})")
         else:
+            if args.fold_index is not None:
+                raise ValueError("--fold-index requires an experiment with cv_results.yaml")
             # Single run - use best_model.pt directly
             checkpoint_path = exp_dir / 'best_model.pt'
+            _require_checkpoint_file(checkpoint_path)
+            checkpoint_selection_mode = 'single_run_best_model'
+            selected_fold = None
+            selected_fold_auc = None
+            cv_results_path = None
             print("Using single run model")
 
     else:
         # Load specific checkpoint
-        checkpoint_path = Path(args.checkpoint)
+        checkpoint_path = Path(args.checkpoint).resolve()
         if not args.config:
             raise ValueError("--config required when using --checkpoint")
 
-        config_path = Path(args.config)
+        config_path = Path(args.config).resolve()
         with open(config_path) as f:
             config = yaml.safe_load(f)
+        _require_checkpoint_file(checkpoint_path)
+        checkpoint_selection_mode = 'explicit_checkpoint'
+        selected_fold = None
+        selected_fold_auc = None
+        cv_results_path = None
 
     print(f"Loading model from {checkpoint_path}")
+    model_provenance = _build_model_provenance(
+        checkpoint_selection_mode=checkpoint_selection_mode,
+        checkpoint_path=checkpoint_path,
+        config_path=config_path,
+        selected_fold=selected_fold,
+        selected_fold_auc=selected_fold_auc,
+        cv_results_path=cv_results_path,
+    )
 
     # Load checkpoint
     # Note: weights_only=False is safe here since these are our own trusted checkpoints
     checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
 
-    return config, checkpoint
+    return ResolvedModelLoad(
+        config=config,
+        checkpoint=checkpoint,
+        model_provenance=model_provenance,
+    )
+
+
+def _validate_config_content_dim(config: dict, annotation_level: AnnotationLevel) -> int:
+    """Return structural content width and reject conflicting serialized width."""
+    content_dim = get_content_feature_dimension(annotation_level)
+    if 'position_encoding' not in config:
+        return content_dim
+    if 'content_dim' not in config:
+        return content_dim
+
+    serialized_content_dim = config['content_dim']
+    if isinstance(serialized_content_dim, bool) or not isinstance(serialized_content_dim, int):
+        raise ValueError("config['content_dim'] must be an integer when present")
+    if serialized_content_dim != content_dim:
+        raise ValueError(
+            "config['content_dim'] does not match annotation level content width: "
+            f"{serialized_content_dim} != {content_dim}"
+        )
+    return content_dim
+
+
+def _content_dim_for_reconstruction(
+    reconstruction: ReconstructedSIEVEModel,
+    annotation_level: AnnotationLevel,
+) -> int:
+    """Return the content attribution width from execution authority.
+
+    Case A stores the resolved positional architecture that actually
+    constructed the model. Cases B/C are historical compatibility paths, so
+    structural annotation-level content width is the only execution authority.
+    """
+    if reconstruction.is_new_schema:
+        if reconstruction.resolved_position_encoding is None:
+            raise ValueError("new-schema reconstruction is missing resolved position encoding")
+        return reconstruction.resolved_position_encoding.content_dim
+    return get_content_feature_dimension(annotation_level)
+
+
+def _validate_ig_mode_for_reconstruction(
+    resolved_ig_mode: ResolvedIGMode,
+    reconstruction: ReconstructedSIEVEModel,
+) -> None:
+    """Reject legacy IG only for authoritative custom positional execution."""
+    if not reconstruction.is_new_schema:
+        return
+    resolved_position_encoding = reconstruction.resolved_position_encoding
+    if resolved_position_encoding is None:
+        raise ValueError("new-schema reconstruction is missing resolved position encoding")
+    if (
+        resolved_position_encoding.preset is PositionPreset.CUSTOM
+        and resolved_ig_mode is ResolvedIGMode.LEGACY
+    ):
+        raise ValueError(
+            "legacy IG is not supported for custom positional execution; use "
+            "ig_mode='content' or ig_mode='auto'."
+        )
+
+
+def _attention_uses_split_inputs(reconstruction: ReconstructedSIEVEModel) -> bool:
+    """Return True only when attention must use custom split-primary inputs."""
+    return (
+        reconstruction.is_new_schema
+        and reconstruction.resolved_position_encoding is not None
+        and reconstruction.resolved_position_encoding.preset is PositionPreset.CUSTOM
+    )
+
+
+def _read_position_strategy_metadata(
+    reconstruction: ReconstructedSIEVEModel,
+) -> dict[str, object]:
+    """Read positional strategy provenance from reconstruction authority."""
+    if reconstruction.is_new_schema:
+        resolved = reconstruction.resolved_position_encoding
+        if resolved is None:
+            raise ValueError("new-schema reconstruction is missing resolved position encoding")
+        return {
+            'absolute_position_encoding': resolved.absolute.encoding.value,
+            'relative_position_encoding': resolved.relative.encoding.value,
+            'chromosome_encoding': resolved.chromosome.encoding.value,
+            'position_encoding_metadata_source': 'reconstructed_resolved_config',
+        }
+
+    if 'position_encoding' not in reconstruction.effective_config:
+        return {
+            'absolute_position_encoding': None,
+            'relative_position_encoding': None,
+            'chromosome_encoding': None,
+            'position_encoding_metadata_source': 'unavailable_old_config',
+        }
+
+    return {
+        'absolute_position_encoding': None,
+        'relative_position_encoding': None,
+        'chromosome_encoding': None,
+        'position_encoding_metadata_source': 'transitional_historical_execution',
+    }
+
+
+def _build_ig_run_metadata(
+    *,
+    requested_ig_mode: str,
+    resolved_ig_mode: ResolvedIGMode,
+    reconstruction: ReconstructedSIEVEModel,
+    content_dim: int,
+    n_steps: int,
+    max_variants: int,
+) -> dict[str, object]:
+    """Build semantic metadata describing the Integrated Gradients run."""
+    input_dim = reconstruction.base_model.input_dim
+    if resolved_ig_mode is ResolvedIGMode.CONTENT:
+        attribution_feature_space = 'content'
+        attribution_width = content_dim
+        baseline_policy = 'zero_content_observed_absolute_position'
+        comparability_warning = None
+    elif resolved_ig_mode is ResolvedIGMode.LEGACY:
+        attribution_feature_space = 'legacy'
+        attribution_width = input_dim
+        baseline_policy = 'zero_historical_features'
+        comparability_warning = LEGACY_COMPARABILITY_WARNING
+    else:
+        raise ValueError(f"unsupported resolved IG mode: {resolved_ig_mode!r}")
+
+    metadata = {
+        'attribution_schema_version': ATTRIBUTION_SCHEMA_VERSION,
+        'requested_ig_mode': requested_ig_mode,
+        'resolved_ig_mode': resolved_ig_mode.value,
+        'attribution_feature_space': attribution_feature_space,
+        'attribution_width': attribution_width,
+        'content_dim': content_dim,
+        'input_dim': input_dim,
+        'variant_score_aggregation': VARIANT_SCORE_AGGREGATION,
+        'baseline_policy': baseline_policy,
+        'n_steps': n_steps,
+        'max_variants': max_variants,
+        'sampling_policy': SAMPLING_POLICY,
+        'sampling_seed': None,
+        'comparability_warning': comparability_warning,
+    }
+    metadata.update(_read_position_strategy_metadata(reconstruction))
+    return metadata
+
+
+def _build_skipped_ig_metadata(requested_ig_mode: str) -> dict[str, object]:
+    """Build analysis metadata for attention-only runs without resolving IG mode."""
+    return {
+        'executed': False,
+        'requested_ig_mode': requested_ig_mode,
+        'resolved_ig_mode': None,
+    }
+
+
+def _create_integrated_gradients_explainer(
+    *,
+    model,
+    device: str,
+    n_steps: int,
+    max_variants: int,
+    resolved_ig_mode: ResolvedIGMode,
+) -> IntegratedGradientsExplainer:
+    """Construct the 5B3B explainer with the already resolved IG mode."""
+    return IntegratedGradientsExplainer(
+        model=model,
+        device=device,
+        n_steps=n_steps,
+        max_variants=max_variants,
+        ig_mode=resolved_ig_mode,
+    )
+
+
+def _npz_scalar_metadata(
+    metadata: dict[str, object],
+    *,
+    per_sample: bool,
+) -> dict[str, np.ndarray]:
+    """Convert IG metadata scalars to NPZ-safe arrays without object dtype.
+
+    Semantic metadata keeps Python ``None`` values. NPZ scalar fields use
+    explicit sentinels because NumPy would otherwise store ``None`` as object
+    dtype, which cannot be read with ``allow_pickle=False``.
+    """
+    if per_sample:
+        keys = [
+            'attribution_schema_version',
+            'requested_ig_mode',
+            'resolved_ig_mode',
+            'attribution_feature_space',
+            'attribution_width',
+            'content_dim',
+            'input_dim',
+            'variant_score_aggregation',
+            'baseline_policy',
+        ]
+    else:
+        keys = [
+            'attribution_schema_version',
+            'requested_ig_mode',
+            'resolved_ig_mode',
+            'attribution_feature_space',
+            'attribution_width',
+            'content_dim',
+            'input_dim',
+            'absolute_position_encoding',
+            'relative_position_encoding',
+            'chromosome_encoding',
+            'position_encoding_metadata_source',
+            'variant_score_aggregation',
+            'baseline_policy',
+            'n_steps',
+            'max_variants',
+            'sampling_policy',
+            'sampling_seed',
+            'comparability_warning',
+        ]
+
+    scalar_metadata = {}
+    for key in keys:
+        value = metadata[key]
+        if value is None:
+            if key in {
+                'absolute_position_encoding',
+                'relative_position_encoding',
+                'chromosome_encoding',
+            }:
+                value = 'unavailable'
+            elif key == 'sampling_seed':
+                value = -1
+            else:
+                value = ''
+        scalar_metadata[key] = np.asarray(value)
+        if scalar_metadata[key].dtype == object:
+            raise ValueError(f"metadata field {key!r} cannot be serialized without pickle")
+    return scalar_metadata
+
+
+def _validate_attribution_width(
+    attributions: np.ndarray,
+    expected_width: int,
+) -> None:
+    """Validate raw attribution feature width before padded-row filtering."""
+    if attributions.ndim != 2:
+        raise ValueError(
+            "chunk attributions must be a 2D matrix before mask filtering; "
+            f"got shape {attributions.shape}"
+        )
+    actual_width = attributions.shape[1]
+    if actual_width != expected_width:
+        raise ValueError(
+            "unexpected attribution feature width before mask filtering: "
+            f"got {actual_width}, expected {expected_width}"
+        )
+
+
+def _attribute_chunk_for_ig(
+    *,
+    explainer: IntegratedGradientsExplainer,
+    chunk: dict,
+    resolved_ig_mode: ResolvedIGMode,
+    device: str,
+    chunk_covariates: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor | None]:
+    """Invoke 5B3B IG for one chunk while preserving the selected feature boundary."""
+    positions = chunk['positions'].unsqueeze(0).to(device)
+    gene_ids = chunk['gene_ids'].unsqueeze(0).to(device)
+    mask = chunk['mask'].unsqueeze(0).to(device)
+    chrom_ids = (
+        chunk['chrom_ids'].unsqueeze(0).to(device)
+        if 'chrom_ids' in chunk else None
+    )
+    if chunk_covariates is not None:
+        chunk_covariates = chunk_covariates.to(device)
+
+    if resolved_ig_mode is ResolvedIGMode.LEGACY:
+        if 'features' not in chunk:
+            raise ValueError("legacy IG mode requires chunk['features']")
+        features = chunk['features'].unsqueeze(0).to(device)
+        attributions = explainer.attribute(
+            features,
+            positions,
+            gene_ids,
+            mask,
+            covariates=chunk_covariates,
+            chrom_ids=chrom_ids,
+        )
+    elif resolved_ig_mode is ResolvedIGMode.CONTENT:
+        if 'content_features' not in chunk or 'absolute_position_features' not in chunk:
+            raise ValueError(
+                "content IG mode requires chunk['content_features'] and "
+                "chunk['absolute_position_features']"
+            )
+        content_features = chunk['content_features'].unsqueeze(0).to(device)
+        absolute_position_features = chunk['absolute_position_features'].unsqueeze(0).to(device)
+        attributions = explainer.attribute(
+            None,
+            positions,
+            gene_ids,
+            mask,
+            covariates=chunk_covariates,
+            chrom_ids=chrom_ids,
+            content_features=content_features,
+            absolute_position_features=absolute_position_features,
+        )
+    else:
+        raise ValueError(f"unsupported resolved IG mode: {resolved_ig_mode!r}")
+
+    return attributions, positions, gene_ids, mask, chrom_ids
+
+
+def _annotate_ranking_metadata(df, ig_metadata: dict[str, object]):
+    """Add informational IG provenance columns after ranking calculations."""
+    annotated = df.copy()
+    annotated['resolved_ig_mode'] = ig_metadata['resolved_ig_mode']
+    annotated['attribution_feature_space'] = ig_metadata['attribution_feature_space']
+    annotated['variant_score_aggregation'] = ig_metadata['variant_score_aggregation']
+    return annotated
+
+
+def _reconstruct_model_for_explanation(
+    config: dict,
+    checkpoint: dict,
+    dataset: ChunkedVariantDataset,
+) -> ReconstructedSIEVEModel:
+    """Reconstruct the model without mutating loaded config metadata."""
+    return reconstruct_sieve_from_checkpoint(
+        config,
+        checkpoint,
+        num_genes=dataset.num_genes,
+        dataset_num_chromosomes=dataset.num_chromosomes,
+        dataset_chrom_index=dataset.chrom_index,
+    )
 
 
 def _run_explain(args, output_dir: Path) -> None:
@@ -209,13 +732,24 @@ def _run_explain(args, output_dir: Path) -> None:
     print("="*60)
 
     # Load model and config
-    config, checkpoint = load_model_and_config(args)
+    model_load = load_model_and_config(args)
+    config = model_load.config
+    checkpoint = model_load.checkpoint
 
     # Load data
     print("\nLoading data...")
     preprocessed = torch.load(args.preprocessed_data, weights_only=False)
     all_samples = preprocessed['samples']
     metadata = preprocessed.get('metadata', {})
+    # Bind the explanation to exact dataset bytes. Provenance-aware training
+    # configs fail closed on a dataset or --is-null-baseline mismatch;
+    # historical configs keep historical behaviour (best-effort record only).
+    dataset_provenance = resolve_explanation_dataset_provenance(
+        preprocessed,
+        path=Path(args.preprocessed_data),
+        training_config=config,
+        is_null_baseline_flag=args.is_null_baseline,
+    )
 
     print(f"Loaded {len(all_samples)} samples")
     if metadata:
@@ -271,34 +805,12 @@ def _run_explain(args, output_dir: Path) -> None:
         overlap=0
     )
 
-    # Create model (add input_dim if missing from config)
+    # Create model through Phase 7B4A reconstruction. That result is the sole
+    # architecture authority: Case A uses resolved schema-v2 metadata, while
+    # Cases B/C infer historical structure from checkpoint tensors.
     print("\nCreating model...")
-    if 'input_dim' not in config:
-        config['input_dim'] = get_feature_dimension(annotation_level)
-    # The chromosome embedding / cross-chromosome bias bucket are sized from
-    # the dataset, not stored in the original config, surface it here so the
-    # constructed model matches the checkpoint's tensor shapes.
-    config['num_chromosomes'] = dataset.num_chromosomes
-
-    # Load base model
-    base_model = create_sieve_model(config, num_genes=dataset.num_genes)
-
-    # Check if checkpoint has chunked model or base model
-    state_dict = checkpoint['model_state_dict']
-
-    # Try to detect if this is a chunked model checkpoint
-    if any(k.startswith('base_model.') for k in state_dict.keys()):
-        # Checkpoint is from chunked model - need to wrap base model
-        model = ChunkedSIEVEModel(
-            base_model=base_model,
-            aggregation_method=config.get('aggregation_method', 'mean')
-        )
-        load_state_dict_with_legacy_upgrade(model, state_dict)
-    else:
-        # Checkpoint is from base model only - just use base model for IG
-        # (IG works on individual chunks, doesn't need aggregation)
-        model = base_model
-        load_state_dict_with_legacy_upgrade(model, state_dict)
+    reconstruction = _reconstruct_model_for_explanation(config, checkpoint, dataset)
+    model = reconstruction.model
 
     model = model.to(args.device)
     model.eval()
@@ -306,12 +818,11 @@ def _run_explain(args, output_dir: Path) -> None:
     print(f"Model loaded successfully")
     print(f"  Parameters: {sum(p.numel() for p in model.parameters()):,}")
 
-    # For IG, we need the base model (not wrapped)
-    if isinstance(model, ChunkedSIEVEModel):
-        ig_model = model.base_model
+    # For IG, we need the reconstructed base model (not the chunked wrapper).
+    ig_model = reconstruction.base_model
+    if reconstruction.is_chunked_checkpoint:
         print("  Using base model for Integrated Gradients (chunk-level attributions)")
     else:
-        ig_model = model
         print("  Using model directly for Integrated Gradients")
 
     # Detect covariate requirements from loaded model
@@ -332,21 +843,47 @@ def _run_explain(args, output_dir: Path) -> None:
         variant_rankings = None
         gene_rankings = None
         case_enriched = None
+        integrated_gradients_metadata = _build_skipped_ig_metadata(args.ig_mode)
     else:
         print("\n" + "="*60)
         print("Computing Integrated Gradients Attributions (CHUNKED)")
         print("="*60)
 
-        explainer = IntegratedGradientsExplainer(
+        content_dim = _content_dim_for_reconstruction(reconstruction, annotation_level)
+        resolved_ig_mode = resolve_ig_mode(
+            args.ig_mode,
+            config=config,
+            is_new_schema=reconstruction.is_new_schema,
+        )
+        _validate_ig_mode_for_reconstruction(resolved_ig_mode, reconstruction)
+        ig_metadata = _build_ig_run_metadata(
+            requested_ig_mode=args.ig_mode,
+            resolved_ig_mode=resolved_ig_mode,
+            reconstruction=reconstruction,
+            content_dim=content_dim,
+            n_steps=args.n_steps,
+            max_variants=chunk_size,
+        )
+        expected_attribution_width = ig_metadata['attribution_width']
+        integrated_gradients_metadata = {
+            'executed': True,
+            **ig_metadata,
+        }
+
+        explainer = _create_integrated_gradients_explainer(
             model=ig_model,
             device=args.device,
             n_steps=args.n_steps,
-            max_variants=chunk_size  # Process full chunks (no truncation within chunks)
+            max_variants=chunk_size,  # Process full chunks (no truncation within chunks)
+            resolved_ig_mode=resolved_ig_mode,
         )
 
         print(f"IG Configuration:")
+        print(f"  Requested IG mode: {args.ig_mode}")
+        print(f"  Resolved IG mode: {resolved_ig_mode.value}")
         print(f"  Integration steps: {args.n_steps}")
         print(f"  Chunk size: {chunk_size}")
+        print(f"  Attribution width: {expected_attribution_width}")
         print(f"  Processing ALL chunks per sample for FULL GENOME coverage")
 
         # === BUILD VARIANT INFO MAP (before IG loop, needed for ranker) ===
@@ -435,16 +972,6 @@ def _run_explain(args, output_dir: Path) -> None:
                 end_idx = chunk_info['end_idx']
                 original_variants = all_samples[sample_idx].variants[start_idx:end_idx]
 
-                # Move to device
-                features = chunk['features'].unsqueeze(0).to(args.device)
-                positions = chunk['positions'].unsqueeze(0).to(args.device)
-                gene_ids = chunk['gene_ids'].unsqueeze(0).to(args.device)
-                mask = chunk['mask'].unsqueeze(0).to(args.device)
-                chrom_ids = (
-                    chunk['chrom_ids'].unsqueeze(0).to(args.device)
-                    if 'chrom_ids' in chunk else None
-                )
-
                 # Build covariate tensor for this sample if the model needs it
                 chunk_covariates = None
                 if ig_num_covariates > 0:
@@ -472,15 +999,19 @@ def _run_explain(args, output_dir: Path) -> None:
                     )
 
                 # Compute attributions for this chunk
-                attr = explainer.attribute(
-                    features, positions, gene_ids, mask,
-                    covariates=chunk_covariates,
-                    chrom_ids=chrom_ids,
+                attr, positions, gene_ids, mask, chrom_ids = _attribute_chunk_for_ig(
+                    explainer=explainer,
+                    chunk=chunk,
+                    resolved_ig_mode=resolved_ig_mode,
+                    device=args.device,
+                    chunk_covariates=chunk_covariates,
                 )
 
                 # Extract valid variants (non-padded) to CPU numpy immediately
                 valid_mask = mask[0].cpu().numpy()
-                attr_valid = attr[0][valid_mask].cpu().numpy()
+                attr_matrix = attr[0].cpu().numpy()
+                _validate_attribution_width(attr_matrix, expected_attribution_width)
+                attr_valid = attr_matrix[valid_mask]
 
                 # Get chromosomes from original variants (matching valid positions)
                 valid_chroms = np.array([v.chrom for v in original_variants])[valid_mask]
@@ -491,7 +1022,7 @@ def _run_explain(args, output_dir: Path) -> None:
                 chunk_chromosomes.append(valid_chroms)
 
                 # Free GPU tensors immediately after extracting to CPU
-                del features, positions, gene_ids, mask, attr
+                del positions, gene_ids, mask, attr
                 if chrom_ids is not None:
                     del chrom_ids
 
@@ -512,6 +1043,7 @@ def _run_explain(args, output_dir: Path) -> None:
                 tmp_dir / f'sample_{sample_idx}.npz',
                 attributions=sample_attributions,
                 variant_scores=sample_variant_scores,
+                **_npz_scalar_metadata(ig_metadata, per_sample=True),
             )
 
             # Feed scores into ranker incrementally (then discard per-sample arrays)
@@ -588,6 +1120,7 @@ def _run_explain(args, output_dir: Path) -> None:
             attributions_path,
             variant_scores=np.array(all_variant_scores, dtype=object),
             metadata=np.array(all_metadata, dtype=object),
+            **_npz_scalar_metadata(ig_metadata, per_sample=False),
         )
         print(f"Saved variant scores + metadata to {attributions_path}")
 
@@ -658,6 +1191,13 @@ def _run_explain(args, output_dir: Path) -> None:
         else:
             case_enriched = None
 
+        variant_rankings = _annotate_ranking_metadata(variant_rankings, ig_metadata)
+        gene_rankings = _annotate_ranking_metadata(gene_rankings, ig_metadata)
+        gene_rankings_mean = _annotate_ranking_metadata(gene_rankings_mean, ig_metadata)
+        gene_rankings_size_norm = _annotate_ranking_metadata(
+            gene_rankings_size_norm, ig_metadata
+        )
+
         # Export rankings
         ranker.export_rankings(
             variant_rankings=variant_rankings,
@@ -703,11 +1243,11 @@ def _run_explain(args, output_dir: Path) -> None:
 
         all_interactions = []
         interactions_by_sample = {}
+        use_split_attention = _attention_uses_split_inputs(reconstruction)
 
         print("Extracting attention weights...")
         for batch_idx, batch in enumerate(dataloader):
             # Move batch to device
-            features = batch['features'].to(args.device)
             positions = batch['positions'].to(args.device)
             gene_ids = batch['gene_ids'].to(args.device)
             mask = batch['mask'].to(args.device)
@@ -716,14 +1256,35 @@ def _run_explain(args, output_dir: Path) -> None:
                 if 'chrom_ids' in batch else None
             )
 
-            # Extract attention
-            attention_weights = analyzer.extract_attention_weights(
-                variant_features=features,
-                positions=positions,
-                gene_ids=gene_ids,
-                mask=mask,
-                chrom_ids=chrom_ids,
-            )
+            if use_split_attention:
+                if (
+                    'content_features' not in batch
+                    or 'absolute_position_features' not in batch
+                ):
+                    raise ValueError(
+                        "custom positional attention requires batch['content_features'] "
+                        "and batch['absolute_position_features']"
+                    )
+                content_features = batch['content_features'].to(args.device)
+                absolute_position_features = batch['absolute_position_features'].to(args.device)
+                attention_weights = analyzer.extract_attention_weights(
+                    variant_features=None,
+                    positions=positions,
+                    gene_ids=gene_ids,
+                    mask=mask,
+                    chrom_ids=chrom_ids,
+                    content_features=content_features,
+                    absolute_position_features=absolute_position_features,
+                )
+            else:
+                features = batch['features'].to(args.device)
+                attention_weights = analyzer.extract_attention_weights(
+                    variant_features=features,
+                    positions=positions,
+                    gene_ids=gene_ids,
+                    mask=mask,
+                    chrom_ids=chrom_ids,
+                )
 
             # Find interactions
             interactions = analyzer.find_top_interactions(
@@ -743,7 +1304,11 @@ def _run_explain(args, output_dir: Path) -> None:
                 interactions_by_sample.setdefault(interaction['sample_idx'], []).append(interaction)
 
             # Free GPU tensors after each batch
-            del features, positions, gene_ids, mask, attention_weights
+            del positions, gene_ids, mask, attention_weights
+            if use_split_attention:
+                del content_features, absolute_position_features
+            else:
+                del features
             if chrom_ids is not None:
                 del chrom_ids
             if args.device == 'cuda':
@@ -786,6 +1351,9 @@ def _run_explain(args, output_dir: Path) -> None:
         'aggregation_method': args.aggregation_method,
         'skip_attention': args.skip_attention,
         'skip_ig': args.skip_ig,
+        'model_provenance': model_load.model_provenance,
+        'dataset_provenance': dataset_provenance,
+        'integrated_gradients': integrated_gradients_metadata,
         'attention_threshold_mode': args.attention_threshold_mode,
         'attention_threshold': args.attention_threshold,
         'attention_percentile': args.attention_percentile,
