@@ -173,7 +173,8 @@ def test_alibi_training_position_encoding_is_supported(relative):
         input_dim=resolved.input_dim,
         num_genes=5,
         latent_dim=8,
-        num_heads=2,
+        # The genomic ALiBi prior (fixed and learned) is defined only for 4 heads.
+        num_heads=4,
         num_attention_layers=1,
         hidden_dim=10,
         num_chromosomes=resolved.chromosome.num_chromosomes,
@@ -181,7 +182,7 @@ def test_alibi_training_position_encoding_is_supported(relative):
     )
     layer = model.base_model.attention.attention_layers[0]
     if relative is RelativePositionEncoding.ALIBI_LEARNED:
-        assert layer.alibi_slope_logits.shape == (2,)
+        assert layer.alibi_slope_logits.shape == (4,)
         assert layer.alibi_slope_logits.requires_grad is True
     else:
         assert layer.alibi_slope_logits is None

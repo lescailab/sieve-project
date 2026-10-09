@@ -197,10 +197,18 @@ class PositionAwareSparseAttention(nn.Module):
             and position_encoding.relative.encoding is RelativePositionEncoding.ALIBI_LEARNED
         ):
             # These are raw logits, not physical slopes. The runtime applies
-            # softplus so effective slopes stay positive while initially
-            # matching the fixed ALiBi schedule.
+            # softplus so effective slopes stay positive. They start from the
+            # same genomic prior as fixed ALiBi; only training moves them.
+            relative = position_encoding.relative
             self.alibi_slope_logits = nn.Parameter(
-                torch.tensor(build_alibi_initial_slope_logits(num_heads), dtype=torch.float32)
+                torch.tensor(
+                    build_alibi_initial_slope_logits(
+                        num_heads,
+                        target_weight_ratio=relative.alibi_target_weight_ratio,
+                        distance_scale=relative.alibi_distance_scale,
+                    ),
+                    dtype=torch.float32,
+                )
             )
         else:
             self.alibi_slope_logits = None

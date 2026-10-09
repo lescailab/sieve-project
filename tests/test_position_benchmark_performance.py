@@ -31,6 +31,7 @@ def _position_encoding(relative_type="alibi_fixed", scale=10000.0):
             {
                 "alibi_distance_function": "log1p",
                 "alibi_distance_scale": scale,
+                "alibi_target_weight_ratio": 0.75,
             }
         )
     else:

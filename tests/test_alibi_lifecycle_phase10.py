@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import math
 from types import SimpleNamespace
 
 import pytest
@@ -29,7 +30,9 @@ from src.models.reconstruction import reconstruct_sieve_from_checkpoint
 MODEL_KWARGS = {
     "latent_dim": 8,
     "hidden_dim": 10,
-    "num_heads": 2,
+    # Four heads: the genomic ALiBi prior (fixed and learned) is defined only for the
+    # primary 4-head architecture.
+    "num_heads": 4,
     "num_attention_layers": 1,
     "classifier_hidden_dim": 256,
     "dropout": 0.0,
@@ -42,6 +45,18 @@ CHROM_INDEX = {"1": 0, "2": 1, "X": 2}
 SWAPPED_CHROM_INDEX = {"1": 1, "2": 0, "X": 2}
 DIFFERENT_CHROM_INDEX = {"A": 0, "B": 1, "C": 2}
 ALIBI_DISTANCE_SCALE = 23456.0
+# Non-default ratio so the lifecycle proves the CLI value, not the resolver
+# default, is what gets serialised and reconstructed. Software test value only.
+ALIBI_TARGET_WEIGHT_RATIO = 0.9
+ALIBI_CHARACTERISTIC_DISTANCES_BP = (1.0, 10.0, 100.0, 5000.0)
+
+
+def _expected_genomic_slopes() -> tuple[float, ...]:
+    """Independent m_h = -ln(r) / ln(1 + D_h / s) for this file's settings."""
+    return tuple(
+        -math.log(ALIBI_TARGET_WEIGHT_RATIO) / math.log1p(d / ALIBI_DISTANCE_SCALE)
+        for d in ALIBI_CHARACTERISTIC_DISTANCES_BP
+    )
 
 
 def _args(*extra: str, num_attention_layers: int | None = None) -> argparse.Namespace:
@@ -89,6 +104,8 @@ def _alibi_args(
         "linear",
         "--alibi-distance-scale",
         str(ALIBI_DISTANCE_SCALE),
+        "--alibi-target-weight-ratio",
+        str(ALIBI_TARGET_WEIGHT_RATIO),
     ]
     if absolute is AbsolutePositionEncoding.SINUSOIDAL:
         args.extend(["--position-dim", "4"])
@@ -261,8 +278,12 @@ def _set_alibi_state(model, *, learned: bool, values_by_layer=None):
     if values_by_layer is None:
         values_by_layer = [
             {
-                "logits": torch.tensor([-3.0 - idx, -1.5 - idx], dtype=torch.float32),
-                "cross": torch.tensor([0.25 + idx, -0.50 - idx], dtype=torch.float32),
+                "logits": torch.tensor(
+                    [-3.0 - idx, -1.5 - idx, -2.0 - idx, -4.0 - idx], dtype=torch.float32
+                ),
+                "cross": torch.tensor(
+                    [0.25 + idx, -0.50 - idx, 0.125 + idx, -0.0625 - idx], dtype=torch.float32
+                ),
             }
             for idx in range(len(layers))
         ]
@@ -304,11 +325,14 @@ def test_alibi_training_resolution_metadata_and_round_trip(relative, cross_polic
     assert config.relative.encoding is relative
     assert config.relative.alibi_distance_function.value == "linear"
     assert config.relative.alibi_distance_scale == ALIBI_DISTANCE_SCALE
+    assert config.relative.alibi_target_weight_ratio == ALIBI_TARGET_WEIGHT_RATIO
     assert config.chromosome.cross_chromosome_policy is cross_policy
     assert config.input_dim == config.content_dim
     assert serialized["relative"]["type"] == relative.value
     assert serialized["relative"]["alibi_distance_function"] == "linear"
     assert serialized["relative"]["alibi_distance_scale"] == ALIBI_DISTANCE_SCALE
+    assert serialized["relative"]["alibi_target_weight_ratio"] == ALIBI_TARGET_WEIGHT_RATIO
+    assert parsed.relative.alibi_target_weight_ratio == ALIBI_TARGET_WEIGHT_RATIO
     assert serialized["relative"]["total_bias_rows"] is None
     assert execution["relative_position_encoding"] == relative.value
     assert execution["position_bias_rows"] is None
@@ -353,7 +377,8 @@ def test_training_created_alibi_state_surfaces_are_exact(relative, cross_policy,
         assert torch.isfinite(layer.alibi_slope_logits).all()
         torch.testing.assert_close(
             torch.nn.functional.softplus(layer.alibi_slope_logits.detach()),
-            torch.tensor((0.0625, 0.00390625), dtype=layer.alibi_slope_logits.dtype),
+            # Learned ALiBi starts from the same genomic prior as fixed ALiBi.
+            torch.tensor(_expected_genomic_slopes(), dtype=layer.alibi_slope_logits.dtype),
         )
     else:
         assert layer.alibi_slope_logits is None
@@ -420,6 +445,10 @@ def test_base_schema_v2_alibi_separate_strict_round_trip(relative):
     assert result.resolved_position_encoding.relative.encoding is relative
     assert result.resolved_position_encoding.relative.alibi_distance_function.value == "linear"
     assert result.resolved_position_encoding.relative.alibi_distance_scale == ALIBI_DISTANCE_SCALE
+    assert (
+        result.resolved_position_encoding.relative.alibi_target_weight_ratio
+        == ALIBI_TARGET_WEIGHT_RATIO
+    )
     _assert_state_exact(source.state_dict(), result.model.state_dict())
     layer = result.model.attention.attention_layers[0]
     source_layer = source.attention.attention_layers[0]
@@ -662,6 +691,8 @@ def test_multilayer_learned_alibi_state_is_independent_and_required():
         (RelativePositionEncoding.ALIBI_FIXED, "alibi_distance_scale", 123.0),
         (RelativePositionEncoding.ALIBI_LEARNED, "alibi_distance_function", "log1p"),
         (RelativePositionEncoding.ALIBI_LEARNED, "alibi_distance_scale", 123.0),
+        (RelativePositionEncoding.ALIBI_FIXED, "alibi_target_weight_ratio", 0.5),
+        (RelativePositionEncoding.ALIBI_LEARNED, "alibi_target_weight_ratio", 0.5),
     ],
 )
 def test_alibi_config_checkpoint_metadata_conflicts_reject_before_state_authority(
@@ -791,6 +822,18 @@ def test_explanation_reconstruction_and_ig_policy_for_alibi(relative):
         reconstruction.resolved_position_encoding.relative.alibi_distance_scale
         == ALIBI_DISTANCE_SCALE
     )
+    assert (
+        reconstruction.resolved_position_encoding.relative.alibi_target_weight_ratio
+        == ALIBI_TARGET_WEIGHT_RATIO
+    )
+    if relative is RelativePositionEncoding.ALIBI_FIXED:
+        runtime = reconstruction.base_model.attention.attention_layers[0]._relative_position_runtime
+        assert all(
+            math.isclose(observed, expected, rel_tol=1e-12)
+            for observed, expected in zip(
+                runtime.fixed_slopes, _expected_genomic_slopes(), strict=True
+            )
+        )
     if relative is RelativePositionEncoding.ALIBI_LEARNED:
         assert torch.equal(
             reconstruction.base_model.attention.attention_layers[0].alibi_slope_logits,

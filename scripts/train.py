@@ -181,6 +181,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
                         help='Distance transform for ALiBi relative position encoding')
     parser.add_argument('--alibi-distance-scale', type=float, default=None,
                         help='Distance scale for ALiBi relative position encoding')
+    parser.add_argument('--alibi-target-weight-ratio', type=float, default=None,
+                        help='Genomic ALiBi target ratio r in (0, 1): at each head\'s '
+                             'characteristic distance the distance term multiplies the '
+                             'unnormalised attention weight by r (experimental; '
+                             'resolver default 0.75)')
 
     # Cross-validation arguments
     parser.add_argument('--cv', '--cv-folds', dest='cv', type=int, default=None,
@@ -316,6 +321,7 @@ def build_position_encoding_request(
             else AlibiDistanceFunction(args.alibi_distance_function)
         ),
         alibi_distance_scale=args.alibi_distance_scale,
+        alibi_target_weight_ratio=args.alibi_target_weight_ratio,
     )
 
 

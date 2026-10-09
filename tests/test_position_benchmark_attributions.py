@@ -29,6 +29,7 @@ def _position_encoding(relative_type: str = "none", scale: float = 10000.0) -> d
             {
                 "alibi_distance_function": "linear",
                 "alibi_distance_scale": scale,
+                "alibi_target_weight_ratio": 0.75,
             }
         )
         input_dim = 7

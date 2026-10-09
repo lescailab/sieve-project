@@ -441,7 +441,8 @@ def test_rope_validates_latent_head_geometry():
     )
 
     assert config.relative.encoding is RelativePositionEncoding.ROPE
-    assert config.relative.rope_coordinate_scale == 10000.0
+    # RoPE coordinates default to 1 bp; rope_base keeps the standard 10000.
+    assert config.relative.rope_coordinate_scale == 1.0
     assert config.relative.rope_base == 10000.0
     assert config.chromosome.cross_chromosome_parameter == "learned_bias"
 
@@ -503,12 +504,112 @@ def test_rope_rejects_inactive_t5_fields():
     [RelativePositionEncoding.ALIBI_FIXED, RelativePositionEncoding.ALIBI_LEARNED],
 )
 def test_alibi_resolves_defaults(relative):
+    # Fixed and learned ALiBi share one genomic prior and therefore one set of
+    # defaults: log1p distances at a 1 bp scale and target weight ratio 0.75.
     config = resolve(custom_request(relative=relative))
 
     assert config.relative.encoding is relative
     assert config.relative.alibi_distance_function is AlibiDistanceFunction.LOG1P
-    assert config.relative.alibi_distance_scale == 10000.0
+    assert config.relative.alibi_distance_scale == 1.0
+    assert config.relative.alibi_target_weight_ratio == 0.75
     assert config.chromosome.cross_chromosome_parameter == "learned_bias"
+
+
+@pytest.mark.parametrize(
+    "relative",
+    [RelativePositionEncoding.ALIBI_FIXED, RelativePositionEncoding.ALIBI_LEARNED],
+)
+@pytest.mark.parametrize("ratio", [0.9, 0.5, 1e-6, 0.999999])
+def test_alibi_preserves_custom_target_weight_ratio(relative, ratio):
+    # Non-0.75 ratios are software test values, not scientific recommendations.
+    config = resolve(custom_request(relative=relative, alibi_target_weight_ratio=ratio))
+
+    assert config.relative.alibi_target_weight_ratio == ratio
+    data = config.to_dict()
+    assert data["relative"]["alibi_target_weight_ratio"] == ratio
+    parsed = resolved_position_encoding_from_dict(data, latent_dim=16, num_heads=2)
+    assert parsed == config
+    assert parsed.relative.alibi_target_weight_ratio == ratio
+
+
+@pytest.mark.parametrize(
+    "bad_ratio",
+    [0, 0.0, 1, 1.0, -0.25, 1.5, math.nan, math.inf, -math.inf, True, False, "0.75"],
+)
+def test_alibi_rejects_invalid_target_weight_ratio(bad_ratio):
+    with pytest.raises(ValueError, match="alibi_target_weight_ratio"):
+        resolve(
+            custom_request(
+                relative=RelativePositionEncoding.ALIBI_FIXED,
+                alibi_target_weight_ratio=bad_ratio,
+            )
+        )
+
+
+@pytest.mark.parametrize(
+    ("relative", "extra"),
+    [
+        (RelativePositionEncoding.NONE, {}),
+        (RelativePositionEncoding.T5_BUCKET, {}),
+        (RelativePositionEncoding.ROPE, {}),
+    ],
+)
+def test_non_alibi_strategies_reject_target_weight_ratio(relative, extra):
+    with pytest.raises(ValueError, match="alibi_target_weight_ratio"):
+        resolve(custom_request(relative=relative, alibi_target_weight_ratio=0.75, **extra))
+
+
+def test_legacy_rejects_target_weight_ratio_override():
+    with pytest.raises(ValueError, match="position_preset=legacy"):
+        resolve(PositionEncodingRequest(alibi_target_weight_ratio=0.75))
+
+
+@pytest.mark.parametrize(
+    "relative",
+    [
+        RelativePositionEncoding.NONE,
+        RelativePositionEncoding.T5_BUCKET,
+        RelativePositionEncoding.ROPE,
+    ],
+)
+def test_non_alibi_serialisation_has_no_target_weight_ratio_key(relative):
+    # Keeps pre-existing non-ALiBi configs and checkpoints byte-identical.
+    config = resolve(custom_request(relative=relative))
+    data = config.to_dict()
+
+    assert "alibi_target_weight_ratio" not in data["relative"]
+    assert resolved_position_encoding_from_dict(data, latent_dim=16, num_heads=2) == config
+    data["relative"]["alibi_target_weight_ratio"] = 0.75
+    with pytest.raises(ValueError, match="alibi_target_weight_ratio"):
+        resolved_position_encoding_from_dict(data, latent_dim=16, num_heads=2)
+
+
+def test_legacy_serialisation_has_no_target_weight_ratio_key():
+    data = resolve(PositionEncodingRequest()).to_dict()
+
+    assert "alibi_target_weight_ratio" not in data["relative"]
+
+
+@pytest.mark.parametrize(
+    "relative",
+    [RelativePositionEncoding.ALIBI_FIXED, RelativePositionEncoding.ALIBI_LEARNED],
+)
+def test_alibi_serialisation_requires_target_weight_ratio(relative):
+    data = resolve(custom_request(relative=relative)).to_dict()
+    data["relative"].pop("alibi_target_weight_ratio")
+
+    with pytest.raises(ValueError, match="alibi_target_weight_ratio"):
+        resolved_position_encoding_from_dict(data, latent_dim=16, num_heads=2)
+
+
+@pytest.mark.parametrize(
+    "relative",
+    [RelativePositionEncoding.ALIBI_FIXED, RelativePositionEncoding.ALIBI_LEARNED],
+)
+def test_alibi_accepts_custom_positive_distance_scale(relative):
+    config = resolve(custom_request(relative=relative, alibi_distance_scale=37.5))
+
+    assert config.relative.alibi_distance_scale == 37.5
 
 
 def test_alibi_rejects_zero_distance_scale():

@@ -25,7 +25,8 @@ from src.models.sieve import SIEVE
 MODEL_KWARGS = {
     "latent_dim": 8,
     "hidden_dim": 10,
-    "num_heads": 2,
+    # Four heads so the genomic ALiBi prior (4-head only) is valid.
+    "num_heads": 4,
     "num_attention_layers": 1,
     "classifier_hidden_dim": 12,
     "dropout": 0.0,
@@ -352,6 +353,35 @@ def test_fixed_alibi_deserializes_and_reconstructs_exact_state():
     _assert_state_exact(source.state_dict(), result.model.state_dict())
 
 
+@pytest.mark.parametrize(
+    "relative",
+    [RelativePositionEncoding.ALIBI_FIXED, RelativePositionEncoding.ALIBI_LEARNED],
+)
+def test_default_alibi_settings_survive_serialization_and_reconstruction(relative):
+    # No explicit values: the shared resolver defaults (1 bp scale, r = 0.75)
+    # must be what is persisted to config and restored at reconstruction.
+    config = _resolve_custom(relative=relative)
+    serialized = _case_a_config(config)
+    relative_payload = serialized["position_encoding"]["relative"]
+
+    assert relative_payload["alibi_distance_scale"] == 1.0
+    assert relative_payload["alibi_target_weight_ratio"] == 0.75
+    parsed = resolved_position_encoding_from_dict(
+        serialized["position_encoding"],
+        latent_dim=MODEL_KWARGS["latent_dim"],
+        num_heads=MODEL_KWARGS["num_heads"],
+    )
+    assert parsed.relative.alibi_distance_scale == 1.0
+    assert parsed.relative.alibi_target_weight_ratio == 0.75
+    result = reconstruct_sieve_from_checkpoint(
+        serialized,
+        _checkpoint(_base_model(config)),
+        num_genes=5,
+    )
+    assert result.resolved_position_encoding.relative.alibi_distance_scale == 1.0
+    assert result.resolved_position_encoding.relative.alibi_target_weight_ratio == 0.75
+
+
 def test_learned_alibi_deserializes_and_reconstructs_exact_state():
     config = _resolve_custom(
         relative=RelativePositionEncoding.ALIBI_LEARNED,
@@ -362,8 +392,8 @@ def test_learned_alibi_deserializes_and_reconstructs_exact_state():
     source = _base_model(config)
     layer = source.attention.attention_layers[0]
     with torch.no_grad():
-        layer.alibi_slope_logits.copy_(torch.tensor([-3.0, -1.5]))
-        layer.cross_chromosome_bias.copy_(torch.tensor([0.25, -0.5]))
+        layer.alibi_slope_logits.copy_(torch.tensor([-3.0, -1.5, -2.0, -4.0]))
+        layer.cross_chromosome_bias.copy_(torch.tensor([0.25, -0.5, 0.125, -0.0625]))
     parsed = resolved_position_encoding_from_dict(
         serialized["position_encoding"],
         latent_dim=MODEL_KWARGS["latent_dim"],

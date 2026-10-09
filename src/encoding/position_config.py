@@ -22,10 +22,25 @@ DEFAULT_SINUSOIDAL_MAX_WAVELENGTH = 10000.0
 DEFAULT_POSITION_BIN_SIZE = 10000
 DEFAULT_NUM_POSITION_BUCKETS = 32
 DEFAULT_MAX_POSITION_DISTANCE = 100000
-DEFAULT_ROPE_COORDINATE_SCALE = 10000.0
+# RoPE positions are expressed in base pairs (coordinate scale 1 bp), so the
+# fastest rotary pair advances by one radian per base pair while the standard
+# rope_base of 10000 spreads the slower pairs across longer genomic scales.
+DEFAULT_ROPE_COORDINATE_SCALE = 1.0
 DEFAULT_ROPE_BASE = 10000.0
 DEFAULT_ALIBI_DISTANCE_FUNCTION = "log1p"
-DEFAULT_ALIBI_DISTANCE_SCALE = 10000.0
+# Fixed and learned ALiBi share one genomic prior. Distances are measured in
+# base pairs (scale 1 bp), and each head's slope is derived so that, at its
+# characteristic distance, distance alone multiplies the unnormalised softmax
+# numerator by ``alibi_target_weight_ratio`` (see
+# ``build_genomic_alibi_slopes`` in ``src/models/position_runtime.py``).
+DEFAULT_ALIBI_DISTANCE_SCALE = 1.0
+# Experimental benchmark parameter, not a theoretical optimum: how strongly a
+# distance-correlated attenuation affects downstream attribution is hard to
+# predict a priori, so this ratio is exposed for controlled empirical grids.
+DEFAULT_ALIBI_TARGET_WEIGHT_RATIO = 0.75
+# Authoritative per-head characteristic genomic distances for the genomic ALiBi
+# prior. The calibration is defined only for this four-head layout.
+DEFAULT_ALIBI_CHARACTERISTIC_DISTANCES_BP = (1.0, 10.0, 100.0, 5000.0)
 
 
 class PositionPreset(str, Enum):
@@ -51,6 +66,11 @@ class RelativePositionEncoding(str, Enum):
     ROPE = "rope"
     ALIBI_FIXED = "alibi_fixed"
     ALIBI_LEARNED = "alibi_learned"
+
+
+_ALIBI_ENCODINGS = frozenset(
+    {RelativePositionEncoding.ALIBI_FIXED, RelativePositionEncoding.ALIBI_LEARNED}
+)
 
 
 class ChromosomeEncoding(str, Enum):
@@ -110,6 +130,7 @@ class PositionEncodingRequest:
     rope_base: float | None = None
     alibi_distance_function: AlibiDistanceFunction | None = None
     alibi_distance_scale: float | None = None
+    alibi_target_weight_ratio: float | None = None
 
 
 @dataclass(frozen=True)
@@ -146,9 +167,10 @@ class ResolvedRelativePositionConfig:
     rope_base: float | None = None
     alibi_distance_function: AlibiDistanceFunction | None = None
     alibi_distance_scale: float | None = None
+    alibi_target_weight_ratio: float | None = None
 
     def to_dict(self) -> dict[str, object]:
-        return {
+        data: dict[str, object] = {
             "type": self.encoding.value,
             "num_buckets": self.num_buckets,
             "total_bias_rows": self.total_bias_rows,
@@ -158,6 +180,11 @@ class ResolvedRelativePositionConfig:
             "alibi_distance_function": _enum_value(self.alibi_distance_function),
             "alibi_distance_scale": self.alibi_distance_scale,
         }
+        # Serialised only for ALiBi so that existing non-ALiBi configs and
+        # checkpoints keep byte-identical position_encoding payloads.
+        if self.encoding in _ALIBI_ENCODINGS:
+            data["alibi_target_weight_ratio"] = self.alibi_target_weight_ratio
+        return data
 
 
 @dataclass(frozen=True)
@@ -477,6 +504,7 @@ def _relative_request_kwargs(
                 "position_encoding.relative.alibi_distance_function",
             ),
             "alibi_distance_scale": relative["alibi_distance_scale"],
+            "alibi_target_weight_ratio": relative["alibi_target_weight_ratio"],
         }
     raise ValueError(f"unsupported position_encoding.relative.type: {encoding.value}")
 
@@ -565,6 +593,7 @@ def _resolve_relative(
                 "rope_base",
                 "alibi_distance_function",
                 "alibi_distance_scale",
+                "alibi_target_weight_ratio",
             ],
             "relative_position_encoding=none",
         )
@@ -578,6 +607,7 @@ def _resolve_relative(
                 "rope_base",
                 "alibi_distance_function",
                 "alibi_distance_scale",
+                "alibi_target_weight_ratio",
             ],
             "relative_position_encoding=t5_bucket",
         )
@@ -607,6 +637,7 @@ def _resolve_relative(
                 "max_position_distance",
                 "alibi_distance_function",
                 "alibi_distance_scale",
+                "alibi_target_weight_ratio",
             ],
             "relative_position_encoding=rope",
         )
@@ -652,10 +683,17 @@ def _resolve_relative(
             else request.alibi_distance_scale
         )
         _validate_positive_number("alibi_distance_scale", distance_scale)
+        target_weight_ratio = (
+            DEFAULT_ALIBI_TARGET_WEIGHT_RATIO
+            if request.alibi_target_weight_ratio is None
+            else request.alibi_target_weight_ratio
+        )
+        validate_alibi_target_weight_ratio(target_weight_ratio)
         return ResolvedRelativePositionConfig(
             encoding=encoding,
             alibi_distance_function=distance_function,
             alibi_distance_scale=distance_scale,
+            alibi_target_weight_ratio=target_weight_ratio,
         )
 
     raise ValueError(f"unsupported relative_position_encoding: {encoding!r}")
@@ -771,6 +809,7 @@ def _reject_legacy_overrides(request: PositionEncodingRequest) -> None:
         "rope_base",
         "alibi_distance_function",
         "alibi_distance_scale",
+        "alibi_target_weight_ratio",
     ]
     _reject_present(request, fields, "position_preset=legacy")
 
@@ -803,6 +842,22 @@ def _validate_positive_number(field_name: str, value: float) -> None:
         or not math.isfinite(value)
     ):
         raise ValueError(f"{field_name} must be positive and finite")
+
+
+def validate_alibi_target_weight_ratio(value: float) -> None:
+    """Validate the genomic ALiBi target weight ratio ``r``.
+
+    ``r`` must lie strictly inside (0, 1): ``r = 0`` would need an infinite
+    distance penalty, and ``r = 1`` gives zero slopes, which also has no finite
+    inverse-softplus initialisation for learned ALiBi.
+    """
+    if (
+        not isinstance(value, (int, float))
+        or isinstance(value, bool)
+        or not math.isfinite(value)
+        or not 0.0 < value < 1.0
+    ):
+        raise ValueError("alibi_target_weight_ratio must be finite and strictly between 0 and 1")
 
 
 def _validate_t5_bucket_settings(num_buckets: int, max_distance: int) -> None:
@@ -899,6 +954,10 @@ def _validate_serialized_relative_section(data: Mapping[str, object]) -> None:
         "alibi_distance_function",
         "alibi_distance_scale",
     }
+    # alibi_target_weight_ratio is required for ALiBi and absent otherwise, so
+    # non-ALiBi payloads written before it existed still validate unchanged.
+    if data.get("type") in {encoding.value for encoding in _ALIBI_ENCODINGS}:
+        allowed = allowed | {"alibi_target_weight_ratio"}
     _require_keys(data, allowed, "position_encoding.relative")
     _reject_unknown_keys(data, allowed, "position_encoding.relative")
 

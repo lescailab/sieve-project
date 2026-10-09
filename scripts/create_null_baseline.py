@@ -314,8 +314,7 @@ def create_strict_single_permutation(
       identity, sample-order identity, label identity, permutation identity,
       and the semantic ``lineage_sha256``;
     * fails closed on any ambiguous existing-output state and never silently
-      overwrites or reuses an artifact (see Phase 12C3A design notes in
-      documentation/appendices/position-encoding-implementation-log.md).
+      overwrites or reuses an artifact.
 
     Parameters
     ----------
@@ -388,9 +387,9 @@ def create_strict_single_permutation(
     source_samples = null_lineage.extract_samples(source_data, label='source')
     source_artifact_sha256 = null_lineage.compute_file_sha256(source_path)
 
-    # The full permutation vector, not the seed, is the scientific authority
-    # (see documentation/appendices/position-encoding-implementation-log.md,
-    # Phase 12C3A). The seed only drives reproducible generation here.
+    # The full permutation vector, not the seed, is the scientific authority:
+    # it is what null-lineage validation compares. The seed only drives
+    # reproducible generation here.
     rng = np.random.default_rng(seed)
     requested_indices = rng.permutation(len(source_samples))
     lineage = null_lineage.build_null_lineage(

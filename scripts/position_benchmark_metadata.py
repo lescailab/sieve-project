@@ -89,8 +89,20 @@ RELATIVE_STRATEGY_FIELDS = {
     "none": ("type",),
     "t5_bucket": ("type", "num_buckets", "max_distance_bp"),
     "rope": ("type", "rope_coordinate_scale", "rope_base"),
-    "alibi_fixed": ("type", "alibi_distance_function", "alibi_distance_scale"),
-    "alibi_learned": ("type", "alibi_distance_function", "alibi_distance_scale"),
+    # The target weight ratio sets the genomic ALiBi prior (fixed slopes, or the
+    # learned starting slopes), so different ratios are different strategies.
+    "alibi_fixed": (
+        "type",
+        "alibi_distance_function",
+        "alibi_distance_scale",
+        "alibi_target_weight_ratio",
+    ),
+    "alibi_learned": (
+        "type",
+        "alibi_distance_function",
+        "alibi_distance_scale",
+        "alibi_target_weight_ratio",
+    ),
 }
 
 CHROMOSOME_STRATEGY_FIELDS = ("encoding", "cross_chromosome_policy")
@@ -507,6 +519,13 @@ def _validate_positive_finite_number(value: object, path: str) -> None:
         raise ValueError(f"{path} must be a positive finite number")
 
 
+def _validate_open_unit_interval(value: object, path: str) -> None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{path} must be a finite number strictly between 0 and 1")
+    if not math.isfinite(value) or not 0 < value < 1:
+        raise ValueError(f"{path} must be a finite number strictly between 0 and 1")
+
+
 def _validate_absolute_payload(
     payload: Mapping[str, object],
     absolute_type: str,
@@ -560,6 +579,10 @@ def _validate_relative_payload(
         _validate_positive_finite_number(
             payload["alibi_distance_scale"],
             "position_encoding.relative.alibi_distance_scale",
+        )
+        _validate_open_unit_interval(
+            payload["alibi_target_weight_ratio"],
+            "position_encoding.relative.alibi_target_weight_ratio",
         )
 
 

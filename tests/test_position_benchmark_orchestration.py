@@ -157,10 +157,10 @@ def test_no_position_exact_flags(tmp_path, run_index, expected_flags):
                 "relative_position_encoding": "rope",
                 "chromosome_encoding": "none",
                 "cross_chromosome_policy": "separate",
-                "rope_coordinate_scale": 10000.0,
+                "rope_coordinate_scale": 1.0,
                 "rope_base": 10000.0,
             },
-            ["--rope-coordinate-scale", "10000.0", "--rope-base", "10000.0"],
+            ["--rope-coordinate-scale", "1.0", "--rope-base", "10000.0"],
         ),
         (
             "alibi_fixed",
@@ -171,9 +171,17 @@ def test_no_position_exact_flags(tmp_path, run_index, expected_flags):
                 "chromosome_encoding": "none",
                 "cross_chromosome_policy": "separate",
                 "alibi_distance_function": "log1p",
-                "alibi_distance_scale": 10000.0,
+                "alibi_distance_scale": 1.0,
+                "alibi_target_weight_ratio": 0.75,
             },
-            ["--alibi-distance-function", "log1p", "--alibi-distance-scale", "10000.0"],
+            [
+                "--alibi-distance-function",
+                "log1p",
+                "--alibi-distance-scale",
+                "1.0",
+                "--alibi-target-weight-ratio",
+                "0.75",
+            ],
         ),
         (
             "alibi_learned",
@@ -184,9 +192,17 @@ def test_no_position_exact_flags(tmp_path, run_index, expected_flags):
                 "chromosome_encoding": "none",
                 "cross_chromosome_policy": "separate",
                 "alibi_distance_function": "log1p",
-                "alibi_distance_scale": 10000.0,
+                "alibi_distance_scale": 1.0,
+                "alibi_target_weight_ratio": 0.75,
             },
-            ["--relative-position-encoding", "alibi_learned", "--alibi-distance-scale", "10000.0"],
+            [
+                "--relative-position-encoding",
+                "alibi_learned",
+                "--alibi-distance-scale",
+                "1.0",
+                "--alibi-target-weight-ratio",
+                "0.75",
+            ],
         ),
     ],
 )
@@ -207,6 +223,102 @@ def test_primary_strategy_position_flags_round_trip(tmp_path, run_id, position, 
     assert "--position-preset" in argv
     plan = build_resolved_plan(manifest_path, python_override=sys.executable, device_override="cpu")
     assert all("position_strategy_id" not in run for run in plan["runs"])
+
+
+@pytest.mark.parametrize("relative", ["alibi_fixed", "alibi_learned"])
+def test_alibi_target_weight_ratio_propagates_per_run_to_train_argv(tmp_path, relative):
+    # Two runs differing only in the ratio: the shape of a future ratio grid.
+    # 0.9 is a software test value, not a scientific recommendation.
+    manifest_path, manifest = _base_manifest(tmp_path)
+    position = {
+        "position_preset": "custom",
+        "absolute_position_encoding": "none",
+        "relative_position_encoding": relative,
+        "chromosome_encoding": "none",
+        "cross_chromosome_policy": "separate",
+        "alibi_distance_function": "log1p",
+        "alibi_distance_scale": 1.0,
+    }
+    manifest["runs"] = [
+        {"run_id": "ratio_075", "position": {**position, "alibi_target_weight_ratio": 0.75}},
+        {"run_id": "ratio_090", "position": {**position, "alibi_target_weight_ratio": 0.9}},
+    ]
+    _write_yaml(manifest_path, manifest)
+
+    plan = build_resolved_plan(manifest_path, python_override=sys.executable, device_override="cpu")
+
+    first, second = (run["train_argv"] for run in plan["runs"])
+    assert _argv_after(first, "--alibi-target-weight-ratio") == "0.75"
+    assert _argv_after(second, "--alibi-target-weight-ratio") == "0.9"
+    strip = {"--alibi-target-weight-ratio", "--output-dir"}
+
+    def _without(argv):
+        kept, skip = [], False
+        for token in argv:
+            if skip:
+                skip = False
+                continue
+            if token in strip:
+                skip = True
+                continue
+            kept.append(token)
+        return kept
+
+    assert _without(first) == _without(second)
+
+
+@pytest.mark.parametrize("bad", [0.0, 1.0, -0.1, 1.5, ".nan", ".inf", "true", "'0.75'", "null"])
+def test_alibi_target_weight_ratio_must_be_inside_open_unit_interval(tmp_path, bad):
+    manifest_path, manifest = _base_manifest(tmp_path)
+    manifest["runs"] = [
+        {"run_id": "legacy", "position": {"position_preset": "legacy"}},
+        {
+            "run_id": "alibi",
+            "position": {
+                "position_preset": "custom",
+                "absolute_position_encoding": "none",
+                "relative_position_encoding": "alibi_fixed",
+                "chromosome_encoding": "none",
+                "cross_chromosome_policy": "separate",
+                "alibi_distance_function": "log1p",
+                "alibi_distance_scale": 1.0,
+                "alibi_target_weight_ratio": "__BAD__",
+            },
+        },
+    ]
+    _write_yaml(manifest_path, manifest)
+    manifest_path.write_text(
+        manifest_path.read_text(encoding="utf-8").replace("__BAD__", str(bad)),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(BenchmarkManifestError, match="alibi_target_weight_ratio"):
+        build_resolved_plan(manifest_path, python_override=sys.executable, device_override="cpu")
+
+
+@pytest.mark.parametrize("relative", ["rope", "t5_bucket", "none"])
+def test_alibi_target_weight_ratio_is_rejected_for_non_alibi_runs(tmp_path, relative):
+    manifest_path, manifest = _base_manifest(tmp_path)
+    position = {
+        "position_preset": "custom",
+        "absolute_position_encoding": "none",
+        "relative_position_encoding": relative,
+        "chromosome_encoding": "none",
+        "cross_chromosome_policy": "separate",
+        "alibi_target_weight_ratio": 0.75,
+    }
+    if relative == "rope":
+        position.update({"rope_coordinate_scale": 1.0, "rope_base": 10000.0})
+    if relative == "t5_bucket":
+        position.update({"num_position_buckets": 32, "max_position_distance": 100000})
+    manifest["runs"] = [
+        {"run_id": "legacy", "position": {"position_preset": "legacy"}},
+        {"run_id": "other", "position": position},
+    ]
+    _write_yaml(manifest_path, manifest)
+
+    with pytest.raises(BenchmarkManifestError, match="alibi_target_weight_ratio"):
+        build_resolved_plan(manifest_path, python_override=sys.executable, device_override="cpu")
 
 
 def test_explain_cv_uses_parent_experiment_and_fold(tmp_path):

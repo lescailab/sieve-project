@@ -836,3 +836,56 @@ def test_example_paired_manifest_plans_end_to_end_over_fixture_files(tmp_path):
     assert {_argv_after(run["null_train_argv"], "--preprocessed-data") for run in plan["runs"]} == {
         plan["null_binding"]["null_artifact_path"]
     }
+    # Every planned real and null training run uses the historical selected
+    # SIEVE architecture and optimiser settings.
+    for run in plan["runs"]:
+        for argv in (run["train_argv"], run["null_train_argv"]):
+            assert _argv_after(argv, "--latent-dim") == "32"
+            assert _argv_after(argv, "--hidden-dim") == "64"
+            assert _argv_after(argv, "--num-heads") == "4"
+            assert _argv_after(argv, "--num-attention-layers") == "1"
+            assert float(_argv_after(argv, "--lr")) == 1e-5
+            assert float(_argv_after(argv, "--lambda-attr")) == 0.1
+    by_id = {run["run_id"]: run for run in plan["runs"]}
+    for run_id in ("alibi_fixed", "alibi_learned"):
+        argv = by_id[run_id]["train_argv"]
+        assert _argv_after(argv, "--alibi-distance-function") == "log1p"
+        assert _argv_after(argv, "--alibi-distance-scale") == "1.0"
+        assert _argv_after(argv, "--alibi-target-weight-ratio") == "0.75"
+    assert _argv_after(by_id["rope"]["train_argv"], "--rope-coordinate-scale") == "1.0"
+    assert _argv_after(by_id["rope"]["train_argv"], "--rope-base") == "10000.0"
+
+
+EXAMPLE_MANIFESTS = (
+    "documentation/examples/position-benchmark-L3.yaml",
+    "documentation/examples/position-benchmark-L3-paired.yaml",
+)
+
+
+def _load_example(relative_path: str) -> dict:
+    path = Path(__file__).resolve().parent.parent / relative_path
+    return yaml.safe_load(path.read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize("relative_path", EXAMPLE_MANIFESTS)
+def test_example_manifests_use_historical_selected_architecture(relative_path):
+    training = _load_example(relative_path)["training"]
+
+    assert training["latent_dim"] == 32
+    assert training["hidden_dim"] == 64
+    assert training["num_heads"] == 4
+    assert training["num_attention_layers"] == 1
+    assert training["lr"] == 1e-5
+    assert training["lambda_attr"] == 0.1
+
+
+@pytest.mark.parametrize("relative_path", EXAMPLE_MANIFESTS)
+def test_example_manifests_use_shared_genomic_relative_settings(relative_path):
+    runs = {run["run_id"]: run["position"] for run in _load_example(relative_path)["runs"]}
+
+    for run_id in ("alibi_fixed", "alibi_learned"):
+        assert runs[run_id]["alibi_distance_function"] == "log1p"
+        assert runs[run_id]["alibi_distance_scale"] == 1.0
+        assert runs[run_id]["alibi_target_weight_ratio"] == 0.75
+    assert runs["rope"]["rope_coordinate_scale"] == 1.0
+    assert runs["rope"]["rope_base"] == 10000.0

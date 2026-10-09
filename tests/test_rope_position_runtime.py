@@ -860,3 +860,56 @@ def test_rope_runtime_api_has_no_value_tensor_argument():
     parameter_names = RopeRelativePositionRuntime.adjust_attention_scores.__code__.co_varnames
 
     assert "value" not in parameter_names
+
+
+def test_benchmark_architecture_derives_four_rotary_pairs_at_bp_scale():
+    # Historical selected architecture: latent_dim=32, num_heads=4. The head
+    # dimension (and so the number of rotary pairs) follows from the model, not
+    # from any RoPE-specific constant.
+    latent_dim, num_heads = 32, 4
+    config = resolve_position_encoding_config(
+        PositionEncodingRequest(
+            preset=PositionPreset.CUSTOM,
+            absolute_position_encoding=AbsolutePositionEncoding.NONE,
+            relative_position_encoding=RelativePositionEncoding.ROPE,
+            chromosome_encoding=ChromosomeEncoding.NONE,
+            cross_chromosome_policy=CrossChromosomePolicy.SEPARATE,
+        ),
+        AnnotationLevel.L3,
+        latent_dim=latent_dim,
+        num_heads=num_heads,
+        num_chromosomes=3,
+    )
+    model = SIEVE(
+        input_dim=config.input_dim,
+        num_genes=5,
+        latent_dim=latent_dim,
+        hidden_dim=64,
+        num_heads=num_heads,
+        num_attention_layers=1,
+        num_chromosomes=3,
+        position_encoding=config,
+    )
+    runtime = model.attention.attention_layers[0]._relative_position_runtime
+
+    assert config.relative.rope_coordinate_scale == 1.0
+    assert config.relative.rope_base == 10000.0
+    assert isinstance(runtime, RopeRelativePositionRuntime)
+    assert runtime.head_dim == 8
+    num_pairs = runtime.head_dim // 2
+    assert num_pairs == 4
+
+    # Rotate one unit vector per pair at position 1 bp to read each frequency.
+    values = torch.zeros(1, 1, num_pairs, runtime.head_dim, dtype=torch.float64)
+    for pair in range(num_pairs):
+        values[0, 0, pair, 2 * pair] = 1.0
+    rotated = runtime.rotate(values, torch.ones(1, num_pairs, dtype=torch.long))
+    angles = [
+        math.atan2(rotated[0, 0, pair, 2 * pair + 1].item(), rotated[0, 0, pair, 2 * pair].item())
+        for pair in range(num_pairs)
+    ]
+    expected_frequencies = [1.0, 0.1, 0.01, 0.001]
+    for observed, expected in zip(angles, expected_frequencies, strict=True):
+        assert math.isclose(observed, expected, rel_tol=1e-12)
+    periods = [2 * math.pi / frequency for frequency in expected_frequencies]
+    assert [round(period, 3) for period in periods] == [6.283, 62.832, 628.319, 6283.185]

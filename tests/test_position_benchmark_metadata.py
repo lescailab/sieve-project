@@ -25,6 +25,7 @@ def _base_position_encoding(relative=None):
             "rope_base": None,
             "alibi_distance_function": "log1p",
             "alibi_distance_scale": 10000.0,
+            "alibi_target_weight_ratio": 0.75,
         }
     return {
         "schema_version": 1,
@@ -150,6 +151,24 @@ def test_alibi_scale_changes_strategy_id_but_context_remains_compatible():
     assert require_compatible_contexts(_contexts(first, second)).compatible
 
 
+@pytest.mark.parametrize("relative_type", ["alibi_fixed", "alibi_learned"])
+def test_alibi_target_weight_ratio_changes_strategy_id(relative_type):
+    # 0.9 is a software test value, not a scientific recommendation.
+    first = _base_config()
+    first["position_encoding"]["relative"]["type"] = relative_type
+    second = copy.deepcopy(first)
+    second["position_encoding"]["relative"]["alibi_target_weight_ratio"] = 0.9
+
+    first_identity = position_strategy_identity(first)
+    second_identity = position_strategy_identity(second)
+
+    assert first_identity.payload["relative"]["alibi_target_weight_ratio"] == 0.75
+    assert second_identity.payload["relative"]["alibi_target_weight_ratio"] == 0.9
+    assert first_identity.hash != second_identity.hash
+    assert first_identity.strategy_id != second_identity.strategy_id
+    assert require_compatible_contexts(_contexts(first, second)).compatible
+
+
 def test_mapping_and_binning_extensions_are_ignored_for_strategy_identity():
     first = _base_config()
     second = copy.deepcopy(first)
@@ -177,6 +196,10 @@ def test_mapping_and_binning_extensions_are_ignored_for_strategy_identity():
         (
             lambda cfg: cfg["position_encoding"]["relative"].pop("alibi_distance_scale"),
             "position_encoding.relative.alibi_distance_scale",
+        ),
+        (
+            lambda cfg: cfg["position_encoding"]["relative"].pop("alibi_target_weight_ratio"),
+            "position_encoding.relative.alibi_target_weight_ratio",
         ),
         (
             lambda cfg: cfg["position_encoding"]["chromosome"].pop("encoding"),
@@ -277,6 +300,15 @@ def test_unapplied_position_metadata_is_rejected():
             ),
             "position_encoding.relative.alibi_distance_function",
         ),
+        *[
+            (
+                lambda cfg, bad=bad: cfg["position_encoding"]["relative"].update(
+                    {"alibi_target_weight_ratio": bad}
+                ),
+                "position_encoding.relative.alibi_target_weight_ratio",
+            )
+            for bad in (0.0, 1.0, -0.5, 1.5, float("nan"), float("inf"), True, "0.75")
+        ],
         (
             lambda cfg: cfg["position_encoding"]["chromosome"].update({"encoding": "one_hot"}),
             "position_encoding.chromosome.encoding",

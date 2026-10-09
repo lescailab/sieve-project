@@ -91,6 +91,7 @@ POSITION_KEYS = {
     "rope_base",
     "alibi_distance_function",
     "alibi_distance_scale",
+    "alibi_target_weight_ratio",
 }
 CUSTOM_REQUIRED_KEYS = {
     "absolute_position_encoding",
@@ -924,6 +925,7 @@ def _validate_relative_position_fields(
                 "rope_base",
                 "alibi_distance_function",
                 "alibi_distance_scale",
+                "alibi_target_weight_ratio",
             ],
             path,
         )
@@ -943,6 +945,7 @@ def _validate_relative_position_fields(
                 "rope_base",
                 "alibi_distance_function",
                 "alibi_distance_scale",
+                "alibi_target_weight_ratio",
             ],
             path,
         )
@@ -959,6 +962,7 @@ def _validate_relative_position_fields(
                 "max_position_distance",
                 "alibi_distance_function",
                 "alibi_distance_scale",
+                "alibi_target_weight_ratio",
             ],
             path,
         )
@@ -974,6 +978,14 @@ def _validate_relative_position_fields(
         position["alibi_distance_scale"] = _required_positive_number(
             raw.get("alibi_distance_scale"),
             f"{path}.alibi_distance_scale",
+        )
+        # Experimental genomic-prior strength; any value in (0, 1) is allowed so
+        # a ratio grid is just separate runs differing only in this field.
+        position["alibi_target_weight_ratio"] = _required_float_range(
+            raw.get("alibi_target_weight_ratio"),
+            f"{path}.alibi_target_weight_ratio",
+            low=0.0,
+            high=1.0,
         )
         _reject_present(
             raw,
@@ -1559,6 +1571,7 @@ def _position_to_train_argv(position: Mapping[str, Any]) -> list[str]:
         "rope_base",
         "alibi_distance_function",
         "alibi_distance_scale",
+        "alibi_target_weight_ratio",
     ]
     for key in ordered_keys:
         if key in position:

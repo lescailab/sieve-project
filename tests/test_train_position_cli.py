@@ -53,6 +53,7 @@ def test_all_optional_positional_parser_defaults_are_none(base_argv):
         "rope_base",
         "alibi_distance_function",
         "alibi_distance_scale",
+        "alibi_target_weight_ratio",
     ]
     assert {field: getattr(args, field) for field in positional_fields} == dict.fromkeys(
         positional_fields
@@ -197,6 +198,8 @@ def test_valid_custom_request_conversion_produces_enum_instances(base_argv):
         "64",
         "--alibi-distance-scale",
         "1000",
+        "--alibi-target-weight-ratio",
+        "0.9",
     )
 
     request = train.build_position_encoding_request(args)
@@ -209,6 +212,7 @@ def test_valid_custom_request_conversion_produces_enum_instances(base_argv):
     assert request.alibi_distance_function is AlibiDistanceFunction.LINEAR
     assert request.position_dim == 64
     assert request.alibi_distance_scale == 1000.0
+    assert request.alibi_target_weight_ratio == 0.9
 
 
 @pytest.mark.parametrize("level", list(AnnotationLevel))

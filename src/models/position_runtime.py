@@ -16,6 +16,7 @@ from torch import Tensor
 
 from src.encoding import relative_position_bucket
 from src.encoding.position_config import (
+    DEFAULT_ALIBI_CHARACTERISTIC_DISTANCES_BP,
     AbsolutePositionEncoding,
     AlibiDistanceFunction,
     ChromosomeEncoding,
@@ -23,6 +24,7 @@ from src.encoding.position_config import (
     PositionPreset,
     RelativePositionEncoding,
     ResolvedPositionEncodingConfig,
+    validate_alibi_target_weight_ratio,
 )
 from src.encoding.position_layout import (
     LEARNED_BINNED_COORDINATE_ORIGIN,
@@ -666,32 +668,71 @@ class RopeRelativePositionRuntime:
             raise ValueError("cross_chromosome_bias must use a floating dtype.")
 
 
-def build_alibi_fixed_slopes(num_heads: int) -> tuple[float, ...]:
-    """Return the deterministic standard ALiBi slope schedule for attention heads."""
+def _validate_genomic_alibi_num_heads(num_heads: int) -> None:
+    """Reject head counts the genomic ALiBi prior has no distances for."""
     _validate_positive_int("num_heads", num_heads)
-
-    def slopes_power_of_two(head_count: int) -> tuple[float, ...]:
-        start = 2 ** (-(2 ** -(math.log2(head_count) - 3)))
-        ratio = start
-        return tuple(start * (ratio**idx) for idx in range(head_count))
-
-    if math.log2(num_heads).is_integer():
-        return slopes_power_of_two(num_heads)
-
-    closest_power_of_two = 2 ** math.floor(math.log2(num_heads))
-    base_slopes = slopes_power_of_two(closest_power_of_two)
-    extra_slopes = slopes_power_of_two(2 * closest_power_of_two)[0::2]
-    return base_slopes + extra_slopes[: num_heads - closest_power_of_two]
+    expected_heads = len(DEFAULT_ALIBI_CHARACTERISTIC_DISTANCES_BP)
+    if num_heads != expected_heads:
+        raise ValueError(
+            "genomic ALiBi (alibi_fixed and alibi_learned) is calibrated only for "
+            f"num_heads={expected_heads}; got num_heads={num_heads}."
+        )
 
 
-def build_alibi_initial_slope_logits(num_heads: int) -> tuple[float, ...]:
-    """Return raw learned-ALiBi logits whose softplus equals the fixed slopes.
+def build_genomic_alibi_slopes(
+    num_heads: int,
+    *,
+    target_weight_ratio: float,
+    distance_scale: float,
+) -> tuple[float, ...]:
+    """Return the genomic ALiBi slopes shared by fixed and learned ALiBi.
 
-    The returned values are intentionally raw parameters, not physical ALiBi
-    slopes. Attention registers them as ``alibi_slope_logits``; the runtime
-    applies ``softplus`` at execution time so effective slopes stay positive.
+    With the ``log1p`` transform, head ``h`` penalises a same-chromosome pair at
+    distance ``d`` by ``m_h * log1p(d / s)``, which multiplies the unnormalised
+    softmax numerator by ``R_h(d) = (1 + d / s) ** (-m_h)``. Requiring
+    ``R_h(D_h) = r`` at the characteristic distance ``D_h`` gives::
+
+        m_h = -ln(r) / ln(1 + D_h / s)
+
+    with ``D = DEFAULT_ALIBI_CHARACTERISTIC_DISTANCES_BP`` (1, 10, 100, 5000 bp),
+    ``r = target_weight_ratio`` and ``s = distance_scale``. Because ``s`` enters
+    the derivation, the characteristic distances stay fixed in base pairs for
+    any positive scale. For r = 0.75 and s = 1 bp the slopes are approximately
+    (0.4150, 0.1200, 0.0623, 0.0338).
+
+    The characteristic distances are defined only for four heads. Other head
+    counts are rejected rather than given invented biological distances.
     """
-    return tuple(math.log(math.expm1(slope)) for slope in build_alibi_fixed_slopes(num_heads))
+    _validate_genomic_alibi_num_heads(num_heads)
+    validate_alibi_target_weight_ratio(target_weight_ratio)
+    _validate_positive_finite_number("distance_scale", distance_scale)
+    log_ratio = math.log(target_weight_ratio)
+    return tuple(
+        -log_ratio / math.log1p(distance_bp / distance_scale)
+        for distance_bp in DEFAULT_ALIBI_CHARACTERISTIC_DISTANCES_BP
+    )
+
+
+def build_alibi_initial_slope_logits(
+    num_heads: int,
+    *,
+    target_weight_ratio: float,
+    distance_scale: float,
+) -> tuple[float, ...]:
+    """Return raw learned-ALiBi logits whose softplus equals the genomic slopes.
+
+    The returned values are raw parameters, not physical slopes. Attention
+    registers them as ``alibi_slope_logits``; the runtime applies ``softplus``
+    so effective slopes stay positive. At initialisation learned ALiBi therefore
+    applies exactly the fixed-ALiBi penalties; only training can move them.
+    """
+    slopes = build_genomic_alibi_slopes(
+        num_heads,
+        target_weight_ratio=target_weight_ratio,
+        distance_scale=distance_scale,
+    )
+    # Numerically stable inverse softplus: log(expm1(m)) = m + log(-expm1(-m)).
+    return tuple(slope + math.log(-math.expm1(-slope)) for slope in slopes)
 
 
 def _alibi_compute_dtype(base_scores: Tensor) -> torch.dtype:
@@ -838,7 +879,8 @@ def _apply_alibi_scores(
 class FixedAlibiRelativePositionRuntime:
     """Parameterless fixed ALiBi runtime for chromosome-local score penalties.
 
-    The fixed head slopes are deterministic architecture math. They are stored
+    The fixed head slopes are the genomic prior returned by
+    ``build_genomic_alibi_slopes`` and are deterministic architecture math. They are stored
     as Python floats on this plain runtime so no parameter, buffer, or
     state-dict key is introduced for fixed ALiBi.
     """
@@ -846,6 +888,7 @@ class FixedAlibiRelativePositionRuntime:
     num_heads: int
     distance_function: AlibiDistanceFunction
     distance_scale: float
+    target_weight_ratio: float
     cross_chromosome_policy: CrossChromosomePolicy
     fixed_slopes: tuple[float, ...] = field(init=False)
 
@@ -857,7 +900,11 @@ class FixedAlibiRelativePositionRuntime:
         _validate_positive_finite_number("distance_scale", self.distance_scale)
         if not isinstance(self.cross_chromosome_policy, CrossChromosomePolicy):
             raise ValueError("cross_chromosome_policy must be a CrossChromosomePolicy enum.")
-        fixed_slopes = build_alibi_fixed_slopes(self.num_heads)
+        fixed_slopes = build_genomic_alibi_slopes(
+            self.num_heads,
+            target_weight_ratio=self.target_weight_ratio,
+            distance_scale=self.distance_scale,
+        )
         if len(fixed_slopes) != self.num_heads:
             raise ValueError("fixed ALiBi slope count must equal num_heads.")
         object.__setattr__(self, "fixed_slopes", fixed_slopes)
@@ -926,7 +973,9 @@ class LearnedAlibiRelativePositionRuntime:
 
     def __post_init__(self) -> None:
         """Validate direct construction outside the pure resolver."""
-        _validate_positive_int("num_heads", self.num_heads)
+        # Learned ALiBi starts from the genomic prior, so it shares the
+        # four-head restriction of fixed ALiBi.
+        _validate_genomic_alibi_num_heads(self.num_heads)
         if not isinstance(self.distance_function, AlibiDistanceFunction):
             raise ValueError("distance_function must be an AlibiDistanceFunction enum.")
         _validate_positive_finite_number("distance_scale", self.distance_scale)
@@ -1241,10 +1290,13 @@ def build_relative_position_runtime(
             or config.relative.alibi_distance_scale is None
         ):
             raise ValueError("resolved fixed ALiBi settings are incomplete.")
+        if config.relative.alibi_target_weight_ratio is None:
+            raise ValueError("resolved fixed ALiBi settings are incomplete.")
         return FixedAlibiRelativePositionRuntime(
             num_heads=num_heads,
             distance_function=config.relative.alibi_distance_function,
             distance_scale=config.relative.alibi_distance_scale,
+            target_weight_ratio=config.relative.alibi_target_weight_ratio,
             cross_chromosome_policy=config.chromosome.cross_chromosome_policy,
         )
     if config.relative.encoding is RelativePositionEncoding.ALIBI_LEARNED:
@@ -1254,6 +1306,8 @@ def build_relative_position_runtime(
             config.relative.alibi_distance_function is None
             or config.relative.alibi_distance_scale is None
         ):
+            raise ValueError("resolved learned ALiBi settings are incomplete.")
+        if config.relative.alibi_target_weight_ratio is None:
             raise ValueError("resolved learned ALiBi settings are incomplete.")
         return LearnedAlibiRelativePositionRuntime(
             num_heads=num_heads,
