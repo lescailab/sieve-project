@@ -264,9 +264,8 @@ def _is_sha256ish(value: object, *, length: int) -> bool:
 def _read_repository_revision(repo_root: Path) -> str:
     """Read the Git revision from repository files only; never spawn git.
 
-    Mirrors the dry-run-safe revision reader used by
-    scripts/position_benchmark_manifest.py so strict null-lineage provenance
-    is captured without invoking a subprocess.
+    Reads ``HEAD`` and, when needed, ``packed-refs`` directly so strict
+    null-lineage provenance is captured without invoking a subprocess.
     """
     git_dir = repo_root / '.git'
     try:

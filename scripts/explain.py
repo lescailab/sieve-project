@@ -174,8 +174,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "Integrated Gradients mode. auto uses the saved attribution policy "
             "for new-schema configs and preserves historical legacy attribution "
             "for old configs; content attributes biological content while "
-            "absolute position remains fixed; legacy attributes the complete "
-            "historical feature representation."
+            "absolute position remains fixed; dosage attributes only the "
+            "dosage column, holding annotations and absolute position at their "
+            "observed values; legacy attributes the complete historical feature "
+            "representation."
         ),
     )
     parser.add_argument('--top-k-variants', type=int, default=100,
@@ -508,6 +510,13 @@ def _build_ig_run_metadata(
         attribution_width = content_dim
         baseline_policy = 'zero_content_observed_absolute_position'
         comparability_warning = None
+    elif resolved_ig_mode is ResolvedIGMode.DOSAGE:
+        # The attributed tensor is still the full content tensor; only the
+        # baseline differs, so non-dosage columns receive zero attribution.
+        attribution_feature_space = 'content'
+        attribution_width = content_dim
+        baseline_policy = 'zero_dosage_observed_annotations_observed_absolute_position'
+        comparability_warning = None
     elif resolved_ig_mode is ResolvedIGMode.LEGACY:
         attribution_feature_space = 'legacy'
         attribution_width = input_dim
@@ -677,19 +686,28 @@ def _attribute_chunk_for_ig(
             covariates=chunk_covariates,
             chrom_ids=chrom_ids,
         )
-    elif resolved_ig_mode is ResolvedIGMode.CONTENT:
+    elif resolved_ig_mode in (ResolvedIGMode.CONTENT, ResolvedIGMode.DOSAGE):
         if 'content_features' not in chunk or 'absolute_position_features' not in chunk:
             raise ValueError(
-                "content IG mode requires chunk['content_features'] and "
+                f"{resolved_ig_mode.value} IG mode requires chunk['content_features'] and "
                 "chunk['absolute_position_features']"
             )
         content_features = chunk['content_features'].unsqueeze(0).to(device)
         absolute_position_features = chunk['absolute_position_features'].unsqueeze(0).to(device)
+        if resolved_ig_mode is ResolvedIGMode.DOSAGE:
+            # Counterfactual: same variant with dosage 0 and every annotation
+            # column at its observed value. Column 0 of the content tensor is
+            # dosage, so only that column moves along the IG path.
+            baseline = content_features.detach().clone()
+            baseline[..., 0] = 0
+        else:
+            baseline = None
         attributions = explainer.attribute(
             None,
             positions,
             gene_ids,
             mask,
+            baseline=baseline,
             covariates=chunk_covariates,
             chrom_ids=chrom_ids,
             content_features=content_features,

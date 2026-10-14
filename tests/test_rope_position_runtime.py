@@ -11,6 +11,8 @@ import torch.nn as nn
 
 from src.encoding.levels import AnnotationLevel
 from src.encoding.position_config import (
+    DEFAULT_ROPE_BASE,
+    DEFAULT_ROPE_COORDINATE_SCALE,
     AbsolutePositionEncoding,
     ChromosomeEncoding,
     CrossChromosomePolicy,
@@ -862,7 +864,7 @@ def test_rope_runtime_api_has_no_value_tensor_argument():
     assert "value" not in parameter_names
 
 
-def test_benchmark_architecture_derives_four_rotary_pairs_at_bp_scale():
+def test_historical_architecture_derives_four_rotary_pairs_from_defaults():
     # Historical selected architecture: latent_dim=32, num_heads=4. The head
     # dimension (and so the number of rotary pairs) follows from the model, not
     # from any RoPE-specific constant.
@@ -892,8 +894,8 @@ def test_benchmark_architecture_derives_four_rotary_pairs_at_bp_scale():
     )
     runtime = model.attention.attention_layers[0]._relative_position_runtime
 
-    assert config.relative.rope_coordinate_scale == 1.0
-    assert config.relative.rope_base == 10000.0
+    assert config.relative.rope_coordinate_scale == 1.5
+    assert config.relative.rope_base == 12000.0
     assert isinstance(runtime, RopeRelativePositionRuntime)
     assert runtime.head_dim == 8
     num_pairs = runtime.head_dim // 2
@@ -908,8 +910,99 @@ def test_benchmark_architecture_derives_four_rotary_pairs_at_bp_scale():
         math.atan2(rotated[0, 0, pair, 2 * pair + 1].item(), rotated[0, 0, pair, 2 * pair].item())
         for pair in range(num_pairs)
     ]
-    expected_frequencies = [1.0, 0.1, 0.01, 0.001]
+    # One position unit is 1.5 bp, so the angle at 1 bp is the angular
+    # frequency in rad/bp: (1 / 1.5) * 12000 ** (-pair / 4).
+    expected_frequencies = [0.6666666667, 0.0636961861, 0.0060858062, 0.0005814640]
     for observed, expected in zip(angles, expected_frequencies, strict=True):
-        assert math.isclose(observed, expected, rel_tol=1e-12)
-    periods = [2 * math.pi / frequency for frequency in expected_frequencies]
-    assert [round(period, 3) for period in periods] == [6.283, 62.832, 628.319, 6283.185]
+        assert math.isclose(observed, expected, rel_tol=0, abs_tol=1e-10)
+    periods = [2 * math.pi / frequency for frequency in angles]
+    assert [round(period, 3) for period in periods] == [9.425, 98.643, 1032.433, 10805.803]
+    # Adjacent pairs differ by 12000 ** (1 / 4), not by an exact integer.
+    for faster, slower in zip(angles, angles[1:], strict=False):
+        assert math.isclose(faster / slower, 12000.0**0.25, rel_tol=1e-9)
+
+
+# A rotated score that keeps at least this fraction of the zero-distance score
+# counts as indistinguishable from distance zero. With equal per-pair
+# contributions the normalised score is the mean of cos(phase) over pairs, so
+# 0.95 can only be reached when every pair is simultaneously back within about
+# 37 degrees of its zero-distance phase, i.e. a joint recurrence of the whole
+# spectrum rather than one slow pair completing a cycle.
+_ROPE_RECURRENCE_SIMILARITY_THRESHOLD = 0.95
+_ROPE_RECURRENCE_MULTIPLES = 8
+
+
+def _rope_recurrence_diagnostics(
+    runtime: RopeRelativePositionRuntime, num_multiples: int = _ROPE_RECURRENCE_MULTIPLES
+) -> dict:
+    """Report the strongest non-zero recurrence of a RoPE runtime's spectrum.
+
+    Frequencies and periods are derived from the runtime parameters only. The
+    candidate distances are the first ``num_multiples`` integer multiples of
+    the slowest period, rounded to whole base pairs. Scores come from
+    ``runtime.adjust_attention_scores`` with Q = K = all ones, so every rotary
+    pair contributes equally and none can be ignored.
+    """
+    frequencies = [
+        runtime.rope_base ** (-pair_start / runtime.head_dim) / runtime.coordinate_scale
+        for pair_start in range(0, runtime.head_dim, 2)
+    ]
+    periods = [2 * math.pi / frequency for frequency in frequencies]
+    candidates = [round(multiple * periods[-1]) for multiple in range(1, num_multiples + 1)]
+
+    # Token 0 sits at 0 bp; row 0 of the score matrix then holds the zero-distance
+    # reference (column 0) and the score at every candidate distance.
+    positions = torch.tensor([[0, *candidates]], dtype=torch.long)
+    values = torch.ones(1, 1, positions.shape[1], runtime.head_dim, dtype=torch.float64)
+    scores = runtime.adjust_attention_scores(
+        _base_scores(values, values),
+        query=values,
+        key=values,
+        positions=positions,
+        chrom_ids=torch.zeros_like(positions),
+        position_bias=None,
+    )[0, 0, 0]
+    similarities = (scores[1:] / scores[0]).tolist()
+    strongest = max(range(len(candidates)), key=similarities.__getitem__)
+    return {
+        "frequencies": frequencies,
+        "periods": periods,
+        "candidates": candidates,
+        "similarities": similarities,
+        "strongest_similarity": similarities[strongest],
+        "strongest_distance": candidates[strongest],
+    }
+
+
+@pytest.mark.parametrize(
+    ("coordinate_scale", "rope_base", "expect_aliasing"),
+    [
+        pytest.param(None, None, False, id="current-defaults"),
+        # Historical 1 bp / base 10000 spectrum: the pair periods are exact
+        # powers of ten apart, so all pairs realign together near each
+        # multiple of the slowest period.
+        pytest.param(1.0, 10000.0, True, id="harmonic-scale1-base10000"),
+    ],
+)
+def test_rope_spectrum_has_no_joint_recurrence_near_zero_distance(
+    coordinate_scale, rope_base, expect_aliasing
+):
+    if coordinate_scale is None:
+        coordinate_scale = DEFAULT_ROPE_COORDINATE_SCALE
+        rope_base = DEFAULT_ROPE_BASE
+    # head_dim=8 is the historical latent_dim=32 / num_heads=4 architecture.
+    runtime = RopeRelativePositionRuntime(
+        head_dim=8,
+        coordinate_scale=coordinate_scale,
+        rope_base=rope_base,
+        cross_chromosome_policy=CrossChromosomePolicy.MASK,
+    )
+
+    report = _rope_recurrence_diagnostics(runtime)
+    aliased = report["strongest_similarity"] >= _ROPE_RECURRENCE_SIMILARITY_THRESHOLD
+
+    assert aliased is expect_aliasing, (
+        f"frequencies={report['frequencies']}, periods={report['periods']}, "
+        f"strongest recurrence {report['strongest_similarity']:.4f} "
+        f"at {report['strongest_distance']} bp"
+    )

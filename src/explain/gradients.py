@@ -179,6 +179,12 @@ class IntegratedGradientsExplainer:
 
         if variant_features is not None:
             raise ValueError("variant_features must be None in content IG mode")
+        if self.ig_mode is ResolvedIGMode.DOSAGE and baseline is None:
+            # The default zero baseline would also remove the annotations,
+            # which is ordinary content IG. Dosage IG must be explicit.
+            raise ValueError(
+                "dosage IG mode requires an explicit baseline with only the dosage column zeroed"
+            )
         if content_features is None and absolute_position_features is None:
             raise ValueError(
                 "content_features and absolute_position_features are required "
@@ -651,6 +657,8 @@ def _coerce_resolved_ig_mode(ig_mode: ResolvedIGMode | str) -> ResolvedIGMode:
     if isinstance(ig_mode, str):
         if ig_mode == ResolvedIGMode.CONTENT.value:
             return ResolvedIGMode.CONTENT
+        if ig_mode == ResolvedIGMode.DOSAGE.value:
+            return ResolvedIGMode.DOSAGE
         if ig_mode == ResolvedIGMode.LEGACY.value:
             return ResolvedIGMode.LEGACY
         if ig_mode == "auto":
@@ -658,7 +666,7 @@ def _coerce_resolved_ig_mode(ig_mode: ResolvedIGMode | str) -> ResolvedIGMode:
                 "ig_mode='auto' must be resolved from configuration before "
                 "constructing IntegratedGradientsExplainer"
             )
-    raise ValueError("ig_mode must be resolved to 'content' or 'legacy'")
+    raise ValueError("ig_mode must be resolved to 'content', 'dosage' or 'legacy'")
 
 
 def _prepare_baseline(

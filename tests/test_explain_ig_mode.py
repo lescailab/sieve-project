@@ -117,7 +117,7 @@ def test_parse_args_default_ig_mode_is_auto(base_argv):
     assert parse_with(base_argv).ig_mode == "auto"
 
 
-@pytest.mark.parametrize("mode", ["auto", "content", "legacy"])
+@pytest.mark.parametrize("mode", ["auto", "content", "dosage", "legacy"])
 def test_parse_args_accepts_ig_modes(base_argv, mode):
     assert parse_with(base_argv, "--ig-mode", mode).ig_mode == mode
 

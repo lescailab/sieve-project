@@ -441,9 +441,9 @@ def test_rope_validates_latent_head_geometry():
     )
 
     assert config.relative.encoding is RelativePositionEncoding.ROPE
-    # RoPE coordinates default to 1 bp; rope_base keeps the standard 10000.
-    assert config.relative.rope_coordinate_scale == 1.0
-    assert config.relative.rope_base == 10000.0
+    # RoPE defaults to a 1.5 bp coordinate scale with rope_base 12000.
+    assert config.relative.rope_coordinate_scale == 1.5
+    assert config.relative.rope_base == 12000.0
     assert config.chromosome.cross_chromosome_parameter == "learned_bias"
 
 

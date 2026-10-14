@@ -20,6 +20,7 @@ class RequestedIGMode(str, Enum):
 
     AUTO = "auto"
     CONTENT = "content"
+    DOSAGE = "dosage"
     LEGACY = "legacy"
 
 
@@ -54,6 +55,8 @@ def resolve_ig_mode(
             return saved_default
         if mode is RequestedIGMode.CONTENT:
             return ResolvedIGMode.CONTENT
+        if mode is RequestedIGMode.DOSAGE:
+            return ResolvedIGMode.DOSAGE
         if mode is RequestedIGMode.LEGACY:
             return ResolvedIGMode.LEGACY
 
@@ -71,6 +74,15 @@ def resolve_ig_mode(
             stacklevel=2,
         )
         return ResolvedIGMode.CONTENT
+    if mode is RequestedIGMode.DOSAGE:
+        # Dosage IG runs on the same split content tensors as content IG, so
+        # old configs need the same compatibility warning.
+        warnings.warn(
+            _compatibility_warning(config, explicit_content=True),
+            IGModeCompatibilityWarning,
+            stacklevel=2,
+        )
+        return ResolvedIGMode.DOSAGE
     if mode is RequestedIGMode.LEGACY:
         return ResolvedIGMode.LEGACY
 
@@ -84,7 +96,9 @@ def _coerce_requested_mode(requested_mode: RequestedIGMode | str) -> RequestedIG
         try:
             return RequestedIGMode(requested_mode)
         except ValueError as exc:
-            raise ValueError("requested_mode must be one of: auto, content, legacy") from exc
+            raise ValueError(
+                "requested_mode must be one of: auto, content, dosage, legacy"
+            ) from exc
     raise ValueError("requested_mode must be a RequestedIGMode or exact mode string")
 
 

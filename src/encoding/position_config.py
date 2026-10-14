@@ -22,11 +22,16 @@ DEFAULT_SINUSOIDAL_MAX_WAVELENGTH = 10000.0
 DEFAULT_POSITION_BIN_SIZE = 10000
 DEFAULT_NUM_POSITION_BUCKETS = 32
 DEFAULT_MAX_POSITION_DISTANCE = 100000
-# RoPE positions are expressed in base pairs (coordinate scale 1 bp), so the
-# fastest rotary pair advances by one radian per base pair while the standard
-# rope_base of 10000 spreads the slower pairs across longer genomic scales.
-DEFAULT_ROPE_COORDINATE_SCALE = 1.0
-DEFAULT_ROPE_BASE = 10000.0
+# RoPE positions are divided by the coordinate scale (1.5 bp), so the fastest
+# rotary pair advances by 2/3 radian per base pair, and each slower pair is
+# rope_base ** (2 / head_dim) times slower. Scale and base are chosen so the default
+# spectrum is non-harmonic: with head_dim=8 the periods are about 9.4 bp,
+# 98.6 bp, 1.03 kb and 10.8 kb, with a ratio of 12000 ** (1 / 4) ~= 10.47
+# between pairs. The earlier 1 bp / base 10000 setting gave an exact ratio of
+# 10, so every pair returned near its zero-distance phase together (first at
+# about 6.28 kb), which made those distances look like distance zero.
+DEFAULT_ROPE_COORDINATE_SCALE = 1.5
+DEFAULT_ROPE_BASE = 12000.0
 DEFAULT_ALIBI_DISTANCE_FUNCTION = "log1p"
 # Fixed and learned ALiBi share one genomic prior. Distances are measured in
 # base pairs (scale 1 bp), and each head's slope is derived so that, at its
@@ -101,9 +106,15 @@ class AlibiDistanceFunction(str, Enum):
 
 
 class ResolvedIGMode(str, Enum):
-    """Resolved attribution mode for positional inputs."""
+    """Resolved attribution mode for positional inputs.
+
+    ``DOSAGE`` attributes the content tensor against a baseline that zeroes
+    only the dosage column, so annotations stay at their observed values. It
+    is an explicit explanation-time choice and is never a saved default.
+    """
 
     CONTENT = "content"
+    DOSAGE = "dosage"
     LEGACY = "legacy"
 
 
