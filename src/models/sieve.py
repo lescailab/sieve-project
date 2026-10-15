@@ -16,10 +16,23 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
-from .encoder import VariantEncoder
-from .attention import MultiLayerAttention
+from src.encoding.position_config import (
+    AbsolutePositionEncoding,
+    PositionPreset,
+    ResolvedPositionEncodingConfig,
+)
+from src.encoding.position_layout import LearnedBinnedAbsolutePositionLayout
+
 from .aggregation import EfficientGeneAggregator
+from .attention import MultiLayerAttention
 from .classifier import AttentionPoolingClassifier, PhenotypeClassifier
+from .encoder import VariantEncoder
+from .feature_composition import compose_legacy_variant_features_torch
+from .position_runtime import (
+    ObservedAbsolutePositionRuntime,
+    build_absolute_position_runtime,
+    validate_model_runtime_support,
+)
 
 
 class SIEVE(nn.Module):
@@ -96,15 +109,66 @@ class SIEVE(nn.Module):
         num_covariates: int = 0,
         num_chromosomes: int = 0,
         classifier_type: str = 'flatten',
+        position_encoding: ResolvedPositionEncodingConfig | None = None,
+        learned_binned_position_layout: LearnedBinnedAbsolutePositionLayout | None = None,
     ):
         super().__init__()
+
+        if position_encoding is not None:
+            if not isinstance(position_encoding, ResolvedPositionEncodingConfig):
+                raise ValueError("position_encoding must be a ResolvedPositionEncodingConfig.")
+            validate_model_runtime_support(
+                position_encoding,
+                learned_binned_position_layout=learned_binned_position_layout,
+            )
+            if input_dim != position_encoding.input_dim:
+                raise ValueError(
+                    "input_dim must match position_encoding.input_dim when "
+                    "position_encoding is supplied."
+                )
+            resolved_num_chromosomes = position_encoding.chromosome.num_chromosomes
+            if num_chromosomes not in {0, resolved_num_chromosomes}:
+                raise ValueError(
+                    "num_chromosomes must be 0 or match "
+                    "position_encoding.chromosome.num_chromosomes when position_encoding "
+                    "is supplied."
+                )
+        else:
+            if learned_binned_position_layout is not None:
+                raise ValueError(
+                    "learned_binned_position_layout requires position_encoding."
+                )
+            resolved_num_chromosomes = num_chromosomes
 
         self.input_dim = input_dim
         self.num_genes = num_genes
         self.latent_dim = latent_dim
         self.num_covariates = num_covariates
-        self.num_chromosomes = num_chromosomes
+        self.num_chromosomes = resolved_num_chromosomes
         self.classifier_type = classifier_type
+        self.position_encoding = position_encoding
+        if (
+            position_encoding is not None
+            and position_encoding.absolute.encoding is AbsolutePositionEncoding.LEARNED_BINNED
+        ):
+            # SIEVE owns the sole registered learned absolute-position table.
+            # The runtime only computes row IDs and calls this embedding.
+            self.absolute_position_embedding = nn.Embedding(
+                learned_binned_position_layout.num_embeddings,
+                position_encoding.absolute.position_dim,
+            )
+            nn.init.zeros_(self.absolute_position_embedding.weight)
+        else:
+            self.absolute_position_embedding = None
+        self._absolute_position_runtime = (
+            ObservedAbsolutePositionRuntime()
+            if position_encoding is None
+            else build_absolute_position_runtime(
+                position_encoding,
+                learned_binned_position_layout=learned_binned_position_layout,
+                absolute_position_embedding=self.absolute_position_embedding,
+            )
+        )
 
         # 1. Variant encoder
         self.variant_encoder = VariantEncoder(
@@ -122,7 +186,8 @@ class SIEVE(nn.Module):
             dropout=dropout,
             num_position_buckets=num_position_buckets,
             max_distance=max_distance,
-            num_chromosomes=num_chromosomes,
+            num_chromosomes=self.num_chromosomes,
+            position_encoding=position_encoding,
         )
 
         # 3. Gene aggregation
@@ -157,7 +222,7 @@ class SIEVE(nn.Module):
 
     def forward(
         self,
-        variant_features: Tensor,
+        variant_features: Tensor | None,
         positions: Tensor,
         gene_ids: Tensor,
         mask: Optional[Tensor] = None,
@@ -166,14 +231,18 @@ class SIEVE(nn.Module):
         return_intermediate: bool = False,
         return_embeddings: bool = False,
         chrom_ids: Optional[Tensor] = None,
+        *,
+        content_features: Tensor | None = None,
+        absolute_position_features: Tensor | None = None,
     ) -> Tuple[Tensor, Optional[Dict]]:
         """
         Forward pass through SIEVE model.
 
         Parameters
         ----------
-        variant_features : Tensor
-            Variant features, shape (batch, num_variants, input_dim)
+        variant_features : Optional[Tensor]
+            Historical variant features, shape (batch, num_variants, input_dim).
+            Used unchanged when the split tensors are not supplied.
         positions : Tensor
             Genomic positions, shape (batch, num_variants)
         gene_ids : Tensor
@@ -195,6 +264,15 @@ class SIEVE(nn.Module):
             (and the model was constructed with ``num_chromosomes > 0``),
             enables chromosome-aware position bias and chromosome embedding
             in attention. Cross-chromosome attention itself is **not** masked.
+        content_features : Optional[Tensor]
+            Split content features. When supplied together with
+            ``absolute_position_features``, these are the primary legacy
+            execution input and are composed into the unchanged historical
+            VariantEncoder width.
+        absolute_position_features : Optional[Tensor]
+            Split historical absolute-position features. Must be supplied
+            together with ``content_features``. For L0 this tensor has zero
+            final-dimension width.
 
         Returns
         -------
@@ -211,7 +289,19 @@ class SIEVE(nn.Module):
         intermediates = {} if (return_attention or return_intermediate or return_embeddings) else None
 
         # 1. Encode variants
-        variant_embeddings = self.variant_encoder(variant_features)
+        # Dataset batches now provide split tensors. Compose them immediately
+        # before VariantEncoder so the split path is primary while old callers
+        # and explanation paths can still use historical variant_features.
+        # Historical checkpoints remain compatible because model state is unchanged.
+        encoder_input = self._resolve_variant_encoder_input(
+            variant_features,
+            positions=positions,
+            chrom_ids=chrom_ids,
+            mask=mask,
+            content_features=content_features,
+            absolute_position_features=absolute_position_features,
+        )
+        variant_embeddings = self.variant_encoder(encoder_input)
         if return_intermediate or return_embeddings:
             intermediates['variant_embeddings'] = variant_embeddings
 
@@ -271,19 +361,23 @@ class SIEVE(nn.Module):
 
     def get_attention_patterns(
         self,
-        variant_features: Tensor,
+        variant_features: Tensor | None,
         positions: Tensor,
         gene_ids: Tensor,
         mask: Optional[Tensor] = None,
         chrom_ids: Optional[Tensor] = None,
+        *,
+        content_features: Tensor | None = None,
+        absolute_position_features: Tensor | None = None,
     ) -> List[Tensor]:
         """
         Extract attention patterns for explainability.
 
         Parameters
         ----------
-        variant_features : Tensor
-            Variant features, shape (batch, num_variants, input_dim)
+        variant_features : Optional[Tensor]
+            Historical variant features, shape (batch, num_variants, input_dim).
+            Used as the fallback when split tensors are absent.
         positions : Tensor
             Genomic positions, shape (batch, num_variants)
         gene_ids : Tensor
@@ -294,6 +388,10 @@ class SIEVE(nn.Module):
             Chromosome indices, shape (batch, num_variants). Enables
             chromosome-aware attention bias when the model was constructed
             with ``num_chromosomes > 0``.
+        content_features, absolute_position_features : Optional[Tensor]
+            Complete split feature pair. When both are supplied, attention is
+            extracted after composing the unchanged historical VariantEncoder
+            input width. Supplying only one split tensor raises ``ValueError``.
 
         Returns
         -------
@@ -309,8 +407,67 @@ class SIEVE(nn.Module):
                 mask,
                 return_attention=True,
                 chrom_ids=chrom_ids,
+                content_features=content_features,
+                absolute_position_features=absolute_position_features,
             )
             return intermediates['attention_weights']
+
+    def _resolve_variant_encoder_input(
+        self,
+        variant_features: Tensor | None,
+        *,
+        positions: Tensor,
+        chrom_ids: Tensor | None,
+        mask: Tensor | None,
+        content_features: Tensor | None,
+        absolute_position_features: Tensor | None,
+    ) -> Tensor:
+        """Resolve the tensor that is fed to VariantEncoder."""
+        has_content = content_features is not None
+        has_position = absolute_position_features is not None
+
+        if has_content != has_position:
+            raise ValueError(
+                "content_features and absolute_position_features must be supplied "
+                "together."
+            )
+
+        if has_content and has_position:
+            resolved_absolute_position_features = self._absolute_position_runtime.resolve(
+                absolute_position_features,
+                positions=positions,
+                chrom_ids=chrom_ids,
+                mask=mask,
+                reference=content_features,
+            )
+            composed = compose_legacy_variant_features_torch(
+                content_features,
+                resolved_absolute_position_features,
+            )
+            if composed.shape[-1] != self.input_dim:
+                raise ValueError(
+                    "Composed legacy VariantEncoder input width does not match "
+                    f"model input_dim: got {composed.shape[-1]}, expected "
+                    f"{self.input_dim}"
+            )
+            return composed
+
+        if (
+            self.position_encoding is not None
+            and self.position_encoding.preset is PositionPreset.CUSTOM
+        ):
+            raise ValueError(
+                "custom positional execution requires content_features and "
+                "absolute_position_features."
+            )
+
+        if variant_features is None:
+            raise ValueError(
+                "variant_features is required when content_features and "
+                "absolute_position_features are not supplied."
+            )
+
+        return variant_features
 
 
 def create_sieve_model(

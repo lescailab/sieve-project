@@ -13,13 +13,18 @@ Author: Francesco Lescai
 """
 
 import argparse
+import copy
 from datetime import datetime, timezone
+import hashlib
+import json
 import sys
 import time
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Literal, Optional
 
 import numpy as np
+from sklearn.model_selection import train_test_split
 import torch
 from torch.optim import Adam
 from torch.optim.lr_scheduler import ReduceLROnPlateau
@@ -35,13 +40,34 @@ from src.data.covariates import (
     compute_file_sha256,
     load_pc_map,
 )
+from src.data.dataset_provenance import build_dataset_provenance
 from src.encoding import (
     AnnotationLevel,
     ChunkedVariantDataset,
     collate_chunks,
     get_feature_dimension
 )
+from src.encoding.position_config import (
+    AbsolutePositionEncoding,
+    AlibiDistanceFunction,
+    ChromosomeEncoding,
+    CrossChromosomePolicy,
+    PositionEncodingRequest,
+    PositionPreset,
+    RelativePositionEncoding,
+    ResolvedPositionEncodingConfig,
+    resolve_position_encoding_config,
+)
+from src.encoding.position_layout import (
+    LearnedBinnedAbsolutePositionLayout,
+    build_learned_binned_absolute_position_layout,
+    learned_binned_layout_from_position_encoding_dict,
+)
 from src.models import SIEVE, ChunkedSIEVEModel
+from src.models.position_runtime import (
+    validate_attention_runtime_support,
+    validate_model_runtime_support,
+)
 from src.training import (
     SIEVELoss,
     Trainer,
@@ -49,10 +75,26 @@ from src.training import (
     print_fold_stats,
 )
 from src.training.loss import compute_class_weights
+from src.training.split_plan import (
+    build_cv_split_plan,
+    build_single_split_plan,
+    build_split_plan_metadata,
+    cv_folds_from_plan,
+    load_split_plan,
+    ordered_sample_ids,
+    single_split_from_plan,
+    validate_split_plan,
+    write_or_validate_existing_split_plan,
+)
 
 
-def parse_args():
-    """Parse command-line arguments."""
+def _enum_choices(enum_cls) -> list[str]:
+    """Return argparse choices from a string-valued Enum."""
+    return [member.value for member in enum_cls]
+
+
+def build_arg_parser() -> argparse.ArgumentParser:
+    """Build the training command-line parser."""
     parser = argparse.ArgumentParser(
         description='Train SIEVE model on VCF data',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
@@ -102,11 +144,60 @@ def parse_args():
     parser.add_argument('--hidden-dim', type=int, default=128,
                         help='Hidden dimension in encoder')
 
+    # Position encoding arguments
+    parser.add_argument('--position-preset', type=str, default=PositionPreset.LEGACY.value,
+                        choices=_enum_choices(PositionPreset),
+                        help='Position encoding preset')
+    parser.add_argument('--absolute-position-encoding', type=str, default=None,
+                        choices=_enum_choices(AbsolutePositionEncoding),
+                        help='Absolute position encoding strategy')
+    parser.add_argument('--relative-position-encoding', type=str, default=None,
+                        choices=_enum_choices(RelativePositionEncoding),
+                        help='Relative position encoding strategy')
+    parser.add_argument('--chromosome-encoding', type=str, default=None,
+                        choices=_enum_choices(ChromosomeEncoding),
+                        help='Chromosome encoding strategy')
+    parser.add_argument('--cross-chromosome-policy', type=str, default=None,
+                        choices=_enum_choices(CrossChromosomePolicy),
+                        help='Cross-chromosome attention policy')
+    parser.add_argument('--position-dim', type=int, default=None,
+                        help='Absolute position embedding dimension')
+    parser.add_argument('--sinusoidal-coordinate-scale', type=float, default=None,
+                        help='Coordinate scale for sinusoidal absolute position encoding')
+    parser.add_argument('--sinusoidal-max-wavelength', type=float, default=None,
+                        help='Maximum wavelength for sinusoidal absolute position encoding')
+    parser.add_argument('--position-bin-size', type=int, default=None,
+                        help='Bin size in base pairs for learned binned absolute position encoding')
+    parser.add_argument('--num-position-buckets', type=int, default=None,
+                        help='Number of ordinary T5-style relative position buckets')
+    parser.add_argument('--max-position-distance', type=int, default=None,
+                        help='Maximum distance for T5-style relative position bucketing')
+    parser.add_argument('--rope-coordinate-scale', type=float, default=None,
+                        help='Coordinate scale for RoPE relative position encoding')
+    parser.add_argument('--rope-base', type=float, default=None,
+                        help='Base wavelength for RoPE relative position encoding')
+    parser.add_argument('--alibi-distance-function', type=str, default=None,
+                        choices=_enum_choices(AlibiDistanceFunction),
+                        help='Distance transform for ALiBi relative position encoding')
+    parser.add_argument('--alibi-distance-scale', type=float, default=None,
+                        help='Distance scale for ALiBi relative position encoding')
+    parser.add_argument('--alibi-target-weight-ratio', type=float, default=None,
+                        help='Genomic ALiBi target ratio r in (0, 1): at each head\'s '
+                             'characteristic distance the distance term multiplies the '
+                             'unnormalised attention weight by r (experimental; '
+                             'resolver default 0.75)')
+
     # Cross-validation arguments
     parser.add_argument('--cv', '--cv-folds', dest='cv', type=int, default=None,
                         help='Number of CV folds (if None, use single train/val split)')
     parser.add_argument('--val-split', type=float, default=0.2,
                         help='Validation split ratio (if not using CV)')
+    parser.add_argument(
+        '--split-plan',
+        type=str,
+        default=None,
+        help='Path to a saved split_plan.yaml whose exact sample indices should be replayed',
+    )
 
     # Output arguments
     parser.add_argument('--output-dir', type=str, default='outputs',
@@ -182,7 +273,355 @@ def parse_args():
         ),
     )
 
-    return parser.parse_args()
+    return parser
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """Parse command-line arguments."""
+    return build_arg_parser().parse_args(argv)
+
+
+def build_position_encoding_request(
+    args: argparse.Namespace,
+) -> PositionEncodingRequest:
+    """Convert parsed CLI strings into a pure position-encoding request."""
+    return PositionEncodingRequest(
+        preset=PositionPreset(args.position_preset),
+        absolute_position_encoding=(
+            None
+            if args.absolute_position_encoding is None
+            else AbsolutePositionEncoding(args.absolute_position_encoding)
+        ),
+        relative_position_encoding=(
+            None
+            if args.relative_position_encoding is None
+            else RelativePositionEncoding(args.relative_position_encoding)
+        ),
+        chromosome_encoding=(
+            None
+            if args.chromosome_encoding is None
+            else ChromosomeEncoding(args.chromosome_encoding)
+        ),
+        cross_chromosome_policy=(
+            None
+            if args.cross_chromosome_policy is None
+            else CrossChromosomePolicy(args.cross_chromosome_policy)
+        ),
+        position_dim=args.position_dim,
+        sinusoidal_coordinate_scale=args.sinusoidal_coordinate_scale,
+        sinusoidal_max_wavelength=args.sinusoidal_max_wavelength,
+        position_bin_size=args.position_bin_size,
+        num_position_buckets=args.num_position_buckets,
+        max_position_distance=args.max_position_distance,
+        rope_coordinate_scale=args.rope_coordinate_scale,
+        rope_base=args.rope_base,
+        alibi_distance_function=(
+            None
+            if args.alibi_distance_function is None
+            else AlibiDistanceFunction(args.alibi_distance_function)
+        ),
+        alibi_distance_scale=args.alibi_distance_scale,
+        alibi_target_weight_ratio=args.alibi_target_weight_ratio,
+    )
+
+
+def prepare_training_position_encoding(
+    args: argparse.Namespace,
+    annotation_level: AnnotationLevel,
+    *,
+    num_chromosomes: int,
+) -> ResolvedPositionEncodingConfig:
+    """Resolve and validate the position-encoding configuration used for training."""
+    request = build_position_encoding_request(args)
+    resolved = resolve_position_encoding_config(
+        request,
+        annotation_level,
+        latent_dim=args.latent_dim,
+        num_heads=args.num_heads,
+        num_chromosomes=num_chromosomes,
+    )
+    validate_attention_runtime_support(resolved)
+
+    if request.preset is PositionPreset.LEGACY:
+        historical_input_dim = get_feature_dimension(annotation_level)
+        if resolved.input_dim != historical_input_dim:
+            raise ValueError(
+                "legacy position configuration resolved input_dim "
+                f"{resolved.input_dim}, expected historical input_dim {historical_input_dim}"
+            )
+
+    return resolved
+
+
+def _training_learned_binned_layout_from_metadata(
+    resolved_position_encoding: ResolvedPositionEncodingConfig,
+    position_encoding_metadata: Mapping[str, object],
+) -> LearnedBinnedAbsolutePositionLayout | None:
+    """Parse the exact serialized learned-bin layout used for training.
+
+    ``serialize_position_encoding_for_training()`` is the only place that
+    builds learned-binned layout metadata from genome/chromosome inputs. Model
+    construction consumes that serialized architecture contract instead of
+    rebuilding a parallel layout that could drift from saved config/checkpoint
+    metadata.
+    """
+    if (
+        resolved_position_encoding.absolute.encoding
+        is not AbsolutePositionEncoding.LEARNED_BINNED
+    ):
+        return None
+    if not isinstance(position_encoding_metadata, Mapping):
+        raise ValueError("position_encoding metadata must be a mapping")
+    chromosome = position_encoding_metadata.get("chromosome")
+    if not isinstance(chromosome, Mapping):
+        raise ValueError("position_encoding.chromosome must be a mapping")
+    chromosome_mapping = chromosome.get("mapping")
+    if not isinstance(chromosome_mapping, Mapping):
+        raise ValueError("position_encoding.chromosome.mapping must be a mapping")
+    layout = learned_binned_layout_from_position_encoding_dict(
+        position_encoding_metadata,
+        chromosome_mapping=chromosome_mapping,
+    )
+    validate_model_runtime_support(
+        resolved_position_encoding,
+        learned_binned_position_layout=layout,
+    )
+    return layout
+
+
+def _canonical_index_items(
+    mapping: Mapping[str, int],
+    *,
+    mapping_name: str,
+) -> list[tuple[str, int]]:
+    """Validate an index mapping and return deterministic name-sorted items."""
+    if not isinstance(mapping, Mapping):
+        raise ValueError(f"{mapping_name} must implement Mapping")
+
+    ids = []
+    items = []
+    for name, idx in mapping.items():
+        if not isinstance(name, str):
+            raise ValueError(f"{mapping_name} contains a non-string name: {name!r}")
+        if isinstance(idx, bool):
+            raise ValueError(f"{mapping_name}[{name!r}] must be an integer ID, not bool")
+        if not isinstance(idx, int):
+            raise ValueError(f"{mapping_name}[{name!r}] must be an integer ID")
+        if idx < 0:
+            raise ValueError(f"{mapping_name}[{name!r}] must be non-negative")
+        ids.append(idx)
+        items.append((name, idx))
+
+    if len(set(ids)) != len(ids):
+        raise ValueError(f"{mapping_name} must have unique integer IDs")
+    expected_ids = set(range(len(items)))
+    if set(ids) != expected_ids:
+        raise ValueError(
+            f"{mapping_name} IDs must be contiguous and exactly range(len(mapping))"
+        )
+
+    return sorted(items, key=lambda item: item[0])
+
+
+def mapping_sha256(
+    mapping: Mapping[str, int],
+    *,
+    mapping_name: str = "mapping",
+) -> str:
+    """Return a stable SHA-256 checksum for a validated index mapping."""
+    canonical_items = _canonical_index_items(mapping, mapping_name=mapping_name)
+    payload = [{"name": name, "id": idx} for name, idx in canonical_items]
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def build_chromosome_id_to_name(
+    chrom_index: Mapping[str, int],
+) -> dict[str, str]:
+    """Invert chromosome name-to-ID mapping for serialized model-row metadata."""
+    canonical_items = _canonical_index_items(
+        chrom_index,
+        mapping_name="chrom_index",
+    )
+    return {
+        str(idx): name
+        for name, idx in sorted(canonical_items, key=lambda item: item[1])
+    }
+
+
+def build_dataset_mappings_payload(
+    gene_index: Mapping[str, int],
+    chrom_index: Mapping[str, int],
+) -> dict[str, object]:
+    """Build the complete deterministic dataset mapping sidecar payload."""
+    gene_items = _canonical_index_items(gene_index, mapping_name="gene_index")
+    chrom_items = _canonical_index_items(chrom_index, mapping_name="chrom_index")
+    return {
+        "schema_version": 1,
+        "gene_index": {name: idx for name, idx in gene_items},
+        "chrom_index": {
+            name: idx for name, idx in sorted(chrom_items, key=lambda item: item[1])
+        },
+        "chromosome_id_to_name": {
+            str(idx): name
+            for name, idx in sorted(chrom_items, key=lambda item: item[1])
+        },
+        "gene_mapping_sha256": mapping_sha256(
+            gene_index,
+            mapping_name="gene_index",
+        ),
+        "chromosome_mapping_sha256": mapping_sha256(
+            chrom_index,
+            mapping_name="chrom_index",
+        ),
+    }
+
+
+def write_dataset_mappings_artifact(
+    output_dir: Path,
+    gene_index: Mapping[str, int],
+    chrom_index: Mapping[str, int],
+) -> dict[str, object]:
+    """Write dataset_mappings.json and return lightweight identity metadata."""
+    payload = build_dataset_mappings_payload(gene_index, chrom_index)
+    artifact_path = output_dir / "dataset_mappings.json"
+    with open(artifact_path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, ensure_ascii=False, indent=2)
+        handle.write("\n")
+
+    return {
+        "gene_mapping_sha256": payload["gene_mapping_sha256"],
+        "chromosome_mapping_sha256": payload["chromosome_mapping_sha256"],
+        "mappings_artifact": "dataset_mappings.json",
+        "mappings_artifact_base": "experiment_root",
+    }
+
+
+def serialize_position_encoding_for_training(
+    resolved_position_encoding: ResolvedPositionEncodingConfig,
+    chrom_index: Mapping[str, int],
+    *,
+    genome_build: str,
+) -> dict[str, object]:
+    """Serialize resolved position config with chromosome row mapping attached."""
+    position_encoding = copy.deepcopy(resolved_position_encoding.to_dict())
+    chromosome_mapping = build_chromosome_id_to_name(chrom_index)
+    resolved_num_chromosomes = resolved_position_encoding.chromosome.num_chromosomes
+    if len(chromosome_mapping) != resolved_num_chromosomes:
+        raise ValueError(
+            "chrom_index cardinality must match resolved chromosome count "
+            f"({len(chromosome_mapping)} != {resolved_num_chromosomes})"
+        )
+    chromosome_config = position_encoding.setdefault("chromosome", {})
+    chromosome_config["mapping"] = chromosome_mapping
+    if (
+        resolved_position_encoding.absolute.encoding
+        is AbsolutePositionEncoding.LEARNED_BINNED
+    ):
+        bin_size_bp = resolved_position_encoding.absolute.bin_size_bp
+        if bin_size_bp is None:
+            raise ValueError("learned_binned absolute position requires bin_size_bp")
+        layout = build_learned_binned_absolute_position_layout(
+            genome_build=genome_build,
+            chromosome_mapping=chromosome_mapping,
+            bin_size_bp=bin_size_bp,
+        )
+        absolute_config = position_encoding.setdefault("absolute", {})
+        absolute_config["binning"] = layout.to_dict()
+    return position_encoding
+
+
+def build_position_encoding_execution_metadata(
+    *,
+    resolved_position_encoding: ResolvedPositionEncodingConfig,
+    training_mode: Literal["cv", "single_split"],
+) -> dict[str, object]:
+    """Describe the resolved position configuration applied to new training runs."""
+    if training_mode not in {"cv", "single_split"}:
+        raise ValueError(f"unsupported training_mode: {training_mode!r}")
+
+    relative = resolved_position_encoding.relative
+    chromosome = resolved_position_encoding.chromosome
+    position_bias_rows = (
+        None
+        if relative.encoding is RelativePositionEncoding.NONE
+        else relative.total_bias_rows
+    )
+    return {
+        "schema_version": 2,
+        "source": "resolved_position_encoding_applied_to_model",
+        "resolved_config_applied_to_model": True,
+        "training_mode": training_mode,
+        "preset": resolved_position_encoding.preset.value,
+        "absolute_position_encoding": resolved_position_encoding.absolute.encoding.value,
+        "absolute_position_dim": resolved_position_encoding.absolute.position_dim or 0,
+        "relative_position_encoding": relative.encoding.value,
+        "position_bias_rows": position_bias_rows,
+        "chromosome_encoding": chromosome.encoding.value,
+        "chromosome_embedding_executed": chromosome.encoding is ChromosomeEncoding.LEARNED,
+        "cross_chromosome_policy": chromosome.cross_chromosome_policy.value,
+        "cross_chromosome_mask_executed": (
+            chromosome.cross_chromosome_policy is CrossChromosomePolicy.MASK
+        ),
+        "requires_chrom_ids": chromosome.requires_chrom_ids,
+        "chrom_ids_passed_to_attention": True,
+        "model_num_chromosomes": chromosome.num_chromosomes,
+        "input_dim": resolved_position_encoding.input_dim,
+        "content_dim": resolved_position_encoding.content_dim,
+    }
+
+
+def build_training_run_metadata(
+    *,
+    input_dim: int,
+    num_genes: int,
+    num_chromosomes: int,
+    genome_build: str,
+    resolved_position_encoding: ResolvedPositionEncodingConfig,
+    chrom_index: Mapping[str, int],
+    gene_mapping_sha256: str,
+    chromosome_mapping_sha256: str,
+    training_mode: Literal["cv", "single_split"],
+) -> dict[str, object]:
+    """Build lightweight run metadata for configs and checkpoints."""
+    if input_dim != resolved_position_encoding.input_dim:
+        raise ValueError(
+            "input_dim must match resolved_position_encoding.input_dim before serialization"
+        )
+    if num_chromosomes != resolved_position_encoding.chromosome.num_chromosomes:
+        raise ValueError(
+            "num_chromosomes must match "
+            "resolved_position_encoding.chromosome.num_chromosomes before serialization"
+        )
+    return {
+        "config_schema_version": 2,
+        "metadata_schema_version": 1,
+        "position_encoding_schema_version": resolved_position_encoding.schema_version,
+        "input_dim": input_dim,
+        "content_dim": resolved_position_encoding.content_dim,
+        "num_genes": num_genes,
+        "num_chromosomes": num_chromosomes,
+        "position_encoding": serialize_position_encoding_for_training(
+            resolved_position_encoding,
+            chrom_index,
+            genome_build=genome_build,
+        ),
+        "dataset_identity": {
+            "genome_build": genome_build,
+            "gene_mapping_sha256": gene_mapping_sha256,
+            "chromosome_mapping_sha256": chromosome_mapping_sha256,
+            "mappings_artifact": "dataset_mappings.json",
+            "mappings_artifact_base": "experiment_root",
+        },
+        "position_encoding_execution": build_position_encoding_execution_metadata(
+            resolved_position_encoding=resolved_position_encoding,
+            training_mode=training_mode,
+        ),
+    }
 
 
 def set_seed(seed: int):
@@ -205,6 +644,8 @@ def create_model(
     num_covariates: int = 0,
     num_chromosomes: int = 0,
     classifier_type: str = 'flatten',
+    position_encoding: ResolvedPositionEncodingConfig | None = None,
+    learned_binned_position_layout: LearnedBinnedAbsolutePositionLayout | None = None,
 ) -> ChunkedSIEVEModel:
     """
     Create Chunked SIEVE model for whole-genome processing.
@@ -223,6 +664,8 @@ def create_model(
         num_covariates=num_covariates,
         num_chromosomes=num_chromosomes,
         classifier_type=classifier_type,
+        position_encoding=position_encoding,
+        learned_binned_position_layout=learned_binned_position_layout,
     )
 
     # Wrap in chunked model for whole-genome coverage
@@ -235,10 +678,37 @@ def create_model(
     return model
 
 
+def create_training_model(
+    *,
+    args: argparse.Namespace,
+    resolved_position_encoding: ResolvedPositionEncodingConfig,
+    num_genes: int,
+    num_chromosomes: int,
+    num_covariates: int,
+    learned_binned_position_layout: LearnedBinnedAbsolutePositionLayout | None = None,
+) -> ChunkedSIEVEModel:
+    """Create the new-schema training model from the resolved positional config."""
+    return create_model(
+        input_dim=resolved_position_encoding.input_dim,
+        num_genes=num_genes,
+        latent_dim=args.latent_dim,
+        num_heads=args.num_heads,
+        num_attention_layers=args.num_attention_layers,
+        hidden_dim=args.hidden_dim,
+        aggregation_method=args.aggregation_method,
+        num_covariates=num_covariates,
+        num_chromosomes=num_chromosomes,
+        classifier_type=args.classifier_type,
+        position_encoding=resolved_position_encoding,
+        learned_binned_position_layout=learned_binned_position_layout,
+    )
+
+
 def save_fold_config(
     fold_dir: Path,
     fold_idx: int,
     args,
+    run_metadata: dict[str, object] | None = None,
 ) -> None:
     """
     Save fold-specific config.yaml with architecture and training parameters.
@@ -296,6 +766,8 @@ def save_fold_config(
         # Reference to parent config
         'parent_config': '../config.yaml',
     }
+    if run_metadata is not None:
+        fold_config.update(copy.deepcopy(run_metadata))
 
     with open(fold_dir / 'config.yaml', 'w') as f:
         yaml.dump(fold_config, f, default_flow_style=False, sort_keys=False)
@@ -417,6 +889,81 @@ def _resolve_pos_weight(
     return None
 
 
+def prepare_training_split_plan(
+    *,
+    args: argparse.Namespace,
+    output_dir: Path,
+    sample_ids: list[str],
+    labels: np.ndarray,
+) -> tuple[dict[str, object], dict[str, object], dict[str, object] | None]:
+    """Resolve generated/replayed sample splits and persist split-plan metadata."""
+    mode = "cv" if args.cv is not None else "single_split"
+    expected_n_folds = args.cv if mode == "cv" else None
+    experiment_plan_path = output_dir / "split_plan.yaml"
+    input_plan_path = Path(args.split_plan).resolve() if args.split_plan else None
+    input_plan = None
+
+    if input_plan_path is not None:
+        input_plan = validate_split_plan(
+            load_split_plan(input_plan_path),
+            sample_ids=sample_ids,
+            expected_mode=mode,
+            expected_n_folds=expected_n_folds,
+        )
+        requested_plan = copy.deepcopy(input_plan)
+        requested_plan["split_source"] = "replayed"
+        source = "replayed"
+    elif mode == "cv":
+        generated_folds = create_stratified_folds(
+            labels,
+            n_folds=args.cv,
+            random_state=args.seed,
+        )
+        requested_plan = build_cv_split_plan(
+            folds=generated_folds,
+            sample_ids=sample_ids,
+            seed=args.seed,
+            split_source="generated",
+            n_folds=args.cv,
+        )
+        source = "generated"
+    else:
+        indices = np.arange(len(labels))
+        train_idx, val_idx = train_test_split(
+            indices,
+            test_size=args.val_split,
+            stratify=labels,
+            random_state=args.seed,
+        )
+        requested_plan = build_single_split_plan(
+            train_indices=train_idx,
+            val_indices=val_idx,
+            sample_ids=sample_ids,
+            seed=args.seed,
+            split_source="generated",
+        )
+        source = "generated"
+
+    # The split plan validates sample membership only. Labels and args.seed may
+    # differ during null replay because phenotype permutation is the scientific
+    # intervention Phase 12C needs to isolate.
+    experiment_plan = write_or_validate_existing_split_plan(
+        experiment_plan_path,
+        requested_plan,
+        sample_ids=sample_ids,
+        expected_mode=mode,
+        expected_n_folds=expected_n_folds,
+    )
+    metadata = build_split_plan_metadata(
+        source=source,
+        experiment_plan_path=experiment_plan_path,
+        plan=experiment_plan,
+        input_plan_path=input_plan_path,
+        input_plan=input_plan,
+    )
+    return experiment_plan, metadata, input_plan
+
+
 def train_single_fold(
     train_loader,
     val_loader,
@@ -424,6 +971,7 @@ def train_single_fold(
     args,
     checkpoint_dir: Path,
     pos_weight: Optional[torch.Tensor] = None,
+    checkpoint_metadata: dict[str, object] | None = None,
 ) -> Dict[str, float]:
     """Train model on a single fold."""
     # Create optimizer
@@ -453,6 +1001,7 @@ def train_single_fold(
         early_stopping_patience=args.early_stopping,
         gradient_clip_value=args.gradient_clip,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
+        checkpoint_metadata=checkpoint_metadata,
     )
 
     # Train
@@ -523,6 +1072,12 @@ def _run_training(args, output_dir: Path) -> None:
         preprocessed = torch.load(args.preprocessed_data, weights_only=False)
         all_samples = preprocessed['samples']
         metadata = preprocessed.get('metadata', {})
+        # Metadata only: bind this run to the exact dataset bytes and null
+        # lineage before any in-memory sample mutation (e.g. sex map).
+        dataset_provenance = build_dataset_provenance(
+            preprocessed,
+            path=Path(args.preprocessed_data),
+        )
 
         load_time = time.time() - start_time
         print(f"Loaded {len(all_samples)} samples in {load_time:.1f} seconds")
@@ -540,7 +1095,8 @@ def _run_training(args, output_dir: Path) -> None:
                     n_updated += 1
             print(f"  Updated {n_updated}/{len(all_samples)} samples with sex info")
     else:
-        # Load from VCF
+        # Load from VCF; no preprocessed artifact bytes to bind.
+        dataset_provenance = None
         print(f"\nLoading data from {args.vcf}...")
         start_time = time.time()
         all_samples = build_sample_variants(
@@ -577,15 +1133,67 @@ def _run_training(args, output_dir: Path) -> None:
             f"({dataset.num_covariates} vs {num_covariates})."
         )
 
-    # Get dimensions
-    input_dim = get_feature_dimension(annotation_level)
+    sample_ids = ordered_sample_ids(all_samples)
+    labels = np.array([sample.label for sample in all_samples])
+
+    # Get dimensions. New training runs are always explicit new-schema runs, so
+    # the resolved positional configuration is the model-width authority.
+    resolved_position_encoding = prepare_training_position_encoding(
+        args,
+        annotation_level,
+        num_chromosomes=dataset.num_chromosomes,
+    )
+    input_dim = resolved_position_encoding.input_dim
     num_genes = dataset.num_genes
-    print(f"Input dimension: {input_dim}")
+    dataset_identity = write_dataset_mappings_artifact(
+        output_dir,
+        dataset.gene_index,
+        dataset.chrom_index,
+    )
+    training_mode = "cv" if args.cv is not None else "single_split"
+    split_plan, split_plan_metadata, _ = prepare_training_split_plan(
+        args=args,
+        output_dir=output_dir,
+        sample_ids=sample_ids,
+        labels=labels,
+    )
+    run_metadata = build_training_run_metadata(
+        input_dim=input_dim,
+        num_genes=num_genes,
+        num_chromosomes=dataset.num_chromosomes,
+        genome_build=args.genome_build,
+        resolved_position_encoding=resolved_position_encoding,
+        chrom_index=dataset.chrom_index,
+        gene_mapping_sha256=str(dataset_identity["gene_mapping_sha256"]),
+        chromosome_mapping_sha256=str(dataset_identity["chromosome_mapping_sha256"]),
+        training_mode=training_mode,
+    )
+    run_metadata["split_plan"] = split_plan_metadata
+    run_metadata["dataset_provenance"] = dataset_provenance
+    serialized_position_encoding = run_metadata["position_encoding"]
+    learned_binned_position_layout = _training_learned_binned_layout_from_metadata(
+        resolved_position_encoding,
+        serialized_position_encoding,
+    )
+    validate_model_runtime_support(
+        resolved_position_encoding,
+        learned_binned_position_layout=learned_binned_position_layout,
+    )
+    _update_saved_config(config_path, **run_metadata)
+    print(f"Content dimension: {resolved_position_encoding.content_dim}")
+    print(f"Resolved model input dimension: {input_dim}")
     print(f"Number of genes: {num_genes}")
+    print(f"Position encoding preset: {resolved_position_encoding.preset.value}")
+    print(
+        "Position strategies: "
+        f"absolute={resolved_position_encoding.absolute.encoding.value}, "
+        f"relative={resolved_position_encoding.relative.encoding.value}, "
+        f"chromosome={resolved_position_encoding.chromosome.encoding.value}, "
+        f"cross={resolved_position_encoding.chromosome.cross_chromosome_policy.value}"
+    )
     print(f"CRITICAL: Using chunked processing for FULL GENOME coverage (not just chr1/chr2)!")
 
     # Get labels
-    labels = np.array([sample.label for sample in all_samples])
     n_cases = labels.sum()
     n_controls = len(labels) - n_cases
     print(f"Cases: {n_cases}, Controls: {n_controls} ({n_cases/len(labels):.1%} case rate)")
@@ -615,7 +1223,7 @@ def _run_training(args, output_dir: Path) -> None:
         print(f"Running {args.cv}-fold cross-validation")
         print(f"{'='*60}")
 
-        folds = create_stratified_folds(labels, n_folds=args.cv, random_state=args.seed)
+        folds = cv_folds_from_plan(split_plan)
         cv_results = []
 
         for fold_idx, (train_idx, val_idx) in enumerate(folds):
@@ -667,17 +1275,13 @@ def _run_training(args, output_dir: Path) -> None:
             )
 
             # Create chunked model (for whole-genome processing)
-            model = create_model(
-                input_dim=input_dim,
+            model = create_training_model(
+                args=args,
+                resolved_position_encoding=resolved_position_encoding,
                 num_genes=num_genes,
-                latent_dim=args.latent_dim,
-                num_heads=args.num_heads,
-                num_attention_layers=args.num_attention_layers,
-                hidden_dim=args.hidden_dim,
-                aggregation_method=args.aggregation_method,
                 num_covariates=num_covariates,
                 num_chromosomes=dataset.num_chromosomes,
-                classifier_type=args.classifier_type,
+                learned_binned_position_layout=learned_binned_position_layout,
             )
 
             # Create fold checkpoint directory
@@ -697,13 +1301,14 @@ def _run_training(args, output_dir: Path) -> None:
                 args=args,
                 checkpoint_dir=fold_dir,
                 pos_weight=fold_pos_weight,
+                checkpoint_metadata=run_metadata,
             )
             training_completed = datetime.now(timezone.utc)
 
             cv_results.append(fold_metrics)
 
             # Save fold-specific config and metadata
-            save_fold_config(fold_dir, fold_idx, args)
+            save_fold_config(fold_dir, fold_idx, args, run_metadata=run_metadata)
             save_fold_info(
                 fold_dir=fold_dir,
                 fold_idx=fold_idx,
@@ -754,15 +1359,7 @@ def _run_training(args, output_dir: Path) -> None:
         # Single train/val split
         print(f"\nUsing single train/val split ({1-args.val_split:.0%}/{args.val_split:.0%})")
 
-        # Create stratified split
-        from sklearn.model_selection import train_test_split
-        indices = np.arange(len(labels))
-        train_idx, val_idx = train_test_split(
-            indices,
-            test_size=args.val_split,
-            stratify=labels,
-            random_state=args.seed,
-        )
+        train_idx, val_idx = single_split_from_plan(split_plan)
 
         # Print split statistics
         train_labels = labels[train_idx]
@@ -803,16 +1400,13 @@ def _run_training(args, output_dir: Path) -> None:
         )
 
         # Create chunked model (for whole-genome processing)
-        model = create_model(
-            input_dim=input_dim,
+        model = create_training_model(
+            args=args,
+            resolved_position_encoding=resolved_position_encoding,
             num_genes=num_genes,
-            latent_dim=args.latent_dim,
-            num_heads=args.num_heads,
-            num_attention_layers=args.num_attention_layers,
-            hidden_dim=args.hidden_dim,
-            aggregation_method=args.aggregation_method,
             num_covariates=num_covariates,
-            classifier_type=args.classifier_type,
+            num_chromosomes=dataset.num_chromosomes,
+            learned_binned_position_layout=learned_binned_position_layout,
         )
 
         # Resolve class weighting for this split
@@ -832,6 +1426,7 @@ def _run_training(args, output_dir: Path) -> None:
             args=args,
             checkpoint_dir=output_dir,
             pos_weight=pos_weight,
+            checkpoint_metadata=run_metadata,
         )
 
         print(f"\nFinal Results:")
