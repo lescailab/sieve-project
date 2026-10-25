@@ -612,3 +612,117 @@ def test_no_custom_position_strategy_cli_flags_are_exposed():
 
     assert "--absolute-position-encoding" not in help_text
     assert "--relative-position-encoding" not in help_text
+
+
+def _sha256_file(path: Path) -> str:
+    import hashlib
+
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def test_explain_model_provenance_records_config_sha256_additively(tmp_path):
+    config_path = tmp_path / "training" / "config.yaml"
+    config_path.parent.mkdir()
+    config_path.write_text("level: L3\n", encoding="utf-8")
+    checkpoint = tmp_path / "training" / "best_model.pt"
+    checkpoint.write_bytes(b"weights")
+
+    provenance = explain._build_model_provenance(
+        checkpoint_selection_mode="single_run_best_model",
+        checkpoint_path=checkpoint,
+        config_path=config_path,
+        selected_fold=None,
+        selected_fold_auc=None,
+        cv_results_path=None,
+    )
+
+    assert list(provenance) == [
+        "schema_version",
+        "checkpoint_selection_mode",
+        "checkpoint_path",
+        "checkpoint_sha256",
+        "config_path",
+        "config_sha256",
+        "selected_fold",
+        "selected_fold_auc",
+        "cv_results_path",
+    ]
+    assert provenance["config_path"] == str(config_path.resolve())
+    assert provenance["config_sha256"] == _sha256_file(config_path)
+    assert provenance["checkpoint_sha256"] == _sha256_file(checkpoint)
+
+
+def test_explain_accepts_compatible_dataset_with_different_bytes(tmp_path, monkeypatch):
+    """A checkpoint can be explained on another compatible preprocessed dataset.
+
+    The training config below carries a ``dataset_provenance`` block written by
+    an earlier development version: it names other dataset bytes and a null
+    training run, while this explanation uses real data without
+    ``--is-null-baseline``. SIEVE must neither reject that nor validate it; the
+    run proceeds to building the explanation dataset.
+    """
+    from src.data.vcf_parser import SampleVariants, VariantRecord
+
+    samples = [
+        SampleVariants(
+            f"other{index}",
+            label=index % 2,
+            variants=[
+                VariantRecord(
+                    chrom="1",
+                    pos=500 + index,
+                    ref="C",
+                    alt="G",
+                    gene="GENE1",
+                    consequence="missense_variant",
+                    genotype=1,
+                    annotations={"sift": 0.1, "polyphen": 0.5},
+                )
+            ],
+        )
+        for index in range(4)
+    ]
+    dataset_path = tmp_path / "other_cohort.pt"
+    torch.save({"samples": samples, "metadata": {}}, dataset_path)
+    config = {
+        "level": "L3",
+        "dataset_provenance": {
+            "schema_version": 1,
+            "preprocessed_data_sha256": "0" * 64,
+            "sample_ids_sha256": "1" * 64,
+            "is_null_baseline": True,
+            "null_metadata_kind": "strict_v1",
+            "null_lineage": None,
+        },
+    }
+    monkeypatch.setattr(
+        explain,
+        "load_model_and_config",
+        lambda args: explain.ResolvedModelLoad(config=config, checkpoint={}, model_provenance={}),
+    )
+
+    class ReachedDatasetConstruction(Exception):
+        pass
+
+    def stop_at_dataset(**kwargs):
+        assert len(kwargs["samples"]) == 4
+        raise ReachedDatasetConstruction
+
+    monkeypatch.setattr(explain, "ChunkedVariantDataset", stop_at_dataset)
+    args = explain.build_arg_parser().parse_args(
+        [
+            "--experiment-dir",
+            str(tmp_path / "training"),
+            "--preprocessed-data",
+            str(dataset_path),
+            "--output-dir",
+            str(tmp_path / "explanation"),
+            "--device",
+            "cpu",
+        ]
+    )
+
+    assert _sha256_file(dataset_path) != config["dataset_provenance"]["preprocessed_data_sha256"]
+    with pytest.raises(ReachedDatasetConstruction):
+        explain._run_explain(args, tmp_path / "explanation")
+    assert not hasattr(explain, "resolve_explanation_dataset_provenance")

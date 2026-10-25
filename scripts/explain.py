@@ -58,7 +58,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.co2footprint import run_with_co2_tracking
 from src.data.covariates import attach_pc_covariates_to_samples, load_pc_map
-from src.data.dataset_provenance import resolve_explanation_dataset_provenance
 from src.encoding import (
     AnnotationLevel,
     ChunkedVariantDataset,
@@ -201,10 +200,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
                             "'rank_average': composite rank across mean, max, and sample count."
                         ))
     parser.add_argument('--is-null-baseline', action='store_true',
-                        help=('Declare a null baseline analysis. For training runs that '
-                              'record dataset_provenance, must match the training run\'s '
-                              'null status and mismatches fail closed; historical runs '
-                              'keep metadata-only behaviour.'))
+                        help='Flag indicating this is a null baseline analysis (for metadata)')
 
     # Device
     parser.add_argument('--device', type=str, default='cuda',
@@ -759,15 +755,6 @@ def _run_explain(args, output_dir: Path) -> None:
     preprocessed = torch.load(args.preprocessed_data, weights_only=False)
     all_samples = preprocessed['samples']
     metadata = preprocessed.get('metadata', {})
-    # Bind the explanation to exact dataset bytes. Provenance-aware training
-    # configs fail closed on a dataset or --is-null-baseline mismatch;
-    # historical configs keep historical behaviour (best-effort record only).
-    dataset_provenance = resolve_explanation_dataset_provenance(
-        preprocessed,
-        path=Path(args.preprocessed_data),
-        training_config=config,
-        is_null_baseline_flag=args.is_null_baseline,
-    )
 
     print(f"Loaded {len(all_samples)} samples")
     if metadata:
@@ -1370,7 +1357,6 @@ def _run_explain(args, output_dir: Path) -> None:
         'skip_attention': args.skip_attention,
         'skip_ig': args.skip_ig,
         'model_provenance': model_load.model_provenance,
-        'dataset_provenance': dataset_provenance,
         'integrated_gradients': integrated_gradients_metadata,
         'attention_threshold_mode': args.attention_threshold_mode,
         'attention_threshold': args.attention_threshold,

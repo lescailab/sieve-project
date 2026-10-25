@@ -40,7 +40,6 @@ from src.data.covariates import (
     compute_file_sha256,
     load_pc_map,
 )
-from src.data.dataset_provenance import build_dataset_provenance
 from src.encoding import (
     AnnotationLevel,
     ChunkedVariantDataset,
@@ -75,17 +74,6 @@ from src.training import (
     print_fold_stats,
 )
 from src.training.loss import compute_class_weights
-from src.training.split_plan import (
-    build_cv_split_plan,
-    build_single_split_plan,
-    build_split_plan_metadata,
-    cv_folds_from_plan,
-    load_split_plan,
-    ordered_sample_ids,
-    single_split_from_plan,
-    validate_split_plan,
-    write_or_validate_existing_split_plan,
-)
 
 
 def _enum_choices(enum_cls) -> list[str]:
@@ -196,7 +184,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         '--split-plan',
         type=str,
         default=None,
-        help='Path to a saved split_plan.yaml whose exact sample indices should be replayed',
+        help=(
+            'Path to a YAML file with externally supplied sample-level '
+            'train_indices/val_indices to use instead of generating a '
+            'stratified split (mode: cv with folds, or mode: single_split)'
+        ),
     )
 
     # Output arguments
@@ -889,79 +881,125 @@ def _resolve_pos_weight(
     return None
 
 
-def prepare_training_split_plan(
+EXTERNAL_SPLIT_MODES = ("cv", "single_split")
+
+
+def load_external_split(
+    path: Path,
     *,
-    args: argparse.Namespace,
-    output_dir: Path,
-    sample_ids: list[str],
-    labels: np.ndarray,
-) -> tuple[dict[str, object], dict[str, object], dict[str, object] | None]:
-    """Resolve generated/replayed sample splits and persist split-plan metadata."""
+    n_samples: int,
+    mode: str,
+    n_folds: int | None,
+) -> list[tuple[np.ndarray, np.ndarray]]:
+    """Read externally supplied sample-level train/validation indices.
+
+    The file is a small YAML contract::
+
+        mode: cv                      mode: single_split
+        folds:                        train_indices: [...]
+          - train_indices: [...]      val_indices: [...]
+            val_indices: [...]
+
+    Only the structural checks needed to train safely are applied: indices
+    are integers in ``range(n_samples)``, a subset holds no duplicates and is
+    non-empty, train and validation do not overlap, the mode matches the
+    command line and, for CV, the fold count equals ``--cv``. Who produced the
+    split and why (stratification, provenance, pairing between runs) is the
+    caller's responsibility; SIEVE does not inspect it.
+
+    Returns one ``(train_indices, val_indices)`` pair per fold, or a single
+    pair for ``single_split``.
+    """
+    with open(path, encoding="utf-8") as handle:
+        data = yaml.safe_load(handle)
+    if not isinstance(data, Mapping):
+        raise ValueError(f"--split-plan {path} must contain a YAML mapping")
+    if data.get("mode") != mode:
+        raise ValueError(
+            f"--split-plan {path} mode must be {mode!r} for this run, got {data.get('mode')!r}"
+        )
+    if mode == "cv":
+        _reject_unknown_split_keys(data, {"mode", "folds"}, str(path))
+        folds = data.get("folds")
+        if not isinstance(folds, list):
+            raise ValueError(f"--split-plan {path} folds must be a list")
+        if len(folds) != n_folds:
+            raise ValueError(f"--split-plan {path} has {len(folds)} folds but --cv is {n_folds}")
+        splits = []
+        for fold_index, fold in enumerate(folds):
+            location = f"{path} folds[{fold_index}]"
+            if not isinstance(fold, Mapping):
+                raise ValueError(f"--split-plan {location} must be a mapping")
+            _reject_unknown_split_keys(fold, {"train_indices", "val_indices"}, location)
+            splits.append(_external_split_pair(fold, n_samples=n_samples, location=location))
+        return splits
+    _reject_unknown_split_keys(data, {"mode", "train_indices", "val_indices"}, str(path))
+    return [_external_split_pair(data, n_samples=n_samples, location=str(path))]
+
+
+def _reject_unknown_split_keys(data: Mapping, allowed: set[str], location: str) -> None:
+    unknown = sorted(str(key) for key in data if key not in allowed)
+    if unknown:
+        raise ValueError(f"--split-plan {location} has unexpected keys: {unknown}")
+
+
+def _external_split_pair(
+    data: Mapping, *, n_samples: int, location: str
+) -> tuple[np.ndarray, np.ndarray]:
+    train = _external_index_list(data.get("train_indices"), n_samples, f"{location} train_indices")
+    val = _external_index_list(data.get("val_indices"), n_samples, f"{location} val_indices")
+    overlap = sorted(set(train) & set(val))
+    if overlap:
+        raise ValueError(
+            f"--split-plan {location}: train and validation indices overlap: {overlap[:10]}"
+        )
+    return np.asarray(train, dtype=np.int64), np.asarray(val, dtype=np.int64)
+
+
+def _external_index_list(value: object, n_samples: int, location: str) -> list[int]:
+    if not isinstance(value, list) or not value:
+        raise ValueError(f"--split-plan {location} must be a non-empty list of integers")
+    indices = []
+    for item in value:
+        # bool is an int subclass; reject it so `true` is never read as 1.
+        if isinstance(item, bool) or not isinstance(item, int):
+            raise ValueError(f"--split-plan {location} must contain only integers, got {item!r}")
+        if not 0 <= item < n_samples:
+            raise ValueError(f"--split-plan {location} index {item} is outside 0..{n_samples - 1}")
+        indices.append(item)
+    if len(set(indices)) != len(indices):
+        raise ValueError(f"--split-plan {location} contains duplicate indices")
+    return indices
+
+
+def resolve_training_splits(
+    args: argparse.Namespace, labels: np.ndarray
+) -> list[tuple[np.ndarray, np.ndarray]]:
+    """Return the sample-level splits for this run.
+
+    With ``--split-plan`` the supplied indices are used exactly; ``--seed`` and
+    ``--val-split`` do not regenerate or modify them. Otherwise CV uses
+    ``create_stratified_folds`` and a single split uses a stratified
+    ``train_test_split``, both seeded by ``--seed``.
+    """
     mode = "cv" if args.cv is not None else "single_split"
-    expected_n_folds = args.cv if mode == "cv" else None
-    experiment_plan_path = output_dir / "split_plan.yaml"
-    input_plan_path = Path(args.split_plan).resolve() if args.split_plan else None
-    input_plan = None
-
-    if input_plan_path is not None:
-        input_plan = validate_split_plan(
-            load_split_plan(input_plan_path),
-            sample_ids=sample_ids,
-            expected_mode=mode,
-            expected_n_folds=expected_n_folds,
-        )
-        requested_plan = copy.deepcopy(input_plan)
-        requested_plan["split_source"] = "replayed"
-        source = "replayed"
-    elif mode == "cv":
-        generated_folds = create_stratified_folds(
-            labels,
-            n_folds=args.cv,
-            random_state=args.seed,
-        )
-        requested_plan = build_cv_split_plan(
-            folds=generated_folds,
-            sample_ids=sample_ids,
-            seed=args.seed,
-            split_source="generated",
+    if args.split_plan:
+        return load_external_split(
+            Path(args.split_plan),
+            n_samples=len(labels),
+            mode=mode,
             n_folds=args.cv,
         )
-        source = "generated"
-    else:
-        indices = np.arange(len(labels))
-        train_idx, val_idx = train_test_split(
-            indices,
-            test_size=args.val_split,
-            stratify=labels,
-            random_state=args.seed,
-        )
-        requested_plan = build_single_split_plan(
-            train_indices=train_idx,
-            val_indices=val_idx,
-            sample_ids=sample_ids,
-            seed=args.seed,
-            split_source="generated",
-        )
-        source = "generated"
-
-    # The split plan validates sample membership only. Labels and args.seed may
-    # differ during null replay because phenotype permutation is the scientific
-    # intervention Phase 12C needs to isolate.
-    experiment_plan = write_or_validate_existing_split_plan(
-        experiment_plan_path,
-        requested_plan,
-        sample_ids=sample_ids,
-        expected_mode=mode,
-        expected_n_folds=expected_n_folds,
+    if mode == "cv":
+        return create_stratified_folds(labels, n_folds=args.cv, random_state=args.seed)
+    indices = np.arange(len(labels))
+    train_idx, val_idx = train_test_split(
+        indices,
+        test_size=args.val_split,
+        stratify=labels,
+        random_state=args.seed,
     )
-    metadata = build_split_plan_metadata(
-        source=source,
-        experiment_plan_path=experiment_plan_path,
-        plan=experiment_plan,
-        input_plan_path=input_plan_path,
-        input_plan=input_plan,
-    )
-    return experiment_plan, metadata, input_plan
+    return [(train_idx, val_idx)]
 
 
 def train_single_fold(
@@ -1072,12 +1110,6 @@ def _run_training(args, output_dir: Path) -> None:
         preprocessed = torch.load(args.preprocessed_data, weights_only=False)
         all_samples = preprocessed['samples']
         metadata = preprocessed.get('metadata', {})
-        # Metadata only: bind this run to the exact dataset bytes and null
-        # lineage before any in-memory sample mutation (e.g. sex map).
-        dataset_provenance = build_dataset_provenance(
-            preprocessed,
-            path=Path(args.preprocessed_data),
-        )
 
         load_time = time.time() - start_time
         print(f"Loaded {len(all_samples)} samples in {load_time:.1f} seconds")
@@ -1095,8 +1127,7 @@ def _run_training(args, output_dir: Path) -> None:
                     n_updated += 1
             print(f"  Updated {n_updated}/{len(all_samples)} samples with sex info")
     else:
-        # Load from VCF; no preprocessed artifact bytes to bind.
-        dataset_provenance = None
+        # Load from VCF
         print(f"\nLoading data from {args.vcf}...")
         start_time = time.time()
         all_samples = build_sample_variants(
@@ -1133,7 +1164,6 @@ def _run_training(args, output_dir: Path) -> None:
             f"({dataset.num_covariates} vs {num_covariates})."
         )
 
-    sample_ids = ordered_sample_ids(all_samples)
     labels = np.array([sample.label for sample in all_samples])
 
     # Get dimensions. New training runs are always explicit new-schema runs, so
@@ -1151,12 +1181,7 @@ def _run_training(args, output_dir: Path) -> None:
         dataset.chrom_index,
     )
     training_mode = "cv" if args.cv is not None else "single_split"
-    split_plan, split_plan_metadata, _ = prepare_training_split_plan(
-        args=args,
-        output_dir=output_dir,
-        sample_ids=sample_ids,
-        labels=labels,
-    )
+    splits = resolve_training_splits(args, labels)
     run_metadata = build_training_run_metadata(
         input_dim=input_dim,
         num_genes=num_genes,
@@ -1168,8 +1193,6 @@ def _run_training(args, output_dir: Path) -> None:
         chromosome_mapping_sha256=str(dataset_identity["chromosome_mapping_sha256"]),
         training_mode=training_mode,
     )
-    run_metadata["split_plan"] = split_plan_metadata
-    run_metadata["dataset_provenance"] = dataset_provenance
     serialized_position_encoding = run_metadata["position_encoding"]
     learned_binned_position_layout = _training_learned_binned_layout_from_metadata(
         resolved_position_encoding,
@@ -1223,7 +1246,7 @@ def _run_training(args, output_dir: Path) -> None:
         print(f"Running {args.cv}-fold cross-validation")
         print(f"{'='*60}")
 
-        folds = cv_folds_from_plan(split_plan)
+        folds = splits
         cv_results = []
 
         for fold_idx, (train_idx, val_idx) in enumerate(folds):
@@ -1357,9 +1380,12 @@ def _run_training(args, output_dir: Path) -> None:
 
     else:
         # Single train/val split
-        print(f"\nUsing single train/val split ({1-args.val_split:.0%}/{args.val_split:.0%})")
+        if args.split_plan:
+            print(f"\nUsing externally supplied train/val split from {args.split_plan}")
+        else:
+            print(f"\nUsing single train/val split ({1-args.val_split:.0%}/{args.val_split:.0%})")
 
-        train_idx, val_idx = single_split_from_plan(split_plan)
+        train_idx, val_idx = splits[0]
 
         # Print split statistics
         train_labels = labels[train_idx]

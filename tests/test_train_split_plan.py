@@ -1,8 +1,15 @@
-"""Tests for train.py split-plan generation, replay, and metadata plumbing."""
+"""Tests for train.py's generic external-split hook (``--split-plan``).
+
+``--split-plan`` only supplies sample-level train/validation indices. SIEVE
+applies structural safety checks, never writes or hashes the file, and never
+compares it with earlier output state. Without it, training generates the
+historical stratified splits.
+"""
 
 from __future__ import annotations
 
 import argparse
+import inspect
 from pathlib import Path
 
 import numpy as np
@@ -10,95 +17,91 @@ import pytest
 import yaml
 
 from scripts import train
-from src.training.split_plan import (
-    build_cv_split_plan,
-    build_single_split_plan,
-    load_split_plan,
-    ordered_sample_ids,
-    split_plan_sha256,
-    write_split_plan,
-)
 
 
-def _args(*, cv: int | None = None, split_plan: str | None = None, seed: int = 42):
+def _args(
+    *,
+    cv: int | None = None,
+    split_plan: str | Path | None = None,
+    seed: int = 42,
+    val_split: float = 0.5,
+):
     return argparse.Namespace(
         cv=cv,
-        val_split=0.5,
+        val_split=val_split,
         seed=seed,
-        split_plan=split_plan,
+        split_plan=None if split_plan is None else str(split_plan),
     )
-
-
-def _sample_ids() -> list[str]:
-    return ["S0", "S1", "S2", "S3"]
 
 
 def _labels() -> np.ndarray:
-    return np.array([0, 0, 1, 1])
+    return np.array([0, 0, 1, 1, 0, 1])
 
 
-def _cv_plan(sample_ids=None, *, split_source="generated"):
-    sample_ids = _sample_ids() if sample_ids is None else sample_ids
-    return build_cv_split_plan(
-        folds=[
-            ([1, 3], [0, 2]),
-            ([0, 2], [1, 3]),
-        ],
-        sample_ids=sample_ids,
-        seed=42,
-        split_source=split_source,
-        n_folds=2,
+def _write(path: Path, data: object) -> Path:
+    path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    return path
+
+
+def _cv_file(tmp_path: Path) -> Path:
+    return _write(
+        tmp_path / "indices.yaml",
+        {
+            "mode": "cv",
+            "folds": [
+                {"train_indices": [5, 1, 3, 2], "val_indices": [0, 4]},
+                {"train_indices": [0, 4, 2, 5], "val_indices": [1, 3]},
+            ],
+        },
     )
 
 
-def _single_plan(sample_ids=None, *, split_source="generated"):
-    sample_ids = _sample_ids() if sample_ids is None else sample_ids
-    return build_single_split_plan(
-        train_indices=[0, 2],
-        val_indices=[1, 3],
-        sample_ids=sample_ids,
-        seed=42,
-        split_source=split_source,
+def _single_file(tmp_path: Path) -> Path:
+    return _write(
+        tmp_path / "indices.yaml",
+        {"mode": "single_split", "train_indices": [4, 0, 2, 3], "val_indices": [5, 1]},
     )
 
 
-def test_parser_help_includes_split_plan():
+def _as_lists(splits) -> list[tuple[list[int], list[int]]]:
+    return [(train_idx.tolist(), val_idx.tolist()) for train_idx, val_idx in splits]
+
+
+def _forbid(name: str):
+    def forbidden(*args, **kwargs):
+        raise AssertionError(f"{name} must not run when --split-plan is supplied")
+
+    return forbidden
+
+
+def test_parser_help_describes_external_indices():
     parser = train.build_arg_parser()
+    help_text = " ".join(parser.format_help().split())
 
-    assert "--split-plan" in parser.format_help()
+    assert "--split-plan" in help_text
+    assert "externally supplied" in help_text
     assert train.parse_args(["--level", "L3"]).split_plan is None
 
 
-def test_generated_cv_uses_existing_stratified_fold_helper(monkeypatch, tmp_path):
-    expected_folds = [
-        (np.array([1, 3]), np.array([0, 2])),
-        (np.array([0, 2]), np.array([1, 3])),
-    ]
+def test_without_split_plan_cv_uses_stratified_folds(monkeypatch):
+    expected = [(np.array([1, 3]), np.array([0, 2])), (np.array([0, 2]), np.array([1, 3]))]
     calls = []
 
     def fake_create_stratified_folds(labels, n_folds, random_state):
         calls.append((labels.copy(), n_folds, random_state))
-        return expected_folds
+        return expected
 
     monkeypatch.setattr(train, "create_stratified_folds", fake_create_stratified_folds)
 
-    plan, metadata, input_plan = train.prepare_training_split_plan(
-        args=_args(cv=2, seed=99),
-        output_dir=tmp_path,
-        sample_ids=_sample_ids(),
-        labels=_labels(),
-    )
+    splits = train.resolve_training_splits(_args(cv=2, seed=99), _labels())
 
     assert len(calls) == 1
+    np.testing.assert_array_equal(calls[0][0], _labels())
     assert calls[0][1:] == (2, 99)
-    assert input_plan is None
-    assert [fold["val_indices"] for fold in plan["folds"]] == [[0, 2], [1, 3]]
-    assert metadata["source"] == "generated"
-    assert metadata["sha256"] == split_plan_sha256(plan)
-    assert (tmp_path / "split_plan.yaml").exists()
+    assert splits is expected
 
 
-def test_generated_single_uses_existing_train_test_split_semantics(monkeypatch, tmp_path):
+def test_without_split_plan_single_split_uses_stratified_train_test_split(monkeypatch):
     calls = []
 
     def fake_train_test_split(indices, *, test_size, stratify, random_state):
@@ -107,126 +110,151 @@ def test_generated_single_uses_existing_train_test_split_semantics(monkeypatch, 
 
     monkeypatch.setattr(train, "train_test_split", fake_train_test_split)
 
-    plan, metadata, _ = train.prepare_training_split_plan(
-        args=_args(seed=77),
-        output_dir=tmp_path,
-        sample_ids=_sample_ids(),
-        labels=_labels(),
-    )
+    splits = train.resolve_training_splits(_args(seed=77, val_split=0.25), _labels())
 
     assert len(calls) == 1
-    assert calls[0][1:] == (0.5, pytest.approx(_labels()), 77)
-    assert plan["train_indices"] == [0, 2]
-    assert plan["val_indices"] == [1, 3]
-    assert metadata["source"] == "generated"
+    np.testing.assert_array_equal(calls[0][0], np.arange(6))
+    assert calls[0][1] == 0.25
+    np.testing.assert_array_equal(calls[0][2], _labels())
+    assert calls[0][3] == 77
+    assert _as_lists(splits) == [([0, 2], [1, 3])]
 
 
-def test_replay_cv_uses_exact_indices_without_stratified_generation(monkeypatch, tmp_path):
-    real_plan_path = tmp_path / "real" / "split_plan.yaml"
-    write_split_plan(real_plan_path, _cv_plan(split_source="generated"))
+def test_without_split_plan_real_stratified_generation_is_seeded_and_unchanged():
+    labels = np.array([0, 1] * 10)
 
-    def fail_create_stratified_folds(*args, **kwargs):
-        raise AssertionError("replayed CV split must not regenerate folds")
+    first = train.resolve_training_splits(_args(cv=5, seed=3), labels)
+    second = train.resolve_training_splits(_args(cv=5, seed=3), labels)
+    reference = train.create_stratified_folds(labels, n_folds=5, random_state=3)
 
-    monkeypatch.setattr(train, "create_stratified_folds", fail_create_stratified_folds)
+    assert _as_lists(first) == _as_lists(second) == _as_lists(reference)
 
-    plan, metadata, input_plan = train.prepare_training_split_plan(
-        args=_args(cv=2, split_plan=str(real_plan_path), seed=1234),
-        output_dir=tmp_path / "null",
-        sample_ids=_sample_ids(),
-        labels=np.array([1, 0, 0, 1]),
+
+def test_external_cv_indices_are_used_exactly(monkeypatch, tmp_path):
+    monkeypatch.setattr(train, "create_stratified_folds", _forbid("create_stratified_folds"))
+    monkeypatch.setattr(train, "train_test_split", _forbid("train_test_split"))
+
+    splits = train.resolve_training_splits(_args(cv=2, split_plan=_cv_file(tmp_path)), _labels())
+
+    assert _as_lists(splits) == [([5, 1, 3, 2], [0, 4]), ([0, 4, 2, 5], [1, 3])]
+    assert all(part.dtype == np.int64 for pair in splits for part in pair)
+
+
+def test_external_single_split_indices_are_used_exactly(monkeypatch, tmp_path):
+    monkeypatch.setattr(train, "create_stratified_folds", _forbid("create_stratified_folds"))
+    monkeypatch.setattr(train, "train_test_split", _forbid("train_test_split"))
+
+    splits = train.resolve_training_splits(_args(split_plan=_single_file(tmp_path)), _labels())
+
+    assert _as_lists(splits) == [([4, 0, 2, 3], [5, 1])]
+
+
+def test_seed_and_val_split_do_not_change_external_indices(tmp_path):
+    path = _single_file(tmp_path)
+
+    baseline = train.resolve_training_splits(_args(split_plan=path), _labels())
+    changed = train.resolve_training_splits(
+        _args(split_plan=path, seed=12345, val_split=0.9), _labels()
     )
 
-    assert [fold["train_indices"] for fold in plan["folds"]] == [[1, 3], [0, 2]]
-    assert [fold["val_indices"] for fold in plan["folds"]] == [[0, 2], [1, 3]]
-    assert metadata["source"] == "replayed"
-    assert metadata["input_path"] == str(real_plan_path.resolve())
-    assert metadata["input_sha256"] == split_plan_sha256(input_plan)
+    assert _as_lists(changed) == _as_lists(baseline)
 
 
-def test_replay_single_uses_exact_indices_without_train_test_split(monkeypatch, tmp_path):
-    real_plan_path = tmp_path / "real" / "split_plan.yaml"
-    write_split_plan(real_plan_path, _single_plan(split_source="generated"))
+def test_external_split_writes_no_files(tmp_path, monkeypatch):
+    indices_dir = tmp_path / "indices"
+    indices_dir.mkdir()
+    path = _cv_file(indices_dir)
+    working_dir = tmp_path / "cwd"
+    working_dir.mkdir()
+    monkeypatch.chdir(working_dir)
+    before = path.read_bytes()
 
-    def fail_train_test_split(*args, **kwargs):
-        raise AssertionError("replayed single split must not call train_test_split")
+    train.resolve_training_splits(_args(cv=2, split_plan=path), _labels())
 
-    monkeypatch.setattr(train, "train_test_split", fail_train_test_split)
+    assert path.read_bytes() == before
+    assert sorted(p.name for p in indices_dir.iterdir()) == ["indices.yaml"]
+    assert list(working_dir.iterdir()) == []
 
-    plan, metadata, _ = train.prepare_training_split_plan(
-        args=_args(split_plan=str(real_plan_path), seed=1234),
-        output_dir=tmp_path / "null",
-        sample_ids=_sample_ids(),
-        labels=np.array([1, 0, 0, 1]),
+
+def test_training_writes_and_validates_no_split_plan_yaml():
+    source = inspect.getsource(train._run_training)
+
+    assert source.count("resolve_training_splits(args, labels)") == 1
+    assert "split_plan.yaml" not in source
+    assert "split_plan_metadata" not in source
+    assert "dataset_provenance" not in source
+    assert not hasattr(train, "prepare_training_split_plan")
+
+
+@pytest.mark.parametrize(
+    ("content", "cv", "message"),
+    [
+        ("- 1\n- 2\n", 2, "YAML mapping"),
+        ({"mode": "single_split", "train_indices": [0], "val_indices": [1]}, 2, "mode must be"),
+        ({"mode": "cv", "folds": []}, 2, "has 0 folds but --cv is 2"),
+        ({"mode": "cv", "folds": "x"}, 2, "folds must be a list"),
+        ({"mode": "cv", "folds": [[0], [1]]}, 2, "must be a mapping"),
+        (
+            {
+                "mode": "cv",
+                "folds": [
+                    {"train_indices": [0, 1], "val_indices": [2], "fold_index": 0},
+                    {"train_indices": [2], "val_indices": [0, 1]},
+                ],
+            },
+            2,
+            "unexpected keys",
+        ),
+        (
+            {"mode": "cv", "seed": 1, "folds": [{"train_indices": [0], "val_indices": [1]}]},
+            1,
+            "unexpected keys",
+        ),
+        ({"mode": "single_split", "train_indices": [0, 1]}, None, "val_indices must be"),
+        ({"mode": "single_split", "train_indices": [], "val_indices": [1]}, None, "non-empty"),
+        ({"mode": "single_split", "train_indices": [0, 6], "val_indices": [1]}, None, "outside"),
+        ({"mode": "single_split", "train_indices": [-1], "val_indices": [1]}, None, "outside"),
+        ({"mode": "single_split", "train_indices": [0, 0], "val_indices": [1]}, None, "duplicate"),
+        ({"mode": "single_split", "train_indices": [0, 1], "val_indices": [1]}, None, "overlap"),
+        ({"mode": "single_split", "train_indices": [True], "val_indices": [1]}, None, "integers"),
+        ({"mode": "single_split", "train_indices": [0.0], "val_indices": [1]}, None, "integers"),
+        ({"mode": "single_split", "train_indices": ["0"], "val_indices": [1]}, None, "integers"),
+    ],
+)
+def test_external_split_structural_validation(tmp_path, content, cv, message):
+    path = tmp_path / "indices.yaml"
+    if isinstance(content, str):
+        path.write_text(content, encoding="utf-8")
+    else:
+        _write(path, content)
+
+    with pytest.raises(ValueError, match=message):
+        train.resolve_training_splits(_args(cv=cv, split_plan=path), _labels())
+
+
+def test_external_split_does_not_validate_scientific_properties(tmp_path):
+    # Unstratified folds (all cases in one validation set) are structurally
+    # valid; stratification is the caller's responsibility.
+    path = _write(
+        tmp_path / "indices.yaml",
+        {
+            "mode": "cv",
+            "folds": [
+                {"train_indices": [0, 1, 4], "val_indices": [2, 3, 5]},
+                {"train_indices": [2, 3, 5], "val_indices": [0, 1, 4]},
+            ],
+        },
     )
 
-    assert plan["train_indices"] == [0, 2]
-    assert plan["val_indices"] == [1, 3]
-    assert metadata["source"] == "replayed"
+    splits = train.resolve_training_splits(_args(cv=2, split_plan=path), _labels())
+
+    assert _as_lists(splits) == [([0, 1, 4], [2, 3, 5]), ([2, 3, 5], [0, 1, 4])]
 
 
-def test_replay_with_different_args_seed_succeeds_at_split_plan_layer(tmp_path):
-    real_plan_path = tmp_path / "real" / "split_plan.yaml"
-    write_split_plan(real_plan_path, _single_plan(split_source="generated"))
-
-    plan, metadata, _ = train.prepare_training_split_plan(
-        args=_args(split_plan=str(real_plan_path), seed=999),
-        output_dir=tmp_path / "null",
-        sample_ids=_sample_ids(),
-        labels=np.array([1, 0, 0, 1]),
+def test_fold_info_records_the_indices_actually_used(tmp_path):
+    [(train_idx, val_idx), _] = train.resolve_training_splits(
+        _args(cv=2, split_plan=_cv_file(tmp_path)), _labels()
     )
-
-    assert plan["seed"] == 42
-    assert metadata["source"] == "replayed"
-
-
-def test_same_existing_membership_is_reused_but_metadata_records_current_source(tmp_path):
-    output_dir = tmp_path / "experiment"
-    existing = _single_plan(split_source="generated")
-    write_split_plan(output_dir / "split_plan.yaml", existing)
-    before = (output_dir / "split_plan.yaml").read_text(encoding="utf-8")
-    replay_path = tmp_path / "real" / "split_plan.yaml"
-    replay = _single_plan(split_source="replayed")
-    write_split_plan(replay_path, replay)
-
-    plan, metadata, _ = train.prepare_training_split_plan(
-        args=_args(split_plan=str(replay_path)),
-        output_dir=output_dir,
-        sample_ids=_sample_ids(),
-        labels=np.array([1, 0, 0, 1]),
-    )
-
-    assert plan["split_source"] == "generated"
-    assert (output_dir / "split_plan.yaml").read_text(encoding="utf-8") == before
-    assert metadata["source"] == "replayed"
-    assert metadata["input_sha256"] == split_plan_sha256(replay)
-
-
-def test_different_existing_membership_rejects(tmp_path):
-    output_dir = tmp_path / "experiment"
-    write_split_plan(output_dir / "split_plan.yaml", _single_plan())
-    replay_path = tmp_path / "real" / "split_plan.yaml"
-    different = build_single_split_plan(
-        train_indices=[0, 1],
-        val_indices=[2, 3],
-        sample_ids=_sample_ids(),
-        seed=42,
-        split_source="generated",
-    )
-    write_split_plan(replay_path, different)
-
-    with pytest.raises(ValueError, match="different sample membership"):
-        train.prepare_training_split_plan(
-            args=_args(split_plan=str(replay_path)),
-            output_dir=output_dir,
-            sample_ids=_sample_ids(),
-            labels=_labels(),
-        )
-
-
-def test_fold_info_indices_can_match_replayed_plan(tmp_path):
-    plan = _cv_plan()
-    fold = plan["folds"][0]
     fold_dir = tmp_path / "fold_0"
     fold_dir.mkdir()
 
@@ -235,8 +263,8 @@ def test_fold_info_indices_can_match_replayed_plan(tmp_path):
         fold_idx=0,
         n_folds=2,
         seed=42,
-        train_indices=fold["train_indices"],
-        val_indices=fold["val_indices"],
+        train_indices=train_idx,
+        val_indices=val_idx,
         labels=_labels(),
         fold_metrics={"auc": 0.5, "accuracy": 0.5},
         training_started=train.datetime(2026, 1, 1, tzinfo=train.timezone.utc),
@@ -244,23 +272,5 @@ def test_fold_info_indices_can_match_replayed_plan(tmp_path):
     )
 
     saved = yaml.safe_load((fold_dir / "fold_info.yaml").read_text(encoding="utf-8"))
-    assert saved["train_sample_indices"] == fold["train_indices"]
-    assert saved["val_sample_indices"] == fold["val_indices"]
-
-
-def test_ordered_sample_ids_are_all_samples_authority():
-    samples = [argparse.Namespace(sample_id="S0"), argparse.Namespace(sample_id="S1")]
-
-    assert ordered_sample_ids(samples) == ["S0", "S1"]
-
-
-def test_load_saved_experiment_plan_round_trips(tmp_path):
-    plan, metadata, _ = train.prepare_training_split_plan(
-        args=_args(),
-        output_dir=tmp_path,
-        sample_ids=_sample_ids(),
-        labels=_labels(),
-    )
-
-    saved = load_split_plan(Path(metadata["path"]))
-    assert split_plan_sha256(saved) == split_plan_sha256(plan)
+    assert saved["train_sample_indices"] == [5, 1, 3, 2]
+    assert saved["val_sample_indices"] == [0, 4]

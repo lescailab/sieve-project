@@ -192,6 +192,30 @@ python scripts/train.py [OPTIONS]
 |--------|------|---------|-------------|
 | `--cv` | int | - | Number of CV folds (if not using val-split) |
 | `--val-split` | float | 0.2 | Validation split ratio |
+| `--split-plan` | path | - | YAML file with externally supplied sample-level indices, used instead of generating a stratified split (see below) |
+
+With `--split-plan`, the supplied indices are used exactly; `--seed` and
+`--val-split` do not regenerate or change them. SIEVE checks only that the
+indices are integers in range, without duplicates in a subset, and that
+training and validation do not overlap; for CV the number of folds must equal
+`--cv`. The file is never copied, hashed or rewritten.
+
+```yaml
+# CV (with --cv 2)
+mode: cv
+folds:
+  - train_indices: [0, 2, 3, 5]
+    val_indices: [1, 4]
+  - train_indices: [1, 4, 5]
+    val_indices: [0, 2, 3]
+```
+
+```yaml
+# Single split (without --cv)
+mode: single_split
+train_indices: [0, 2, 3, 5]
+val_indices: [1, 4]
+```
 
 #### Output Options
 
