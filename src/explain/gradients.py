@@ -235,9 +235,11 @@ class IntegratedGradientsExplainer:
         of variants, batch processing exceeds GPU memory.
 
         Legacy mode reads ``batch['features']`` and preserves historical
-        attribution widths. Content mode reads ``batch['content_features']`` and
-        ``batch['absolute_position_features']``; historical ``features`` is not
-        required for IG execution.
+        attribution widths. Content and dosage modes read
+        ``batch['content_features']`` and ``batch['absolute_position_features']``;
+        historical ``features`` is not required for IG execution. Dosage mode
+        builds each sample's baseline from its observed content with only the
+        dosage column (column 0) set to zero.
 
         Parameters
         ----------
@@ -257,8 +259,8 @@ class IntegratedGradientsExplainer:
         -------
         all_attributions : List[np.ndarray]
             List of attribution arrays, one per sample. In legacy mode, each
-            attribution matrix has width ``input_dim``. In content mode, each
-            attribution matrix has width ``content_dim``.
+            attribution matrix has width ``input_dim``. In content and dosage
+            modes, each attribution matrix has width ``content_dim``.
         all_variant_scores : List[np.ndarray]
             List of aggregated variant scores, one per sample
         all_metadata : List[Dict]
@@ -343,13 +345,15 @@ class IntegratedGradientsExplainer:
                 sample_features = (
                     features[i:i+1] if self.ig_mode is ResolvedIGMode.LEGACY else None
                 )
+                # Content and dosage IG both explain the split-primary path,
+                # so both carry the split tensors; only legacy uses features.
                 sample_content = (
                     content_features[i:i+1]
-                    if self.ig_mode is ResolvedIGMode.CONTENT else None
+                    if self.ig_mode is not ResolvedIGMode.LEGACY else None
                 )
                 sample_absolute_position = (
                     absolute_position_features[i:i+1]
-                    if self.ig_mode is ResolvedIGMode.CONTENT else None
+                    if self.ig_mode is not ResolvedIGMode.LEGACY else None
                 )
                 sample_positions = positions[i:i+1]
                 sample_gene_ids = gene_ids[i:i+1]
@@ -416,10 +420,21 @@ class IntegratedGradientsExplainer:
                     sample_mask_truncated = sample_mask
                     sample_chrom_ids_truncated = sample_chrom_ids
 
+                # Dosage IG integrates from a baseline that differs from the
+                # observed (possibly truncated) content only in the dosage
+                # column, so annotations stay observed along the path. Content
+                # and legacy IG keep their default zero baselines.
+                if self.ig_mode is ResolvedIGMode.DOSAGE:
+                    sample_baseline = sample_content_truncated.detach().clone()
+                    sample_baseline[..., 0] = 0
+                else:
+                    sample_baseline = None
+
                 # Compute attributions for this single sample (possibly truncated)
                 sample_attributions = self.attribute(
                     sample_features_truncated, sample_positions_truncated,
                     sample_gene_ids_truncated, sample_mask_truncated,
+                    baseline=sample_baseline,
                     covariates=sample_covariates,
                     chrom_ids=sample_chrom_ids_truncated,
                     content_features=sample_content_truncated,

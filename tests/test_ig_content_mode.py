@@ -638,6 +638,64 @@ def test_attribute_batch_content_mode_truncates_all_variant_tensors(monkeypatch)
     assert len(metadata[0]["selected_variant_indices"]) == 2
 
 
+def test_attribute_batch_dosage_mode_attributes_only_dosage_with_completeness():
+    """Dosage IG through attribute_batch: only dosage moves along the path.
+
+    The baseline equals the observed content with the dosage column zeroed,
+    so every annotation column must receive exactly zero attribution, and the
+    dosage attributions must sum to f(observed) - f(dosage-zero baseline),
+    where f is the split-primary content wrapper that IG explains.
+    """
+    model = _make_sieve(69, num_chromosomes=2)
+    _, content, absolute, positions, gene_ids, mask, chrom_ids = _make_inputs(69, 5)
+    # Observed dosages 1 or 2 and clearly non-zero annotations.
+    content = content.clone()
+    content[..., 0] = torch.tensor([[1.0, 2.0, 1.0, 2.0]])
+    content[..., 1:] = content[..., 1:].abs() + 0.5
+    batch = {
+        "content_features": content,
+        "absolute_position_features": absolute,
+        "positions": positions,
+        "gene_ids": gene_ids,
+        "mask": mask,
+        "chrom_ids": chrom_ids,
+    }
+    explainer = IntegratedGradientsExplainer(
+        model,
+        device="cpu",
+        n_steps=200,
+        ig_mode=ResolvedIGMode.DOSAGE,
+    )
+
+    attrs, _, metadata = explainer.attribute_batch(_fake_loader(batch), aggregate="sum")
+
+    assert len(attrs) == 1
+    assert attrs[0].shape == (4, 5)
+    assert metadata[0]["sampling_applied"] is False
+    annotation_max_abs = float(np.abs(attrs[0][:, 1:]).max())
+    assert annotation_max_abs == 0.0
+    assert np.abs(attrs[0][:, 0]).max() > 0.0
+
+    baseline_content = content.detach().clone()
+    baseline_content[..., 0] = 0
+    wrapper = ContentSIEVEWrapper(model)
+    with torch.no_grad():
+        observed = wrapper(content, absolute, positions, gene_ids, mask, chrom_ids=chrom_ids)
+        baseline = wrapper(
+            baseline_content, absolute, positions, gene_ids, mask, chrom_ids=chrom_ids
+        )
+    expected_delta = float((observed - baseline).sum())
+    dosage_sum = float(attrs[0][:, 0].sum())
+    residual = dosage_sum - expected_delta
+    print(
+        f"\ndosage IG: max |annotation attr| = {annotation_max_abs:.3e}, "
+        f"sum(dosage attr) = {dosage_sum:.8f}, f(obs) - f(base) = {expected_delta:.8f}, "
+        f"completeness residual = {residual:.3e}"
+    )
+    assert abs(expected_delta) > 1e-4
+    assert residual == pytest.approx(0.0, abs=1e-4)
+
+
 def test_attribute_batch_legacy_mode_preserves_historical_behavior():
     explainer = IntegratedGradientsExplainer(RecordingModel(), device="cpu", n_steps=3)
     batch = {
