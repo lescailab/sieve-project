@@ -22,16 +22,22 @@ DEFAULT_SINUSOIDAL_MAX_WAVELENGTH = 10000.0
 DEFAULT_POSITION_BIN_SIZE = 10000
 DEFAULT_NUM_POSITION_BUCKETS = 32
 DEFAULT_MAX_POSITION_DISTANCE = 100000
-# RoPE positions are divided by the coordinate scale (1.5 bp), so the fastest
-# rotary pair advances by 2/3 radian per base pair, and each slower pair is
-# rope_base ** (2 / head_dim) times slower. Scale and base are chosen so the default
-# spectrum is non-harmonic: with head_dim=8 the periods are about 9.4 bp,
-# 98.6 bp, 1.03 kb and 10.8 kb, with a ratio of 12000 ** (1 / 4) ~= 10.47
-# between pairs. The earlier 1 bp / base 10000 setting gave an exact ratio of
-# 10, so every pair returned near its zero-distance phase together (first at
-# about 6.28 kb), which made those distances look like distance zero.
-DEFAULT_ROPE_COORDINATE_SCALE = 1.5
-DEFAULT_ROPE_BASE = 12000.0
+# RoPE positions in bp are divided by the coordinate scale, and rotary pair k
+# turns at rope_base ** (-2k / head_dim) / coordinate_scale radians per bp.
+# The periods therefore depend on head_dim. For the benchmark architecture
+# (latent_dim 32, 4 heads, head_dim 8, four rotary pairs) these defaults give
+# periods of about 8.48 bp, 115.2 bp, 1.564 kb and 21.24 kb. They are a
+# provisional choice for the benchmark target interval of 1-20 kb: they cover
+# single-digit-bp, ~100 bp, ~1-2 kb and ~20 kb scales while reducing the
+# strongest joint positional recurrence in that interval. Residual aliasing is
+# a known limitation: with only four rotary pairs, near-recurrences (distances
+# at which every pair is again close to its zero-distance phase) cannot be
+# removed without giving up one of those scales.
+# The slowest period is not a maximum resolvable distance. Beyond it a
+# distance is still represented by the joint phase configuration of all
+# pairs, but every pair is then in its periodic regime.
+DEFAULT_ROPE_COORDINATE_SCALE = 1.35
+DEFAULT_ROPE_BASE = 34000.0
 DEFAULT_ALIBI_DISTANCE_FUNCTION = "log1p"
 # Fixed and learned ALiBi share one genomic prior. Distances are measured in
 # base pairs (scale 1 bp), and each head's slope is derived so that, at its
