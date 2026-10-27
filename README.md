@@ -1,4 +1,3 @@
-test
 
 # SIEVE: Sparse Interpretable Exome Variant Explainer
 
