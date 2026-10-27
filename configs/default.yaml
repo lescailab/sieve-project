@@ -36,7 +36,7 @@ model:
   variant_hidden_dim: 128
   latent_dim: 64
   
-  # Position-aware sparse attention
+  # Position-aware self-attention
   num_attention_layers: 2
   num_heads: 4
   max_relative_distance: 100000  # bp for position bucketing

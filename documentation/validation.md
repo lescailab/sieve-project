@@ -48,7 +48,7 @@ Before running non-linear classifier validation, you need:
 
 ### Motivation
 
-The scalar burden test showed that SIEVE gene sets do not necessarily carry more total exonic variation in cases than controls. But SIEVE's claim is not that its genes have more variants — it is that the **pattern** of variation across genes jointly discriminates cases from controls. A burden count destroys this pattern; a non-linear classifier preserves it.
+The scalar burden test showed that SIEVE gene sets do not necessarily carry more total exonic variation in cases than controls. But SIEVE's claim is not that its genes have more variants; it is that the **pattern** of variation across genes jointly discriminates cases from controls. A burden count destroys this pattern; a non-linear classifier preserves it.
 
 The validation question is:
 
@@ -125,15 +125,19 @@ python scripts/validate_nonlinear_classifier.py \
     --n-cores 8
 ```
 
-**Why include logistic regression?** As a linear baseline. If the random forest significantly outperforms logistic regression on SIEVE genes, that is evidence of non-linear signal — directly supporting SIEVE's core claim that multi-gene combinatorial patterns carry disease information. If logistic regression performs equally well, the signal is linear (which could have been captured by a PRS approach).
+**Why include logistic regression?** As a linear baseline. If the random forest significantly outperforms logistic regression on SIEVE genes, that is evidence of non-linear signal, directly supporting SIEVE's core claim that multi-gene combinatorial patterns carry disease information. If logistic regression performs equally well, the signal is linear (which could have been captured by a PRS approach).
 
 ### Score Column Selection
 
-Use `--score-column z_attribution` for the default corrected-score workflow. The script maps this onto the gene-level `gene_z_score` column inside `corrected_gene_rankings*.csv`.
+Use `--score-column delta_rank`. This is the primary ranking metric: scale-free, stable across annotation levels, and mapped automatically onto the `gene_delta_rank` column in the gene-stats CSV produced by `bootstrap_null_calibration.py`, where each gene's score is `max(delta_rank)` across its variants by default. Higher values indicate stronger promotion of the gene's variants by the real model relative to the bootstrap-null ensemble.
 
-Use `--score-column fdr_gene` when you want to rank genes by their gene-level null-contrast significance instead of corrected effect size. Lower values are treated as better for FDR-based ranking.
+Use `--score-column z_attribution` for the per-chromosome visualisation view, retained for continuity with Manhattan plots and earlier runs. The script maps this onto the gene-level `gene_z_score` column inside `corrected_gene_rankings*.csv`. Per-chromosome z-scoring flattens genome-wide signal, so do not use it as the primary ranking.
 
-Use `--score-column delta_rank` for a bootstrap-informed robustness check. This maps onto the `gene_delta_rank` column in the gene-stats CSV produced by `bootstrap_null_calibration.py`, where each gene's score is `max(delta_rank)` across its variants by default (mirroring `gene_z_score = max(z_attribution)`). Higher values indicate stronger promotion of the gene's variants by the real model relative to the bootstrap-null ensemble. Run the validation twice with separate `--output-tsv` paths — one for `z_attribution` and one for `delta_rank` — and apply BH-FDR independently within each invocation across the full result grid. Pooling the two runs would halve statistical power and prevent a clean determination of whether the robustness finding holds independently. The same primary/robustness pattern applies upstream when generating the gene list itself (`generate_sieve_gene_list.py --score-column delta_rank`); see `complete-workflow.md` Step 8a.
+Use `--score-column fdr_gene` when you want to rank genes by their gene-level null-contrast significance instead of effect size. Lower values are treated as better for FDR-based ranking.
+
+Run the validation twice with separate `--output-tsv` paths, one for `delta_rank` and one for `z_attribution`, and apply BH-FDR independently within each invocation across the full result grid. Pooling the two runs would halve statistical power and prevent a clean determination of whether each view holds independently. The same pattern applies upstream when generating the gene list itself (`generate_sieve_gene_list.py --score-column delta_rank`); see the Complete Workflow, Step 8a.
+
+The `argparse` default is still `z_attribution` so that prior runs reproduce exactly. Pass `--score-column delta_rank` explicitly.
 
 ### FDR-Threshold Gene Selection
 
@@ -156,7 +160,7 @@ python scripts/validate_nonlinear_classifier.py \
 `--fdr-threshold` and `--top-k` are **mutually exclusive**. When `--fdr-threshold` is used:
 
 - Each annotation level independently determines its gene set as the set of genes with `fdr_gene < threshold`.
-- Different levels may produce different gene set sizes — this is scientifically meaningful, as it reflects how many genes are statistically significant at each annotation level.
+- Different levels may produce different gene set sizes, this is scientifically meaningful, as it reflects how many genes are statistically significant at each annotation level.
 - The summary TSV includes a `fdr_threshold` column to distinguish these results from fixed top-k runs.
 - If no genes pass the threshold at a given level, that level is skipped with a warning.
 
@@ -189,7 +193,7 @@ parameters:
   classifier: random_forest
   cv_folds: 5
   n_permutations: 1000
-  score_column: z_attribution
+  score_column: delta_rank
 
 observed:
   mean_auc: 0.587
@@ -239,9 +243,9 @@ linear_baseline:
 
 1. **Significant FDR**: The SIEVE gene set outperforms the shared random-gene null after correction across the full grid. This supports transfer of the discovery signal to the validation cohort.
 
-2. **RF > LR gap**: If the random forest outperforms logistic regression on the SIEVE gene set, the signal has non-linear structure — combinations of gene burdens matter, not just their sum. This directly supports SIEVE's model design.
+2. **RF > LR gap**: If the random forest outperforms logistic regression on the SIEVE gene set, the signal has non-linear structure, combinations of gene burdens matter, not just their sum. This directly supports SIEVE's model design.
 
-3. **Level consistency**: If multiple ablation levels show signal, the discovery is robust. If only L0 (genotype-only) shows signal, the discovery is annotation-free. If only L3 shows signal, it may depend on functional annotations.
+3. **Level consistency**: If multiple ablation levels show signal, the discovery is robust. If only L0 (genotype-only) shows signal, the discovery survives at the ablation floor and is carried by genome structure alone. If only L3 shows signal, it may depend on functional annotations.
 
 4. **Top-k sensitivity**: Signal concentrated in top-50 genes suggests a small set of strong drivers. Signal appearing only at top-500 suggests a diffuse polygenic signal.
 
@@ -320,10 +324,10 @@ Putting scalar burden and non-linear classifier validation together for one coho
 # --- Step 1: Generate gene lists per ablation level ---
 for level in L0 L1 L2 L3; do
     python scripts/generate_sieve_gene_list.py \
-        --variant-rankings results/${level}_attribution_comparison/corrected/corrected_variant_rankings.csv \
+        --variant-rankings results/${level}_attribution_comparison/variant_rankings_rank_calibrated.csv \
         --output validation/sieve_gene_lists/sieve_genes.tsv \
         --ablation-level ${level} \
-        --score-column z_attribution \
+        --score-column delta_rank \
         --aggregation max
 done
 
@@ -361,7 +365,7 @@ python scripts/validate_nonlinear_classifier.py \
     --n-cores 8 \
     --seed 42
 
-# --- Step 4b: Alternative — FDR-threshold gene selection ---
+# --- Step 4b: Alternative, FDR-threshold gene selection ---
 # Uses only genes with fdr_gene < 0.05 (gene set size determined per level)
 python scripts/validate_nonlinear_classifier.py \
     --real-rankings-dir results/ablation/rankings \

@@ -127,13 +127,13 @@ Determine whether models with minimal annotations can discover variants that ann
 **If hypothesis is refuted**:
 - L0 model fails to learn (AUC ~0.5), suggesting annotations are necessary
 - All high-ranking variants at L0 are a subset of L3 rankings
-- This would still be informative: it means annotation-free discovery is not feasible for this phenotype
+- This would still be informative: it means the ranking for this phenotype is carried by the supplied annotations rather than by genome structure
 
 ### Experiment 2: Position-Aware vs Position-Agnostic
 
 #### Purpose
 
-Test whether spatial relationships between variants carry disease-relevant information by comparing position-aware sparse attention against permutation-invariant deep sets.
+Test whether spatial relationships between variants carry disease-relevant information by comparing position-aware self-attention against permutation-invariant deep sets.
 
 #### Protocol
 

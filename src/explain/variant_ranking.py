@@ -109,7 +109,7 @@ class VariantRanker:
         """
         Build final ranked DataFrame from accumulated scores.
 
-        Produces identical output to rank_variants() — same columns,
+        Produces identical output to rank_variants(), same columns,
         same ranking logic, same scores.
 
         Returns
@@ -122,7 +122,7 @@ class VariantRanker:
 
         variant_scores = self._accumulated_scores
 
-        # Build DataFrame — identical logic to rank_variants()
+        # Build DataFrame, identical logic to rank_variants()
         records = []
         for (chrom, pos, gene), scores in variant_scores.items():
             attrs = np.array(scores['attributions'])
@@ -159,7 +159,7 @@ class VariantRanker:
 
         df = pd.DataFrame(records)
 
-        # Compute final ranking — identical logic to rank_variants()
+        # Compute final ranking, identical logic to rank_variants()
         if self.aggregation == 'mean':
             df['score'] = df['mean_attribution']
         elif self.aggregation == 'max':
@@ -345,10 +345,10 @@ class VariantRanker:
             Output from rank_variants()
         aggregation : str
             How to aggregate variants to genes:
-            'max'             — gene score = max mean_attribution across variants.
-            'mean'            — gene score = mean of variant mean_attributions.
-            'sum'             — gene score = sum of mean_attributions.
-            'size_normalised' — gene score = max mean_attribution / sqrt(num_variants);
+            'max', gene score = max mean_attribution across variants.
+            'mean', gene score = mean of variant mean_attributions.
+            'sum', gene score = sum of mean_attributions.
+            'size_normalised', gene score = max mean_attribution / sqrt(num_variants);
                                reduces bias towards large genes.
 
         Returns

@@ -123,7 +123,7 @@ def relative_position_bucket(
     Callers must therefore size their bias embedding to ``num_buckets + 1``.
     The cross-chromosome bias is a single learned scalar per attention head
     that does not damp cross-chromosome attention with a meaningless distance
-    prior (chromosomes are independent molecules — coordinate differences
+    prior (chromosomes are independent molecules, coordinate differences
     across them are not a metric).
 
     Parameters
@@ -209,7 +209,7 @@ def relative_position_bucket(
     # Route cross-chromosome pairs to the dedicated extra bucket. The
     # within-chromosome bucket value computed above is left in place for
     # same-chromosome pairs and replaced with `num_buckets` for differing
-    # chromosomes — preserving cross-chromosome attention while removing the
+    # chromosomes, preserving cross-chromosome attention while removing the
     # spurious linkage prior that the coordinate-difference bucket would
     # otherwise impose.
     if query_chroms is not None:
@@ -321,7 +321,7 @@ def visualize_positional_encoding(
     max_wavelength: float = 10000.0
 ) -> Tuple[np.ndarray, dict]:
     """
-    Generate positional encodings and summary statistics for visualization.
+    Generate positional encodings and summary statistics for visualisation.
 
     Useful for understanding how positions are encoded.
 

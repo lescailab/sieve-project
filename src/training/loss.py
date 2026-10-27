@@ -155,7 +155,7 @@ def attribution_sparsity_loss(
     embedding_magnitudes = embedding_magnitudes * mask.float()
 
     # Compute L1 sparsity penalty (sum of magnitudes)
-    # Normalize by number of valid variants per sample
+    # Normalise by number of valid variants per sample
     num_valid_variants = mask.sum(dim=1).float().clamp(min=1.0)  # Avoid division by zero
     sparsity_per_sample = embedding_magnitudes.sum(dim=1) / num_valid_variants
 
@@ -189,8 +189,8 @@ def gene_level_sparsity_loss(
     gene_magnitudes = torch.norm(gene_embeddings, p=2, dim=-1)
 
     # Compute L1 sparsity penalty (sum of magnitudes)
-    # Normalize per sample by the number of genes with non-zero embeddings
-    # This is consistent with variant-level loss normalization by mask.sum()
+    # Normalise per sample by the number of genes with non-zero embeddings
+    # This is consistent with variant-level loss normalisation by mask.sum()
     num_active_genes = gene_magnitudes.count_nonzero(dim=1).float().clamp(min=1.0)
     sparsity_per_sample = gene_magnitudes.sum(dim=1) / num_active_genes
 

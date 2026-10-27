@@ -3,7 +3,7 @@ SIEVE: Sparse Interpretable Exome Variant Explainer
 
 This module implements the complete SIEVE model that combines:
 1. Variant encoding (feature projection)
-2. Position-aware sparse attention (the innovation)
+2. Position-aware dense self-attention over the sparse variant set
 3. Gene aggregation (variant → gene level)
 4. Phenotype classification (case vs control)
 

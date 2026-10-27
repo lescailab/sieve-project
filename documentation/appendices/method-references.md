@@ -16,7 +16,7 @@ This appendix lists key methodological references that motivate recent pipeline 
 
 ### Attention mechanisms
 
-- **Scaled dot-product attention** for modeling interactions:
+- **Scaled dot-product attention** for modelling interactions:
   Vaswani A, et al. (2017). *Attention Is All You Need.* **NeurIPS**.
 
 ### Epistasis detection

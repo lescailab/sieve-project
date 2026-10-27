@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Visualize training history for SIEVE models.
+Visualise training history for SIEVE models.
 
 Creates plots showing training vs validation metrics (loss, AUC, accuracy) over epochs.
 Supports both single training runs and cross-validation with multiple folds.

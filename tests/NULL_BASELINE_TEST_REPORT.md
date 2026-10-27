@@ -82,7 +82,7 @@
 
 ## Known Limitations
 
-1. **Plot Generation:** Requires `matplotlib` for visualization. Script handles missing dependency gracefully with warning message.
+1. **Plot Generation:** Requires `matplotlib` for visualisation. Script handles missing dependency gracefully with warning message.
 2. **Heavy Dependencies:** Full testing requires installing torch and CUDA dependencies (multi-GB download).
 
 ## Test Data
@@ -97,7 +97,7 @@
 1. ✅ Code is production-ready for core functionality
 2. ✅ Error handling is robust (try/except for matplotlib)
 3. ✅ All critical outputs are generated correctly
-4. ⚠️  Users should install `matplotlib` for full visualization support
+4. ⚠️  Users should install `matplotlib` for full visualisation support
 
 ## Conclusion
 

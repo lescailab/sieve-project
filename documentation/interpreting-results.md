@@ -107,9 +107,19 @@ The script adds:
 - `corrected_rank`: rank based on `z_attribution`
 - `is_sex_chrom`: flags chrX/chrY variants
 
-All existing columns — including `empirical_p_variant` and `fdr_variant` — are preserved unchanged. By default, the corrected rankings exclude sex chromosomes. Use `--include-sex-chroms` if you want to keep them in the output (they remain flagged).
+All existing columns, including `empirical_p_variant` and `fdr_variant`, are preserved unchanged. By default, the corrected rankings exclude sex chromosomes. Use `--include-sex-chroms` if you want to keep them in the output (they remain flagged).
 
-For ablation comparison, use the chrX-corrected files `corrected_variant_rankings.csv` from `corrected/` and rank variants with `--score-column z_attribution` for the continuity view. If you have also run `bootstrap_null_calibration.py`, use the resulting rank-calibrated files with `--score-column delta_rank` for the bootstrap-informed view. `z_attribution` and `delta_rank` answer related but distinct questions: the former preserves the chrX-corrected ordering, while the latter measures promotion relative to the bootstrap-null ensemble.
+#### Choosing a ranking metric
+
+Rank variants by `delta_rank`. It is defined as `median_null_rank - real_rank`, so it is scale-free, it is stable across annotation levels, and it holds the chromosome X share of the top-ranked set at 3 to 8 per cent. It is the primary ranking metric, and it is what you should pass to `--score-column` for cross-level comparison, gene-list generation and validation.
+
+`z_attribution` is a per-chromosome z-score. Z-scoring within each chromosome removes the between-chromosome component of the signal, which flattens genome-wide differences; it is retained as a visualisation score for Manhattan plots and for continuity with earlier runs, not as a ranking metric.
+
+Do not rank by a naive magnitude-based empirical p-value when comparing models. Real and null attributions sit on different scales: the real model learns signal and its attribution distribution shifts upward, while the null sits at an area under the curve near 0.50. A p-value computed by comparing raw magnitudes across that scale gap is therefore not a valid cross-model comparison.
+
+The `argparse` defaults still name `z_attribution`, so that prior runs reproduce exactly. Pass `--score-column delta_rank` explicitly.
+
+For ablation comparison, run `bootstrap_null_calibration.py` first, then rank the resulting rank-calibrated files with `--score-column delta_rank`. If you also want the `z_attribution` view for figures, rerun with separate output paths rather than pooling the two.
 
 #### Gene Rankings
 
@@ -206,7 +216,7 @@ levels:
 ```
 
 **Interpretation**:
-- **L0 AUC > 0.6**: Genotype patterns alone carry disease signal (annotation-free discovery is feasible)
+- **L0 AUC > 0.6**: Genotype patterns alone carry disease signal. L0 is the ablation floor of the protocol, so this tells you how much of the model's discrimination survives when every supplied annotation is removed.
 - **L2 ≈ L3**: Consequence class is sufficient; SIFT/PolyPhen add little beyond consequence type
 - **L3 > L0 by >0.1 AUC**: Annotations provide substantial additional signal
 - **L3 ≈ L0**: Annotations do not help, model discovers signal from genotype structure alone
@@ -225,12 +235,12 @@ Each row represents a pairwise comparison at a given top-k:
 | `union` | Size of the union |
 
 **How to read it**:
-- **Jaccard > 0.7**: Very similar rankings — the two levels discover largely the same variants
-- **Jaccard 0.3-0.7**: Moderate overlap — some shared discoveries, some unique to each level
-- **Jaccard < 0.3**: Different rankings — annotation level fundamentally changes which variants are prioritised
+- **Jaccard > 0.7**: Very similar rankings, the two levels discover largely the same variants
+- **Jaccard 0.3-0.7**: Moderate overlap, some shared discoveries, some unique to each level
+- **Jaccard < 0.3**: Different rankings, annotation level fundamentally changes which variants are prioritised
 
 **Scientific significance**:
-- High L0-vs-L3 Jaccard indicates the model can discover the same variants without annotations (supports annotation-free discovery)
+- Agreement between the L0 and L3 rankings measures how much of the ranking is stable under annotation ablation: a high L0-vs-L3 Jaccard means the ordering is carried largely by genome structure rather than by the supplied annotations
 - Low L0-vs-L3 Jaccard suggests annotations drive different discoveries (may indicate circular logic if annotations encode known associations)
 
 #### Level-Specific Variants (`level_specific_variants.tsv`)
@@ -247,9 +257,9 @@ Variants ranked in the top-100 at one level but outside the top-500 at all other
 | `score_at_specific_level` | Attribution score at the specific level |
 
 **How to use these**:
-- **L0-specific variants**: Discovered from genotype patterns alone — potentially novel mechanisms invisible to annotation-based methods. Priority candidates for experimental follow-up.
-- **L3-specific variants**: Only discovered when SIFT/PolyPhen are provided — may reflect annotation-dependent signal (known pathogenicity) rather than novel discovery.
-- **L1-specific variants**: Position carries information not captured by genotype alone — may indicate positional clustering or regulatory elements.
+- **L0-specific variants**: Discovered from genotype patterns alone, potentially novel mechanisms invisible to annotation-based methods. Priority candidates for experimental follow-up.
+- **L3-specific variants**: Only discovered when SIFT/PolyPhen are provided, may reflect annotation-dependent signal (known pathogenicity) rather than novel discovery.
+- **L1-specific variants**: Position carries information not captured by genotype alone, may indicate positional clustering or regulatory elements.
 
 If you rank the same ablation inputs by `delta_rank`, interpret positive `delta_rank` as bootstrap-null-corrected promotion: the real model ranks that variant better than the null ensemble does. Comparing the `level_specific_variants.tsv` list from the `z_attribution` run against the `delta_rank` run shows which level-specific discoveries are robust across both views and which ones only appear under one ranking scheme.
 
@@ -261,7 +271,7 @@ The figure produced by `plot_ablation_comparison.py` contains four panels:
 
 2. **Jaccard by Top-k** (top-right): Line plot showing how overlap evolves as you consider more variants. If lines rise steeply, the top-ranked variants differ but broader rankings converge.
 
-3. **Level-Specific Counts** (bottom-left): Bar chart of how many uniquely important variants each level discovers. Large L0 bars support annotation-free discovery.
+3. **Level-Specific Counts** (bottom-left): Bar chart of how many uniquely important variants each level discovers. Large L0 bars mean a substantial part of the ranking is set at the ablation floor, before any annotation is supplied.
 
 4. **AUC Comparison** (bottom-right): Model performance per level with error bars. The best level is highlighted. The red dashed line marks random performance (AUC=0.5).
 
@@ -293,7 +303,7 @@ The non-linear classifier validation tests whether the **pattern** of variation 
 |---------------------|----------|----------------|
 | Significant (p < 0.05) | RF >> LR | Non-linear multi-gene signal transfers to validation cohort |
 | Significant (p < 0.05) | RF ≈ LR | Linear signal transfers (could be captured by PRS) |
-| Not significant | — | Signal does not transfer at this level/top-k |
+| Not significant | - | Signal does not transfer at this level/top-k |
 
 #### Heatmap (`nonlinear_validation_heatmap.png`)
 

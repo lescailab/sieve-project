@@ -73,14 +73,24 @@ pip install -e .
 #### Step 3: Verify installation
 
 ```bash
-# Run test suite
-python test_vcf_parser.py
-python test_encoding_pipeline.py
-python test_model_architecture.py
-python test_training_pipeline.py
+# Run the test suite
+pytest tests/
 ```
 
-All tests should complete without errors. You can also run `pytest` for a more detailed test report.
+All tests should complete without errors.
+
+For a narrated walkthrough of each stage, `utilities/demos/` holds print-driven
+scripts that exercise the pipeline component by component:
+
+```bash
+python utilities/demos/test_vcf_parser.py
+python utilities/demos/test_encoding_pipeline.py
+python utilities/demos/test_model_architecture.py
+python utilities/demos/test_training_pipeline.py
+```
+
+These are demonstrations rather than assertions: they print what each stage
+produces, so they are useful for checking an install end to end.
 
 ---
 
@@ -110,7 +120,7 @@ conda install -c bioconda ensembl-vep
 vep_install -a cf -s homo_sapiens -y GRCh37 -c /path/to/vep_cache
 ```
 
-See [Detailed Usage — How to Annotate Your VCF](detailed-usage.md#how-to-annotate-your-vcf-with-ensembl-vep)
+See [Detailed Usage, How to Annotate Your VCF](detailed-usage.md#how-to-annotate-your-vcf-with-ensembl-vep)
 for the full VEP command and required flags.
 
 ### Conda Package Workflow

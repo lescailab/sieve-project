@@ -31,6 +31,8 @@ jobs:
             test-file: tests/test_gene_interactions.py
           - name: Genome Build
             test-file: tests/test_genome_build.py
+          - name: Higher-Order Interactions
+            test-file: tests/test_higher_order_interactions.py
           - name: Null Baseline
             test-file: tests/test_null_baseline.py
           - name: Phase 3 Explainability
@@ -65,3 +67,38 @@ jobs:
         run: pytest ${{ matrix.test-file }} -v --no-header -o "addopts="
         env:
           PYTHONPATH: ${{ github.workspace }}
+
+  docs-drift:
+    name: Docs Drift
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install assembler dependencies
+        run: pip install "pyyaml>=6.0"
+
+      - name: Reassemble USER_GUIDE.md from documentation/
+        run: python scripts/assemble_user_guide.py
+
+      - name: Fail if USER_GUIDE.md is out of date
+        run: |
+          if ! git diff --exit-code USER_GUIDE.md; then
+            echo "::error::USER_GUIDE.md does not match documentation/."
+            echo "documentation/ is the source of truth. Edit the page there, then run:"
+            echo "  python scripts/assemble_user_guide.py"
+            exit 1
+          fi
+
+      - name: Fail if any console entry point is undocumented
+        run: python scripts/sync_command_table.py --check
+
+      - name: Fail if the documented version is out of date
+        run: python scripts/sync_docs_version.py --check
+
+      - name: Check prose style (British English, no em dashes)
+        run: python scripts/check_docs_style.py

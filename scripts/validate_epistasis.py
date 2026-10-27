@@ -168,7 +168,7 @@ def main():
     if 'input_dim' not in config:
         config['input_dim'] = get_feature_dimension(annotation_level)
     # The chromosome embedding / cross-chromosome bias bucket are sized from
-    # the dataset, not stored in the original config — surface it here so the
+    # the dataset, not stored in the original config, surface it here so the
     # constructed model matches the checkpoint's tensor shapes.
     config['num_chromosomes'] = dataset.num_chromosomes
 
@@ -275,7 +275,7 @@ def main():
 
                 if span > chunk_size:
                     # Target variants are further apart than chunk_size in the
-                    # variant list — cannot fit both in one chunk, skip sample.
+                    # variant list, cannot fit both in one chunk, skip sample.
                     print(f"Warning: Interaction {idx} variants are {span} apart "
                           f"in sample {sample_idx} (chunk_size={chunk_size}), "
                           f"trying next sample")

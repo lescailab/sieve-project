@@ -26,7 +26,7 @@ conda install -n sieve -c file:///tmp/sieve-conda-bld sieve
 
 Notes:
 
-- Channel order matters and must be exactly `-c pytorch -c nvidia -c bioconda -c conda-forge` on every platform, including `osx-arm64`. The pytorch and nvidia channels stay in the list even on Apple Silicon — they are no-ops there but keep the recipe identical across platforms and let bioconda packages (`cyvcf2`, `pysam`) resolve correctly.
+- Channel order matters and must be exactly `-c pytorch -c nvidia -c bioconda -c conda-forge` on every platform, including `osx-arm64`. The pytorch and nvidia channels stay in the list even on Apple Silicon: they are no-ops there but keep the recipe identical across platforms and let bioconda packages (`cyvcf2`, `pysam`) resolve correctly.
 - `CONDA_SOLVER=libmamba` is required. The classic solver in conda 26 fails to inject the `__osx`/`__unix`/`__conda`/`__archspec` virtual packages and aborts with `ResolvePackageNotFound`.
 - Replace `osx-arm64` with `linux-64` or `linux-aarch64` in the install path on those platforms.
 
@@ -99,7 +99,7 @@ sieve-explain \
 
 ### 5. Run null baseline
 
-Use the full wrapper (preferred — cohort-centric layout):
+Use the full wrapper (preferred: cohort-centric layout):
 
 ```bash
 PROJECT_DIR=/data/CohortName \
