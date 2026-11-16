@@ -11,8 +11,12 @@ Author: Francesco Lescai
 
 from .levels import (
     AnnotationLevel,
+    CONTENT_FEATURE_DIMENSIONS,
     FEATURE_DIMENSIONS,
+    compose_legacy_variant_features,
+    get_content_feature_dimension,
     get_feature_dimension,
+    get_legacy_absolute_position_dimension,
     encode_genotype,
     encode_consequence_severity,
     encode_functional_scores,
@@ -23,7 +27,26 @@ from .levels import (
     encode_variant_L4,
     encode_variants,
     get_level_description,
+    split_legacy_variant_features,
     summarize_level_features,
+)
+
+from .position_config import (
+    AbsolutePositionEncoding,
+    AbsolutePositionFusion,
+    AlibiDistanceFunction,
+    ChromosomeEncoding,
+    CrossChromosomePolicy,
+    PositionEncodingRequest,
+    PositionPreset,
+    RelativePositionEncoding,
+    ResolvedAbsolutePositionConfig,
+    ResolvedAttributionConfig,
+    ResolvedChromosomeConfig,
+    ResolvedIGMode,
+    ResolvedPositionEncodingConfig,
+    ResolvedRelativePositionConfig,
+    resolve_position_encoding_config,
 )
 
 from .positional import (
@@ -52,8 +75,12 @@ from .chunked_dataset import (
 __all__ = [
     # Annotation levels
     'AnnotationLevel',
+    'CONTENT_FEATURE_DIMENSIONS',
     'FEATURE_DIMENSIONS',
+    'compose_legacy_variant_features',
+    'get_content_feature_dimension',
     'get_feature_dimension',
+    'get_legacy_absolute_position_dimension',
     'encode_genotype',
     'encode_consequence_severity',
     'encode_functional_scores',
@@ -64,7 +91,25 @@ __all__ = [
     'encode_variant_L4',
     'encode_variants',
     'get_level_description',
+    'split_legacy_variant_features',
     'summarize_level_features',
+
+    # Position encoding configuration
+    'AbsolutePositionEncoding',
+    'AbsolutePositionFusion',
+    'AlibiDistanceFunction',
+    'ChromosomeEncoding',
+    'CrossChromosomePolicy',
+    'PositionEncodingRequest',
+    'PositionPreset',
+    'RelativePositionEncoding',
+    'ResolvedAbsolutePositionConfig',
+    'ResolvedAttributionConfig',
+    'ResolvedChromosomeConfig',
+    'ResolvedIGMode',
+    'ResolvedPositionEncodingConfig',
+    'ResolvedRelativePositionConfig',
+    'resolve_position_encoding_config',
 
     # Positional encoding
     'sinusoidal_position_encoding',

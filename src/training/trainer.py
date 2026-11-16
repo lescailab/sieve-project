@@ -11,8 +11,9 @@ This module implements the training infrastructure including:
 Author: Francesco Lescai
 """
 
+import copy
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import torch
 import torch.nn as nn
@@ -67,7 +68,11 @@ class Trainer:
         early_stopping_patience: int = 10,
         gradient_clip_value: Optional[float] = None,
         gradient_accumulation_steps: int = 1,
+        checkpoint_metadata: dict[str, Any] | None = None,
     ):
+        if checkpoint_metadata is not None and not isinstance(checkpoint_metadata, dict):
+            raise ValueError("checkpoint_metadata must be a dict when provided")
+
         self.model = model.to(device)
         self.optimizer = optimizer
         self.loss_fn = loss_fn
@@ -77,6 +82,11 @@ class Trainer:
         self.early_stopping_patience = early_stopping_patience
         self.gradient_clip_value = gradient_clip_value
         self.gradient_accumulation_steps = gradient_accumulation_steps
+        self.checkpoint_metadata = (
+            copy.deepcopy(checkpoint_metadata)
+            if checkpoint_metadata is not None
+            else None
+        )
 
         # Create checkpoint directory
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -155,7 +165,24 @@ class Trainer:
                     labels = batch['labels']
             else:
                 # Standard processing (no chunking)
-                features = batch['features'].to(self.device)
+                features = batch.get('features')
+                if features is not None:
+                    features = features.to(self.device)
+                content_features = batch.get('content_features')
+                absolute_position_features = batch.get('absolute_position_features')
+                if content_features is not None:
+                    content_features = content_features.to(self.device)
+                if absolute_position_features is not None:
+                    absolute_position_features = absolute_position_features.to(self.device)
+                split_feature_kwargs = {}
+                if content_features is not None or absolute_position_features is not None:
+                    # Only send the new keywords when a split tensor is present;
+                    # older model doubles used in tests may only accept the
+                    # historical feature signature.
+                    split_feature_kwargs = {
+                        'content_features': content_features,
+                        'absolute_position_features': absolute_position_features,
+                    }
                 positions = batch['positions'].to(self.device)
                 gene_ids = batch['gene_ids'].to(self.device)
                 mask = batch['mask'].to(self.device)
@@ -185,6 +212,7 @@ class Trainer:
                         covariates=covariates,
                         return_intermediate=True,
                         chrom_ids=chrom_ids,
+                        **split_feature_kwargs,
                     )
                     variant_embeddings = intermediates['variant_embeddings']
                     loss_dict = self.loss_fn(
@@ -199,6 +227,7 @@ class Trainer:
                         features, positions, gene_ids, mask,
                         covariates=covariates,
                         chrom_ids=chrom_ids,
+                        **split_feature_kwargs,
                     )
                     loss_dict = self.loss_fn(logits=logits, labels=labels)
 
@@ -310,7 +339,24 @@ class Trainer:
                     labels = batch['labels']
             else:
                 # Standard processing (no chunking)
-                features = batch['features'].to(self.device)
+                features = batch.get('features')
+                if features is not None:
+                    features = features.to(self.device)
+                content_features = batch.get('content_features')
+                absolute_position_features = batch.get('absolute_position_features')
+                if content_features is not None:
+                    content_features = content_features.to(self.device)
+                if absolute_position_features is not None:
+                    absolute_position_features = absolute_position_features.to(self.device)
+                split_feature_kwargs = {}
+                if content_features is not None or absolute_position_features is not None:
+                    # Keep legacy-only batches and old model doubles on the
+                    # historical call signature while dataset split batches use
+                    # the model-side composer.
+                    split_feature_kwargs = {
+                        'content_features': content_features,
+                        'absolute_position_features': absolute_position_features,
+                    }
                 positions = batch['positions'].to(self.device)
                 gene_ids = batch['gene_ids'].to(self.device)
                 mask = batch['mask'].to(self.device)
@@ -339,6 +385,7 @@ class Trainer:
                         covariates=covariates,
                         return_intermediate=True,
                         chrom_ids=chrom_ids,
+                        **split_feature_kwargs,
                     )
                     variant_embeddings = intermediates['variant_embeddings']
                     loss_dict = self.loss_fn(
@@ -352,6 +399,7 @@ class Trainer:
                         features, positions, gene_ids, mask,
                         covariates=covariates,
                         chrom_ids=chrom_ids,
+                        **split_feature_kwargs,
                     )
                     loss_dict = self.loss_fn(logits=logits, labels=labels)
 
@@ -491,6 +539,8 @@ class Trainer:
 
         if self.scheduler is not None:
             checkpoint['scheduler_state_dict'] = self.scheduler.state_dict()
+        if self.checkpoint_metadata is not None:
+            checkpoint['metadata'] = copy.deepcopy(self.checkpoint_metadata)
 
         checkpoint_path = self.checkpoint_dir / filename
         torch.save(checkpoint, checkpoint_path)
