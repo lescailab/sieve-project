@@ -56,6 +56,16 @@ class SIEVE(nn.Module):
         Number of relative position buckets (default: 32)
     max_distance : int
         Maximum genomic distance for bucketing (default: 100,000 bp)
+    num_covariates : int
+        Number of sample covariates fed to the classifier head (default: 0)
+    num_chromosomes : int
+        Number of chromosomes for the chromosome embedding (default: 0, none)
+    classifier_type : str
+        Classifier head: 'flatten' or 'attention_pool' (default: 'flatten')
+    chromosome_aware : bool
+        Chromosome-aware attention with a cross-chromosome position-bias row
+        (default: True). False builds the chromosome-blind attention of
+        checkpoints trained before that row existed.
 
     Attributes
     ----------
@@ -96,6 +106,7 @@ class SIEVE(nn.Module):
         num_covariates: int = 0,
         num_chromosomes: int = 0,
         classifier_type: str = 'flatten',
+        chromosome_aware: bool = True,
     ):
         super().__init__()
 
@@ -103,7 +114,8 @@ class SIEVE(nn.Module):
         self.num_genes = num_genes
         self.latent_dim = latent_dim
         self.num_covariates = num_covariates
-        self.num_chromosomes = num_chromosomes
+        self.chromosome_aware = chromosome_aware
+        self.num_chromosomes = num_chromosomes if chromosome_aware else 0
         self.classifier_type = classifier_type
 
         # 1. Variant encoder
@@ -123,6 +135,7 @@ class SIEVE(nn.Module):
             num_position_buckets=num_position_buckets,
             max_distance=max_distance,
             num_chromosomes=num_chromosomes,
+            chromosome_aware=chromosome_aware,
         )
 
         # 3. Gene aggregation
@@ -357,7 +370,46 @@ def create_sieve_model(
         num_covariates=config.get('num_covariates', 0),
         num_chromosomes=config.get('num_chromosomes', 0),
         classifier_type=config.get('classifier_type', 'flatten'),
+        chromosome_aware=config.get('chromosome_aware', True),
     )
+
+
+def resolve_chromosome_aware(
+    config: Dict[str, Any],
+    state_dict: Dict[str, Tensor],
+) -> bool:
+    """
+    Decide whether a checkpoint needs the chromosome-aware attention.
+
+    The ``chromosome_aware`` entry of the training config is authoritative.
+    Configs written before the entry existed are resolved from the checkpoint:
+    a ``position_bias.weight`` with exactly ``num_position_buckets`` rows and
+    no ``chrom_embedding`` tensor identify a chromosome-blind model.
+
+    Parameters
+    ----------
+    config : Dict[str, Any]
+        Training configuration loaded from ``config.yaml``.
+    state_dict : Dict[str, Tensor]
+        Checkpoint state dict (base or chunked model).
+
+    Returns
+    -------
+    bool
+        True for the chromosome-aware architecture, False for the
+        chromosome-blind one.
+    """
+    if config.get('chromosome_aware') is not None:
+        return bool(config['chromosome_aware'])
+    num_buckets = config.get('num_position_buckets', 32)
+    if any('chrom_embedding' in key for key in state_dict):
+        return True
+    bias_rows = {
+        tensor.shape[0]
+        for key, tensor in state_dict.items()
+        if key.endswith('position_bias.weight')
+    }
+    return not (bias_rows and bias_rows == {num_buckets})
 
 
 def load_state_dict_with_legacy_upgrade(

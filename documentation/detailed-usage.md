@@ -285,6 +285,32 @@ as `split_file` and `split_file_sha256` in `config.yaml` and `results.yaml`.
 matching null model by calling `train.py` directly with the same command and
 `--preprocessed-data` pointing to the permuted `.pt` file.
 
+#### Chromosome-Aware and Chromosome-Blind Attention
+
+Single-split and cross-validation training both build the chromosome-aware
+model by default. Each attention layer adds a learned chromosome embedding to
+the variant embeddings and routes every pair of variants on different
+chromosomes to a dedicated relative-position bias row, so `position_bias`
+has `num_position_buckets + 1` rows.
+
+`--no-chromosome-embedding` builds the chromosome-blind attention of
+checkpoints trained before PR #85: no chromosome embedding, a `position_bias`
+of `num_position_buckets` rows, and chromosome identifiers ignored, so pairs
+on different chromosomes are bucketed by the difference of their coordinates.
+The option reproduces those checkpoints for like-for-like comparison only;
+new analyses use the default. The max-pool padding correction applies in
+both modes.
+
+The choice is recorded as `chromosome_aware` in `config.yaml`, in every
+`fold_*/config.yaml`, and in `results.yaml` or `cv_results.yaml`.
+`explain.py`, `discover_interactions.py` and `validate_epistasis.py` rebuild
+the recorded architecture. For a configuration written before this entry
+existed, the architecture is read from the checkpoint: a `position_bias`
+with `num_position_buckets` rows and no chromosome embedding identifies a
+chromosome-blind model. `run_null_baseline_analysis.sh` passes
+`--no-chromosome-embedding` to the null model when the real configuration
+records `chromosome_aware: false`.
+
 #### Memory-Efficient Training (Large Datasets)
 
 For datasets with >1000 samples and 5000+ variants per sample:

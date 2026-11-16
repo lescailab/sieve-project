@@ -185,6 +185,7 @@ python scripts/train.py [OPTIONS]
 | `--num-heads` | int | 4 | Number of attention heads |
 | `--num-attention-layers` | int | 2 | Number of attention layers |
 | `--aggregation-method` | str | mean | Chunk aggregation method [mean, max, attention, logit_mean] |
+| `--chromosome-embedding` / `--no-chromosome-embedding` | flag | on | Chromosome-aware attention (chromosome embedding and cross-chromosome position-bias row). The `--no-` form builds the chromosome-blind attention of checkpoints trained before PR #85, for like-for-like comparison with those checkpoints only |
 
 #### Cross-Validation Options
 

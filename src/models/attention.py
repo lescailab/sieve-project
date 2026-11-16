@@ -59,6 +59,15 @@ class PositionAwareSparseAttention(nn.Module):
         Number of relative position buckets (default: 32)
     max_distance : int
         Maximum genomic distance to consider (default: 100,000 bp)
+    num_chromosomes : int
+        Number of chromosomes for the chromosome embedding (default: 0, none).
+    chromosome_aware : bool
+        When True (default), the position bias has a dedicated cross-chromosome
+        row and ``chrom_ids`` select it and the chromosome embedding. When
+        False, the layer is the chromosome-blind attention of checkpoints
+        trained before the chromosome-aware position bias: ``num_buckets`` bias
+        rows, no chromosome embedding, and ``chrom_ids`` ignored, so every pair
+        is bucketed by absolute coordinate difference.
 
     Attributes
     ----------
@@ -94,6 +103,7 @@ class PositionAwareSparseAttention(nn.Module):
         num_position_buckets: int = 32,
         max_distance: int = 100000,
         num_chromosomes: int = 0,
+        chromosome_aware: bool = True,
     ):
         super().__init__()
 
@@ -104,7 +114,8 @@ class PositionAwareSparseAttention(nn.Module):
         self.head_dim = latent_dim // num_heads
         self.num_position_buckets = num_position_buckets
         self.max_distance = max_distance
-        self.num_chromosomes = num_chromosomes
+        self.chromosome_aware = chromosome_aware
+        self.num_chromosomes = num_chromosomes if chromosome_aware else 0
 
         # Attention projections
         self.query = nn.Linear(latent_dim, latent_dim)
@@ -112,18 +123,20 @@ class PositionAwareSparseAttention(nn.Module):
         self.value = nn.Linear(latent_dim, latent_dim)
 
         # Learnable position bias.
-        # Shape: (num_position_buckets + 1, num_heads). The extra row holds the
-        # single learned cross-chromosome bias used when chrom_ids are passed
-        # through forward(); it is unused (and untouched) in the legacy
-        # chromosome-blind path.
-        self.position_bias = nn.Embedding(num_position_buckets + 1, num_heads)
+        # Chromosome-aware shape: (num_position_buckets + 1, num_heads). The
+        # extra row holds the single learned cross-chromosome bias used when
+        # chrom_ids are passed through forward(). The chromosome-blind layer
+        # keeps the original (num_position_buckets, num_heads) shape so that
+        # earlier checkpoints load strictly.
+        num_bias_rows = num_position_buckets + 1 if chromosome_aware else num_position_buckets
+        self.position_bias = nn.Embedding(num_bias_rows, num_heads)
 
         # Optional chromosome embedding added to inputs before computing Q/K/V.
         # Disambiguates variants that share a coordinate on different
         # chromosomes. Allocated only when num_chromosomes > 0; one extra row
         # covers padding sentinel values that may be passed during forward().
-        if num_chromosomes > 0:
-            self.chrom_embedding = nn.Embedding(num_chromosomes + 1, latent_dim)
+        if self.num_chromosomes > 0:
+            self.chrom_embedding = nn.Embedding(self.num_chromosomes + 1, latent_dim)
             nn.init.zeros_(self.chrom_embedding.weight)
         else:
             self.chrom_embedding = None
@@ -245,6 +258,12 @@ class PositionAwareSparseAttention(nn.Module):
         """
         batch_size, num_variants, _ = x.shape
 
+        # The chromosome-blind layer ignores chromosome ids entirely, so that
+        # cross-chromosome pairs fall in distance buckets as they did before
+        # the dedicated cross-chromosome bucket existed.
+        if not self.chromosome_aware:
+            chrom_ids = None
+
         # Add chromosome embedding to inputs (when configured). This is the
         # absolute-disambiguation half of the chromosome-aware fix and is
         # independent of the relative-bias half below.
@@ -340,6 +359,10 @@ class MultiLayerAttention(nn.Module):
         Number of position buckets
     max_distance : int
         Maximum genomic distance
+    num_chromosomes : int
+        Number of chromosomes for the chromosome embedding (default: 0, none).
+    chromosome_aware : bool
+        Passed to every ``PositionAwareSparseAttention`` layer (default: True).
 
     Examples
     --------
@@ -361,6 +384,7 @@ class MultiLayerAttention(nn.Module):
         num_position_buckets: int = 32,
         max_distance: int = 100000,
         num_chromosomes: int = 0,
+        chromosome_aware: bool = True,
     ):
         super().__init__()
 
@@ -374,6 +398,7 @@ class MultiLayerAttention(nn.Module):
                 num_position_buckets=num_position_buckets,
                 max_distance=max_distance,
                 num_chromosomes=num_chromosomes,
+                chromosome_aware=chromosome_aware,
             )
             for _ in range(num_layers)
         ])

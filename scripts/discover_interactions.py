@@ -47,7 +47,11 @@ import yaml
 from src.encoding import get_feature_dimension, AnnotationLevel
 from src.encoding.chunked_dataset import ChunkedVariantDataset
 from src.models import ChunkedSIEVEModel
-from src.models.sieve import create_sieve_model, load_state_dict_with_legacy_upgrade
+from src.models.sieve import (
+    create_sieve_model,
+    load_state_dict_with_legacy_upgrade,
+    resolve_chromosome_aware,
+)
 from src.explain.higher_order import (
     HigherOrderCounterfactual,
     resolve_num_covariates,
@@ -290,6 +294,9 @@ def load_model(config_path: Path, checkpoint_path: Path, dataset, device: str):
 
     checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
     state_dict = checkpoint['model_state_dict']
+    # Chromosome-blind checkpoints (trained before the cross-chromosome bias
+    # row) are rebuilt with that architecture rather than padded to the new one.
+    config['chromosome_aware'] = resolve_chromosome_aware(config, state_dict)
 
     base_model = create_sieve_model(config, num_genes=dataset.num_genes)
     if any(key.startswith('base_model.') for key in state_dict):

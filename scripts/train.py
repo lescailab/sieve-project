@@ -188,6 +188,21 @@ def parse_args():
         ),
     )
 
+    parser.add_argument(
+        '--chromosome-embedding',
+        dest='chromosome_aware',
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Build the model with chromosome embeddings and the cross-chromosome "
+            "relative-position bucket (default). --no-chromosome-embedding builds "
+            "the chromosome-blind attention of checkpoints trained before PR #85 "
+            "(no chromosome embedding, no cross-chromosome bias row, all pairs "
+            "bucketed by coordinate difference), for like-for-like comparison "
+            "with those checkpoints only."
+        ),
+    )
+
     return parser.parse_args()
 
 
@@ -211,6 +226,7 @@ def create_model(
     num_covariates: int = 0,
     num_chromosomes: int = 0,
     classifier_type: str = 'flatten',
+    chromosome_aware: bool = True,
 ) -> ChunkedSIEVEModel:
     """
     Create Chunked SIEVE model for whole-genome processing.
@@ -229,6 +245,7 @@ def create_model(
         num_covariates=num_covariates,
         num_chromosomes=num_chromosomes,
         classifier_type=classifier_type,
+        chromosome_aware=chromosome_aware,
     )
 
     # Wrap in chunked model for whole-genome coverage
@@ -276,6 +293,7 @@ def save_fold_config(
         'chunk_overlap': args.chunk_overlap,
         'aggregation_method': args.aggregation_method,
         'classifier_type': getattr(args, 'classifier_type', 'flatten'),
+        'chromosome_aware': getattr(args, 'chromosome_aware', True),
         # Training parameters
         'lr': args.lr,
         'lambda_attr': args.lambda_attr,
@@ -485,6 +503,18 @@ def _single_split_indices(
         random_state=args.seed,
     )
     return train_idx, val_idx
+
+
+def _chromosome_model_kwargs(args, dataset) -> Dict[str, object]:
+    """
+    Model keyword arguments for the chromosome-aware or chromosome-blind build.
+
+    The chromosome-aware model (default) receives the dataset's chromosome
+    count; the chromosome-blind model omits it.
+    """
+    if getattr(args, 'chromosome_aware', True):
+        return {'num_chromosomes': dataset.num_chromosomes, 'chromosome_aware': True}
+    return {'chromosome_aware': False}
 
 
 def _resolve_pos_weight(
@@ -787,7 +817,7 @@ def _run_training(args, output_dir: Path) -> None:
                 hidden_dim=args.hidden_dim,
                 aggregation_method=args.aggregation_method,
                 num_covariates=num_covariates,
-                num_chromosomes=dataset.num_chromosomes,
+                **_chromosome_model_kwargs(args, dataset),
                 classifier_type=args.classifier_type,
             )
 
@@ -854,6 +884,7 @@ def _run_training(args, output_dir: Path) -> None:
                 'mean_accuracy': float(mean_acc),
                 'std_accuracy': float(std_acc),
                 'data_loading_time_seconds': float(load_time),
+                'chromosome_aware': bool(getattr(args, 'chromosome_aware', True)),
                 'fold_results': [
                     {k: float(v) for k, v in r.items()}
                     for r in cv_results
@@ -919,7 +950,7 @@ def _run_training(args, output_dir: Path) -> None:
             hidden_dim=args.hidden_dim,
             aggregation_method=args.aggregation_method,
             num_covariates=num_covariates,
-            num_chromosomes=dataset.num_chromosomes,
+            **_chromosome_model_kwargs(args, dataset),
             classifier_type=args.classifier_type,
         )
 
@@ -952,6 +983,7 @@ def _run_training(args, output_dir: Path) -> None:
         results_with_timing['data_loading_time_seconds'] = float(load_time)
         results_with_timing['class_weighting_applied'] = pos_weight is not None
         results_with_timing['class_weighting_pos_weight'] = float(pos_weight.item()) if pos_weight is not None else None
+        results_with_timing['chromosome_aware'] = bool(getattr(args, 'chromosome_aware', True))
         if args.split_file is not None:
             results_with_timing['split_file'] = args.split_file
             results_with_timing['split_file_sha256'] = args.split_file_sha256
