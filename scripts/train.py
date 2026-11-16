@@ -421,6 +421,14 @@ def load_split_file(
     for key in ('train_sample_indices', 'val_sample_indices'):
         if not isinstance(info.get(key), list):
             raise ValueError(f"Split file {split_file} has no '{key}' list")
+        # bool is a subclass of int, so YAML true/false must be excluded explicitly;
+        # floats are rejected rather than truncated by the int64 cast below.
+        bad = [v for v in info[key] if isinstance(v, bool) or not isinstance(v, int)]
+        if bad:
+            raise ValueError(
+                f"Split file {split_file}: '{key}' contains non-integer entries "
+                f"(first: {bad[0]!r})"
+            )
 
     train_idx = np.asarray(info['train_sample_indices'], dtype=np.int64)
     val_idx = np.asarray(info['val_sample_indices'], dtype=np.int64)

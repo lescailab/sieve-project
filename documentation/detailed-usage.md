@@ -254,6 +254,37 @@ python scripts/train.py \
 
 Creates 5 models (one per fold), reports mean ± std performance.
 
+#### Reusing a Recorded Split
+
+`--split-file` trains a single model on the exact partition of an earlier
+cross-validation fold, for example to retrain the selected fold with an
+additional covariate while every other setting stays fixed:
+```bash
+python scripts/train.py \
+    --preprocessed-data preprocessed.pt \
+    --level L3 \
+    --split-file experiments/robust_eval/fold_4/fold_info.yaml \
+    --seed 42 \
+    --pc-map ancestry_pcs.tsv \
+    --num-pcs 10 \
+    --epochs 100 \
+    --experiment-name fold4_with_pcs
+```
+
+The `train_sample_indices` and `val_sample_indices` of the `fold_info.yaml`
+replace the stratified `--val-split` draw. Training stops with an error if the
+two index sets overlap, if together they do not cover every sample in the
+dataset exactly once, or if their sizes differ from `n_train_samples` and
+`n_val_samples` in the file. Case and control counts are not checked, so a
+label-permuted null dataset built from the same samples reuses the same
+split. The option applies to single-split mode only and cannot be combined
+with `--cv`. The absolute path of the file and its SHA256 digest are recorded
+as `split_file` and `split_file_sha256` in `config.yaml` and `results.yaml`.
+
+`run_null_baseline_analysis.sh` does not forward `--split-file`; train the
+matching null model by calling `train.py` directly with the same command and
+`--preprocessed-data` pointing to the permuted `.pt` file.
+
 #### Memory-Efficient Training (Large Datasets)
 
 For datasets with >1000 samples and 5000+ variants per sample:

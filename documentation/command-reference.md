@@ -192,6 +192,7 @@ python scripts/train.py [OPTIONS]
 |--------|------|---------|-------------|
 | `--cv` | int | - | Number of CV folds (if not using val-split) |
 | `--val-split` | float | 0.2 | Validation split ratio |
+| `--split-file` | path | None | `fold_info.yaml` whose train and validation indices define the split (single-split mode only; not with `--cv`) |
 
 #### Output Options
 

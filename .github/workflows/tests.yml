@@ -46,6 +46,8 @@ jobs:
             system-deps: libcurl4-openssl-dev
           - name: Sex Covariate
             test-file: tests/test_sex_covariate.py
+          - name: Split File Reuse
+            test-file: tests/test_split_file.py
           - name: Utilities
             test-file: tests/test_utilities.py
 

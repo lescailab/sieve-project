@@ -127,6 +127,12 @@ class TestLoadSplitFile:
         with pytest.raises(ValueError, match='n_val_samples'):
             load_split_file(str(split_file), N_SAMPLES)
 
+    @pytest.mark.parametrize('bad_value', [0.9, True, '3'])
+    def test_non_integer_indices_raise(self, split_file, bad_value):
+        _edit_fold_info(split_file, val_sample_indices=VAL_IDX[:-1] + [bad_value])
+        with pytest.raises(ValueError, match='non-integer'):
+            load_split_file(str(split_file), N_SAMPLES)
+
     def test_label_permuted_dataset_loads_same_split(self, split_file):
         """Case counts per partition change under permutation; the split does not."""
         args = type('Args', (), {'split_file': str(split_file)})()
