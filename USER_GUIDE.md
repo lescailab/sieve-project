@@ -1616,6 +1616,63 @@ python scripts/train.py \
 
 Creates 5 models (one per fold), reports mean ± std performance.
 
+##### Reusing a Recorded Split
+
+`--split-file` trains a single model on the exact partition of an earlier
+cross-validation fold, for example to retrain the selected fold with an
+additional covariate while every other setting stays fixed:
+```bash
+python scripts/train.py \
+    --preprocessed-data preprocessed.pt \
+    --level L3 \
+    --split-file experiments/robust_eval/fold_4/fold_info.yaml \
+    --seed 42 \
+    --pc-map ancestry_pcs.tsv \
+    --num-pcs 10 \
+    --epochs 100 \
+    --experiment-name fold4_with_pcs
+```
+
+The `train_sample_indices` and `val_sample_indices` of the `fold_info.yaml`
+replace the stratified `--val-split` draw. Training stops with an error if the
+two index sets overlap, if together they do not cover every sample in the
+dataset exactly once, or if their sizes differ from `n_train_samples` and
+`n_val_samples` in the file. Case and control counts are not checked, so a
+label-permuted null dataset built from the same samples reuses the same
+split. The option applies to single-split mode only and cannot be combined
+with `--cv`. The absolute path of the file and its SHA256 digest are recorded
+as `split_file` and `split_file_sha256` in `config.yaml` and `results.yaml`.
+
+`run_null_baseline_analysis.sh` does not forward `--split-file`; train the
+matching null model by calling `train.py` directly with the same command and
+`--preprocessed-data` pointing to the permuted `.pt` file.
+
+##### Chromosome-Aware and Chromosome-Blind Attention
+
+Single-split and cross-validation training both build the chromosome-aware
+model by default. Each attention layer adds a learned chromosome embedding to
+the variant embeddings and routes every pair of variants on different
+chromosomes to a dedicated relative-position bias row, so `position_bias`
+has `num_position_buckets + 1` rows.
+
+`--no-chromosome-embedding` builds the chromosome-blind attention of
+checkpoints trained before PR #85: no chromosome embedding, a `position_bias`
+of `num_position_buckets` rows, and chromosome identifiers ignored, so pairs
+on different chromosomes are bucketed by the difference of their coordinates.
+The option reproduces those checkpoints for like-for-like comparison only;
+new analyses use the default. The max-pool padding correction applies in
+both modes.
+
+The choice is recorded as `chromosome_aware` in `config.yaml`, in every
+`fold_*/config.yaml`, and in `results.yaml` or `cv_results.yaml`.
+`explain.py`, `discover_interactions.py` and `validate_epistasis.py` rebuild
+the recorded architecture. For a configuration written before this entry
+existed, the architecture is read from the checkpoint: a `position_bias`
+with `num_position_buckets` rows and no chromosome embedding identifies a
+chromosome-blind model. `run_null_baseline_analysis.sh` passes
+`--no-chromosome-embedding` to the null model when the real configuration
+records `chromosome_aware: false`.
+
 ##### Memory-Efficient Training (Large Datasets)
 
 For datasets with >1000 samples and 5000+ variants per sample:
@@ -2234,6 +2291,7 @@ python scripts/train.py [OPTIONS]
 | `--num-heads` | int | 4 | Number of attention heads |
 | `--num-attention-layers` | int | 2 | Number of attention layers |
 | `--aggregation-method` | str | mean | Chunk aggregation method [mean, max, attention, logit_mean] |
+| `--chromosome-embedding` / `--no-chromosome-embedding` | flag | on | Chromosome-aware attention (chromosome embedding and cross-chromosome position-bias row). The `--no-` form builds the chromosome-blind attention of checkpoints trained before PR #85, for like-for-like comparison with those checkpoints only |
 
 ##### Cross-Validation Options
 
@@ -2241,6 +2299,7 @@ python scripts/train.py [OPTIONS]
 |--------|------|---------|-------------|
 | `--cv` | int | - | Number of CV folds (if not using val-split) |
 | `--val-split` | float | 0.2 | Validation split ratio |
+| `--split-file` | path | None | `fold_info.yaml` whose train and validation indices define the split (single-split mode only; not with `--cv`) |
 
 ##### Output Options
 

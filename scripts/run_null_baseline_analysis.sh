@@ -156,7 +156,7 @@ fi
 # Hyperparameters read from real config and passed to null train.py:
 #   Architecture:   level, latent_dim, hidden_dim, num_attention_layers,
 #                   num_heads, chunk_size, chunk_overlap, aggregation_method,
-#                   classifier_type
+#                   classifier_type, chromosome_aware
 #   Training:       lr, lambda_attr, batch_size, class_weighting,
 #                   gradient_accumulation_steps, gradient_clip,
 #                   early_stopping, epochs, seed, genome_build
@@ -202,6 +202,7 @@ print(f'CFG_CHUNK_SIZE={c.get(\"chunk_size\", 3000)}')
 print(f'CFG_CHUNK_OVERLAP={c.get(\"chunk_overlap\", 0)}')
 print(f'CFG_AGGREGATION={shlex.quote(str(c.get(\"aggregation_method\", \"mean\")))}')
 print(f'CFG_CLASSIFIER_TYPE={shlex.quote(str(c.get(\"classifier_type\", \"flatten\")))}')
+print(f'CFG_CHROMOSOME_AWARE={\"false\" if c.get(\"chromosome_aware\") is False else \"true\"}')
 
 # Training parameters
 print(f'CFG_LR={c.get(\"lr\", 0.00001)}')
@@ -261,6 +262,7 @@ echo "  num_heads:            $CFG_NUM_HEADS"
 echo "  chunk_size:           $CFG_CHUNK_SIZE"
 echo "  aggregation_method:   $CFG_AGGREGATION"
 echo "  classifier_type:      $CFG_CLASSIFIER_TYPE"
+echo "  chromosome_aware:     $CFG_CHROMOSOME_AWARE"
 echo "  lr:                   $CFG_LR"
 echo "  lambda_attr:          $CFG_LAMBDA_ATTR"
 echo "  batch_size:           $CFG_BATCH_SIZE"
@@ -401,6 +403,11 @@ elif [ -n "$CFG_VAL_SPLIT" ]; then
     TRAIN_CMD+=(--val-split "$CFG_VAL_SPLIT")
 else
     TRAIN_CMD+=(--val-split 0.2)   # fallback: identical to previous default
+fi
+
+# Reproduce a chromosome-blind real model with the same architecture
+if [ "$CFG_CHROMOSOME_AWARE" = "false" ]; then
+    TRAIN_CMD+=(--no-chromosome-embedding)
 fi
 
 # Add --gradient-clip if it was set in the real config

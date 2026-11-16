@@ -25,7 +25,11 @@ import pandas as pd
 
 from src.encoding import VariantDataset, get_feature_dimension, AnnotationLevel
 from src.encoding.sparse_tensor import build_variant_tensor
-from src.models.sieve import create_sieve_model, load_state_dict_with_legacy_upgrade
+from src.models.sieve import (
+    create_sieve_model,
+    load_state_dict_with_legacy_upgrade,
+    resolve_chromosome_aware,
+)
 from src.models import ChunkedSIEVEModel
 from src.data import SampleVariants
 from src.explain.counterfactual_epistasis import CounterfactualEpistasisDetector
@@ -172,10 +176,13 @@ def main():
     # constructed model matches the checkpoint's tensor shapes.
     config['num_chromosomes'] = dataset.num_chromosomes
 
-    base_model = create_sieve_model(config, num_genes=dataset.num_genes)
-
     # Check if checkpoint has chunked model (base_model. prefix) or plain model
     state_dict = checkpoint['model_state_dict']
+    # Chromosome-blind checkpoints (trained before the cross-chromosome bias
+    # row) are rebuilt with that architecture rather than padded to the new one.
+    config['chromosome_aware'] = resolve_chromosome_aware(config, state_dict)
+
+    base_model = create_sieve_model(config, num_genes=dataset.num_genes)
     if any(k.startswith('base_model.') for k in state_dict.keys()):
         model = ChunkedSIEVEModel(
             base_model=base_model,

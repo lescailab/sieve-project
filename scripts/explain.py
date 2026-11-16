@@ -59,7 +59,11 @@ from src.encoding import (
     get_feature_dimension,
     AnnotationLevel
 )
-from src.models.sieve import create_sieve_model, load_state_dict_with_legacy_upgrade
+from src.models.sieve import (
+    create_sieve_model,
+    load_state_dict_with_legacy_upgrade,
+    resolve_chromosome_aware,
+)
 from src.models import ChunkedSIEVEModel
 from src.explain.gradients import IntegratedGradientsExplainer
 from src.explain.attention_analysis import AttentionAnalyzer
@@ -280,11 +284,14 @@ def _run_explain(args, output_dir: Path) -> None:
     # constructed model matches the checkpoint's tensor shapes.
     config['num_chromosomes'] = dataset.num_chromosomes
 
-    # Load base model
-    base_model = create_sieve_model(config, num_genes=dataset.num_genes)
-
     # Check if checkpoint has chunked model or base model
     state_dict = checkpoint['model_state_dict']
+    # Chromosome-blind checkpoints (trained before the cross-chromosome bias
+    # row) are rebuilt with that architecture rather than padded to the new one.
+    config['chromosome_aware'] = resolve_chromosome_aware(config, state_dict)
+
+    # Load base model
+    base_model = create_sieve_model(config, num_genes=dataset.num_genes)
 
     # Try to detect if this is a chunked model checkpoint
     if any(k.startswith('base_model.') for k in state_dict.keys()):
