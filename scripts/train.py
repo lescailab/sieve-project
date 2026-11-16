@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 import sys
 import time
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -107,6 +107,12 @@ def parse_args():
                         help='Number of CV folds (if None, use single train/val split)')
     parser.add_argument('--val-split', type=float, default=0.2,
                         help='Validation split ratio (if not using CV)')
+    parser.add_argument('--split-file', type=str, default=None,
+                        help=(
+                            'Path to a fold_info.yaml whose train_sample_indices and '
+                            'val_sample_indices define the train/validation split '
+                            '(single-split mode only; replaces --val-split)'
+                        ))
 
     # Output arguments
     parser.add_argument('--output-dir', type=str, default='outputs',
@@ -383,6 +389,96 @@ def save_fold_info(
         yaml.dump(fold_info, f, default_flow_style=False, sort_keys=False)
 
 
+def load_split_file(
+    split_file: str,
+    n_samples: int,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Load train and validation sample indices from a ``fold_info.yaml``.
+
+    Parameters
+    ----------
+    split_file : str
+        Path to a ``fold_info.yaml`` written by :func:`save_fold_info`.
+    n_samples : int
+        Number of samples in the loaded dataset.
+
+    Returns
+    -------
+    tuple of np.ndarray
+        ``(train_idx, val_idx)`` sample-level indices, in file order.
+
+    Raises
+    ------
+    ValueError
+        If the index lists are missing, overlap, do not cover
+        ``range(n_samples)`` exactly, or differ in size from the
+        ``n_train_samples`` / ``n_val_samples`` recorded in the file.
+    """
+    with open(split_file) as f:
+        info = yaml.safe_load(f) or {}
+
+    for key in ('train_sample_indices', 'val_sample_indices'):
+        if not isinstance(info.get(key), list):
+            raise ValueError(f"Split file {split_file} has no '{key}' list")
+
+    train_idx = np.asarray(info['train_sample_indices'], dtype=np.int64)
+    val_idx = np.asarray(info['val_sample_indices'], dtype=np.int64)
+    train_set = set(train_idx.tolist())
+    val_set = set(val_idx.tolist())
+
+    if len(train_set) != len(train_idx) or len(val_set) != len(val_idx):
+        raise ValueError(f"Split file {split_file} contains duplicate sample indices")
+    overlap = train_set & val_set
+    if overlap:
+        raise ValueError(
+            f"Split file {split_file}: {len(overlap)} sample index(es) appear in both "
+            "train and validation sets"
+        )
+    if train_set | val_set != set(range(n_samples)):
+        raise ValueError(
+            f"Split file {split_file}: train and validation indices do not cover "
+            f"exactly the {n_samples} samples in the dataset "
+            f"({len(train_set) + len(val_set)} indices in file)"
+        )
+    # Sizes are checked but case counts are not: a label-permuted null dataset
+    # reuses the same split with different case/control counts per partition.
+    for key, idx in (('n_train_samples', train_idx), ('n_val_samples', val_idx)):
+        expected = info.get(key)
+        if expected is None:
+            raise ValueError(f"Split file {split_file} has no '{key}' entry")
+        if int(expected) != len(idx):
+            raise ValueError(
+                f"Split file {split_file}: {key}={expected} but {len(idx)} indices listed"
+            )
+
+    return train_idx, val_idx
+
+
+def _single_split_indices(
+    labels: np.ndarray,
+    args,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Return single-split train/validation indices.
+
+    Reads them from ``args.split_file`` when set; otherwise draws a stratified
+    ``train_test_split`` with ``args.val_split`` and ``args.seed``.
+    """
+    if getattr(args, 'split_file', None):
+        return load_split_file(args.split_file, len(labels))
+
+    from sklearn.model_selection import train_test_split
+    indices = np.arange(len(labels))
+    train_idx, val_idx = train_test_split(
+        indices,
+        test_size=args.val_split,
+        stratify=labels,
+        random_state=args.seed,
+    )
+    return train_idx, val_idx
+
+
 def _resolve_pos_weight(
     train_labels: np.ndarray,
     class_weighting: str,
@@ -507,6 +603,13 @@ def _run_training(args, output_dir: Path) -> None:
     else:
         args.pc_map_sha256 = None
     args.num_covariates = num_covariates
+    args.split_file = getattr(args, 'split_file', None)
+    if args.split_file is not None:
+        args.split_file_sha256 = compute_file_sha256(args.split_file)
+        print(f"\nSplit file: {args.split_file}")
+        print(f"  Split file SHA256: {args.split_file_sha256}")
+    else:
+        args.split_file_sha256 = None
 
     # Save config
     config_path = output_dir / 'config.yaml'
@@ -752,17 +855,13 @@ def _run_training(args, output_dir: Path) -> None:
 
     else:
         # Single train/val split
-        print(f"\nUsing single train/val split ({1-args.val_split:.0%}/{args.val_split:.0%})")
+        if args.split_file is not None:
+            print(f"\nUsing single train/val split from {args.split_file}")
+        else:
+            print(f"\nUsing single train/val split ({1-args.val_split:.0%}/{args.val_split:.0%})")
 
-        # Create stratified split
-        from sklearn.model_selection import train_test_split
-        indices = np.arange(len(labels))
-        train_idx, val_idx = train_test_split(
-            indices,
-            test_size=args.val_split,
-            stratify=labels,
-            random_state=args.seed,
-        )
+        # Reuse a recorded split, or create a stratified one
+        train_idx, val_idx = _single_split_indices(labels, args)
 
         # Print split statistics
         train_labels = labels[train_idx]
@@ -812,6 +911,7 @@ def _run_training(args, output_dir: Path) -> None:
             hidden_dim=args.hidden_dim,
             aggregation_method=args.aggregation_method,
             num_covariates=num_covariates,
+            num_chromosomes=dataset.num_chromosomes,
             classifier_type=args.classifier_type,
         )
 
@@ -844,6 +944,9 @@ def _run_training(args, output_dir: Path) -> None:
         results_with_timing['data_loading_time_seconds'] = float(load_time)
         results_with_timing['class_weighting_applied'] = pos_weight is not None
         results_with_timing['class_weighting_pos_weight'] = float(pos_weight.item()) if pos_weight is not None else None
+        if args.split_file is not None:
+            results_with_timing['split_file'] = args.split_file
+            results_with_timing['split_file_sha256'] = args.split_file_sha256
         with open(results_path, 'w') as f:
             yaml.dump(results_with_timing, f)
         print(f"\nResults saved to {results_path}")
@@ -863,6 +966,14 @@ def main():
         raise ValueError("--pc-map requires --num-pcs > 0")
     if args.num_pcs > 0 and args.pc_map is None:
         raise ValueError("--num-pcs requires --pc-map")
+    args.split_file = getattr(args, 'split_file', None)
+    if args.split_file is not None:
+        if args.cv is not None:
+            raise ValueError("--split-file cannot be combined with --cv (single-split mode only)")
+        split_path = Path(args.split_file)
+        if not split_path.is_file():
+            raise FileNotFoundError(f"--split-file not found: {args.split_file}")
+        args.split_file = str(split_path.resolve())
 
     if args.experiment_name is None:
         args.experiment_name = f"{args.level}_run"
